@@ -26,8 +26,18 @@ import app.aaps.core.keys.StringKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.ui.compose.pickers.TimeWheelPicker
 import app.aaps.core.ui.compose.pickers.WeekDaySelector
+import app.aaps.plugins.aps.openAPSFCL.vnext.FCL_STATUS_VERSION
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.DFLearner
 import app.aaps.plugins.aps.openAPSFCL.vnext.lang.FclStrings
+import app.aaps.plugins.aps.openAPSFCL.update.FclCsvUploader
+import app.aaps.plugins.aps.openAPSFCL.update.FclUpdateChecker
+import app.aaps.plugins.aps.openAPSFCL.update.FclUpdateInstaller
+import app.aaps.plugins.aps.openAPSFCL.update.FclUpdatePrefs
+import app.aaps.plugins.aps.openAPSFCL.update.FclUpdateScheduler
+import app.aaps.plugins.aps.openAPSFCL.update.FclWhatsNewChecker
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun FCLSettingsScreen(preferences: Preferences, sp: SP) {
@@ -782,6 +792,349 @@ fun FCLSettingsScreen(preferences: Preferences, sp: SP) {
                             )
                         }
                     }
+                }
+            }
+        }
+
+        // ── Update-checker (06/09/2026, de gebruiker) ───────────────────────
+        // Losstaand van de rest van dit scherm: eigen SharedPreferences
+        // (FclUpdatePrefs), geen AAPS-kern-Preferences. Zie FclUpdateChecker.kt
+        // voor de volledige toelichting (Drive-map, bestandsnaamconventie).
+        run {
+            val coroutineScope = rememberCoroutineScope()
+            // 07/09/2026 (de gebruiker) — FCL_STATUS_VERSION i.p.v. het
+            // (nu bevroren) Android-versionCode, zie kdoc bij die constante
+            // in FCLvNextStatusFormatter.kt en bij Versions.versionCode.
+            val currentVersionCode = FCL_STATUS_VERSION
+            var expandedUpdates by remember { mutableStateOf(false) }
+            var updateChecking by remember { mutableStateOf(false) }
+            var updateInstalling by remember { mutableStateOf(false) }
+            var availableUpdate by remember { mutableStateOf(FclUpdatePrefs.availableUpdate(ctx)) }
+            var lastCheckAtMs by remember { mutableStateOf(FclUpdatePrefs.lastCheckAtMs(ctx)) }
+            var lastError by remember { mutableStateOf(FclUpdatePrefs.lastError(ctx)) }
+            var whatsNewDialogText by remember { mutableStateOf<String?>(null) }
+            // ── "Versie wijzigen" (07/09/2026, de gebruiker) ────────────────
+            // Los van de "is er iets nieuwers"-check hierboven: deze lijst
+            // toont ALLE versies uit de Drive-map (ook ouder dan wat nu
+            // geinstalleerd is), zodat een mislukte/niet-bevallende update
+            // teruggezet kan worden. Hoever terug mogelijk is, bepaalt de
+            // gebruiker zelf door oude builds uit de Drive-map te
+            // verwijderen (zie kdoc bij FclUpdateChecker.listAllVersions()).
+            var showVersionPicker by remember { mutableStateOf(false) }
+            var versionListLoading by remember { mutableStateOf(false) }
+            var versionList by remember { mutableStateOf<List<FclUpdateChecker.VersionEntry>?>(null) }
+            var versionListError by remember { mutableStateOf<String?>(null) }
+            var selectedVersionCode by remember { mutableStateOf<Int?>(null) }
+            var installError by remember { mutableStateOf<String?>(null) }
+
+            FCLSection(
+                title = "Updates",
+                expanded = expandedUpdates,
+                onToggle = { expandedUpdates = !expandedUpdates }
+            ) {
+                // 06/09/2026 (de gebruiker) — automatisch verversen bij het
+                // openklappen van dit blok. AANLEIDING: "Update beschikbaar"
+                // toonde nog versionCode 1596 terwijl 1597 allang in de
+                // Drive-map stond — de vorige controle dateerde van vóór die
+                // upload, en het scherm ververste dat verouderde resultaat
+                // pas bij een handmatige "Controleer nu"-druk. Zonder verse
+                // controle had "Update nu" op dat moment dus gewoon 1596
+                // opnieuw gedownload i.p.v. 1597.
+                // Deze content-lambda zit in de AnimatedVisibility van
+                // FCLSection hierboven en wordt bij het dichtklappen uit
+                // compositie gehaald — bij elke heropening is dit dus weer
+                // een verse compositie, dus start LaunchedEffect(Unit) hier
+                // gewoon opnieuw, ongeacht de key. Zelfde
+                // FclUpdateScheduler.checkNow-pad als de "Controleer
+                // nu"-knop verderop (geen nieuw mechanisme); de
+                // !updateChecking-guard voorkomt alleen een dubbele
+                // aanroep als er toevalligerwijs al een controle loopt
+                // (bijv. de periodieke achtergrond-check).
+                LaunchedEffect(Unit) {
+                    if (!updateChecking) {
+                        updateChecking = true
+                        FclUpdateScheduler.checkNow(ctx) { result ->
+                            updateChecking = false
+                            availableUpdate = result as? FclUpdateChecker.Result.UpdateAvailable
+                            lastCheckAtMs = FclUpdatePrefs.lastCheckAtMs(ctx)
+                            lastError = (result as? FclUpdateChecker.Result.Error)?.message
+                        }
+                    }
+                }
+                Text(
+                    "Huidige versie: versionCode $currentVersionCode",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    lastCheckAtMs?.let { ms ->
+                        "Laatste controle: " + java.text.SimpleDateFormat("dd-MM-yyyy HH:mm", java.util.Locale.getDefault())
+                            .format(java.util.Date(ms))
+                    } ?: "Nog niet eerder gecontroleerd",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (availableUpdate != null) {
+                    Text(
+                        "Update beschikbaar: versionCode ${availableUpdate!!.versionCode}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                if (lastError != null) {
+                    Text(
+                        "Laatste controle mislukt: ${lastError}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            updateChecking = true
+                            FclUpdateScheduler.checkNow(ctx) { result ->
+                                updateChecking = false
+                                availableUpdate = result as? FclUpdateChecker.Result.UpdateAvailable
+                                lastCheckAtMs = FclUpdatePrefs.lastCheckAtMs(ctx)
+                                lastError = (result as? FclUpdateChecker.Result.Error)?.message
+                            }
+                        },
+                        enabled = !updateChecking,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(if (updateChecking) "Bezig…" else "Controleer nu")
+                    }
+                    if (availableUpdate != null) {
+                        OutlinedButton(
+                            onClick = {
+                                coroutineScope.launch {
+                                    val entries = withContext(Dispatchers.IO) {
+                                        FclWhatsNewChecker.fetchSince(ctx, currentVersionCode)
+                                    }
+                                    whatsNewDialogText =
+                                        if (entries.isEmpty()) "Geen changelog gevonden."
+                                        else entries.joinToString("\n\n") { entry ->
+                                            val text = entry.text.trim().ifBlank { "(geen changelogtekst)" }
+                                            "v${entry.versionCode}:\n$text"
+                                        }
+                                }
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Wat is nieuw")
+                        }
+                    }
+                }
+                // 07/09/2026 (de gebruiker) — altijd beschikbaar (niet meer
+                // afhankelijk van availableUpdate != null): dit is ook de weg
+                // terug naar een oudere versie, niet alleen naar een nieuwere.
+                Button(
+                    onClick = {
+                        showVersionPicker = true
+                        versionListLoading = true
+                        versionListError = null
+                        coroutineScope.launch {
+                            when (val result = withContext(Dispatchers.IO) { FclUpdateChecker.listAllVersions() }) {
+                                is FclUpdateChecker.VersionListResult.Success -> {
+                                    versionList = result.versions
+                                    selectedVersionCode = result.versions.maxByOrNull { it.versionCode }?.versionCode
+                                }
+                                is FclUpdateChecker.VersionListResult.NotConfigured -> {
+                                    versionListError = "Update-checker niet geconfigureerd"
+                                }
+                                is FclUpdateChecker.VersionListResult.Error -> {
+                                    versionListError = result.message
+                                }
+                            }
+                            versionListLoading = false
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Versie wijzigen")
+                }
+            }
+
+            if (whatsNewDialogText != null) {
+                AlertDialog(
+                    onDismissRequest = { whatsNewDialogText = null },
+                    title = { Text("Wat is nieuw") },
+                    text = { Text(whatsNewDialogText ?: "") },
+                    confirmButton = {
+                        TextButton(onClick = { whatsNewDialogText = null }) { Text(s.close) }
+                    }
+                )
+            }
+
+            // ── "Versie wijzigen"-dialoog (07/09/2026, de gebruiker) ────────
+            if (showVersionPicker) {
+                AlertDialog(
+                    onDismissRequest = { if (!updateInstalling) showVersionPicker = false },
+                    title = { Text("Versie wijzigen") },
+                    text = {
+                        Column(
+                            modifier = Modifier
+                                .heightIn(max = 320.dp)
+                                .verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            when {
+                                versionListLoading -> {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                                        Spacer(modifier = Modifier.width(12.dp))
+                                        Text("Bezig met ophalen…")
+                                    }
+                                }
+                                versionListError != null -> {
+                                    Text(
+                                        "Kon versielijst niet ophalen: $versionListError",
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                }
+                                versionList.isNullOrEmpty() -> {
+                                    Text("Geen versies gevonden in de Drive-map.")
+                                }
+                                else -> {
+                                    versionList!!.forEach { entry ->
+                                        val isCurrent = entry.versionCode == currentVersionCode
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable { selectedVersionCode = entry.versionCode }
+                                                .padding(vertical = 4.dp)
+                                        ) {
+                                            RadioButton(
+                                                selected = entry.versionCode == selectedVersionCode,
+                                                onClick = { selectedVersionCode = entry.versionCode }
+                                            )
+                                            Text(
+                                                "versionCode ${entry.versionCode}" + if (isCurrent) " (huidige)" else ""
+                                            )
+                                        }
+                                    }
+                                    val selected = selectedVersionCode
+                                    if (selected != null && selected < currentVersionCode) {
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            "Let op: dit zet de app terug naar een OUDERE versie dan nu " +
+                                                "geïnstalleerd. Doe dit alleen als je weet dat dit veilig is " +
+                                                "(bijv. geen database-wijziging tussen deze versies).",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                    }
+                                    if (installError != null) {
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            "Installeren mislukt: $installError",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(
+                            enabled = !updateInstalling && !versionListLoading && selectedVersionCode != null,
+                            onClick = {
+                                val entry = versionList?.firstOrNull { it.versionCode == selectedVersionCode }
+                                    ?: return@TextButton
+                                coroutineScope.launch {
+                                    updateInstalling = true
+                                    installError = null
+                                    val result = FclUpdateInstaller.downloadAndLaunchInstall(ctx, entry.fileId)
+                                    updateInstalling = false
+                                    if (result is FclUpdateInstaller.Result.Error) {
+                                        installError = result.message
+                                    } else {
+                                        showVersionPicker = false
+                                    }
+                                }
+                            }
+                        ) {
+                            Text(if (updateInstalling) "Downloaden…" else "Installeren")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(
+                            enabled = !updateInstalling,
+                            onClick = { showVersionPicker = false }
+                        ) { Text(s.cancel) }
+                    }
+                )
+            }
+        }
+
+        // ── CSV-upload (07/09/2026, de gebruiker) ────────────────────────
+        // Stuurt het bestaande rollende 7-dagen-logboek naar een door de
+        // gebruiker zelf gedeployde Apps Script Web App, zodat een CSV
+        // delen niet meer los ge-e-maild hoeft te worden. Zie
+        // FclCsvUploader.kt voor de volledige toelichting (waarom geen
+        // service-account-sleutel, het device-ID in de bestandsnaam, enz.).
+        run {
+            val coroutineScope = rememberCoroutineScope()
+            var expandedCsvUpload by remember { mutableStateOf(false) }
+            var uploading by remember { mutableStateOf(false) }
+            var uploadResultText by remember { mutableStateOf<String?>(null) }
+            var uploadIsError by remember { mutableStateOf(false) }
+
+            FCLSection(
+                title = "CSV delen",
+                expanded = expandedCsvUpload,
+                onToggle = { expandedCsvUpload = !expandedCsvUpload }
+            ) {
+                Text(
+                    "Stuurt je meest recente 7-dagen-logboek naar de gedeelde " +
+                        "Drive-map, zodat die bekeken kan worden zonder dat je " +
+                        "zelf een bestand hoeft te versturen.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (uploadResultText != null) {
+                    Text(
+                        uploadResultText ?: "",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (uploadIsError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                    )
+                }
+                Button(
+                    onClick = {
+                        uploading = true
+                        uploadResultText = null
+                        coroutineScope.launch {
+                            when (val result = FclCsvUploader.upload(ctx)) {
+                                is FclCsvUploader.Result.Success -> {
+                                    uploadIsError = false
+                                    uploadResultText = "Geüpload als ${result.fileName}"
+                                }
+                                is FclCsvUploader.Result.NotConfigured -> {
+                                    uploadIsError = true
+                                    uploadResultText = "CSV-upload niet geconfigureerd"
+                                }
+                                is FclCsvUploader.Result.CsvNotFound -> {
+                                    uploadIsError = true
+                                    uploadResultText = "Nog geen logboek gevonden om te uploaden"
+                                }
+                                is FclCsvUploader.Result.Error -> {
+                                    uploadIsError = true
+                                    uploadResultText = "Uploaden mislukt: ${result.message}"
+                                }
+                            }
+                            uploading = false
+                        }
+                    },
+                    enabled = !uploading,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(if (uploading) "Bezig met uploaden…" else "Upload CSV")
                 }
             }
         }

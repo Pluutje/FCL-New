@@ -18,6 +18,11 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <!-- FCLvNext update-checker (openAPSFCL/update/, 06/09/2026, de gebruiker):
+         nodig om Android's eigen installatiebevestiging te mogen openen voor
+         een gedownloade apk. Er wordt nooit stil/automatisch geïnstalleerd —
+         zie FclUpdateInstaller.kt. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <uses-permission-sdk-23 android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 

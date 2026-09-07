@@ -74,6 +74,36 @@ data class FclUiSnapshot(
     val aigfDaystartTodayMs: Long? = null
 )
 
+/**
+ * FCLvNext-eigen versienummer (07/09/2026, de gebruiker) — LOSGEKOPPELD van
+ * Android's versionCode (buildSrc/Versions.kt), dat vanaf nu permanent
+ * bevroren blijft (zie de kdoc daar). AANLEIDING: Android weigert
+ * principieel een apk met een LAGER versionCode te installeren dan wat al
+ * staat (INSTALL_FAILED_VERSION_DOWNGRADE, zichtbaar als "App niet
+ * geïnstalleerd") — dat maakte de "Versie wijzigen"-terugzet-knop
+ * (FCLSettingsScreen.kt) onbruikbaar zodra er ooit een nieuwere versie was
+ * geinstalleerd. Door het Android-versionCode nooit meer te veranderen, is
+ * elke toekomstige FCLvNext-apk voor Android exact "dezelfde versie" (nooit
+ * een downgrade), en mag er altijd overheen geinstalleerd worden — vooruit
+ * ÉN terug.
+ *
+ * Dit getal hier is nu de enige bron van waarheid voor:
+ *  1) de statusregel hieronder (buildFooter of vergelijkbaar, "FCL V7 v6-x"),
+ *  2) FclUpdateChecker's "is dit nieuwer dan wat ik heb"-vergelijking
+ *     (installedVersionCode), i.p.v. PackageManager.longVersionCode,
+ *  3) FCLSettingsScreen.kt's "Huidige versie"-weergave en de
+ *     "(huidige)"-markering in de "Versie wijzigen"-lijst,
+ *  4) de Drive-bestandsnaamconventie: FCL-V7_v<dit getal>.apk — GEEN
+ *     +1500-offset meer, dat sloeg op het Android-versionCode dat nu niet
+ *     meer meebeweegt.
+ *
+ * BIJWERKEN: bij elke FCLvNext-wijziging die via de update-checker moet
+ * worden aangeboden, dit getal ophogen — SAMEN met FCL_CODE_VERSION in
+ * FCLvNext.kt, zoals voorheen. Versions.versionCode in buildSrc NIET meer
+ * aanraken.
+ */
+const val FCL_STATUS_VERSION = 99
+
 class FCLvNextStatusFormatter(
     private val prefs: Preferences,
     private val context: android.content.Context,
@@ -235,7 +265,7 @@ class FCLvNextStatusFormatter(
     ): String = buildString {
         val str = FclStrings.get(context)
         appendLine("════════════════════════")
-        appendLine(" 🧠 FCL V7 v6-93")
+        appendLine(" 🧠 FCL V7 v6-$FCL_STATUS_VERSION")
         appendLine("════════════════════════")
         appendLine()
 

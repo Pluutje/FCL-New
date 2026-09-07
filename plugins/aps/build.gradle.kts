@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.ksp)
@@ -8,8 +10,62 @@ plugins {
     id("jacoco-module-dependencies")
 }
 
+// ── FCLvNext update-checker geheimen (06/09/2026, de gebruiker) ──────────────
+// Drive-map-ID + API-key komen NOOIT in broncode: alleen uit local.properties
+// (staat al buiten versiebeheer). Ontbreken beide, dan blijven de BuildConfig-
+// velden leeg en geeft FclUpdateChecker.checkForUpdate() gewoon NotConfigured
+// terug — geen crash, de rest van de plugin werkt gewoon door (zelfde patroon
+// als het FCLGlucoLink-overdrachtsdocument beschrijft).
+//
+// BUGFIX: "java.util.Properties()" gaf hier "Unresolved reference 'util'" —
+// een van de toegepaste plugins/convention-plugins registreert kennelijk een
+// "java"-extensie op Project (JavaPluginExtension), waardoor "java" in dit
+// script naar díe extensie resolveert i.p.v. het java-package. Met een
+// expliciete import speelt dat niet.
+val fclUpdateLocalProperties = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+
 android {
     namespace =  "app.aaps.plugins.aps"
+
+    buildFeatures {
+        buildConfig = true
+    }
+
+    defaultConfig {
+        buildConfigField(
+            "String", "FCL_UPDATE_DRIVE_FOLDER_ID",
+            "\"${fclUpdateLocalProperties.getProperty("driveUpdateFolderId", "")}\""
+        )
+        buildConfigField(
+            "String", "FCL_UPDATE_DRIVE_API_KEY",
+            "\"${fclUpdateLocalProperties.getProperty("driveUpdateApiKey", "")}\""
+        )
+        // ── CSV-upload (07/09/2026, de gebruiker) ────────────────────────
+        // Zelfde geheimen-patroon als hierboven, maar voor de UPLOAD-kant
+        // (het lezen/updaten van apk's blijft de kale API-key hierboven —
+        // die kan alleen lezen). Uploaden gaat via een door de gebruiker
+        // zelf eenmalig gedeployde Google Apps Script "Web App" (zie
+        // FclCsvUploader.kt) i.p.v. een service-account-sleutel in de app:
+        // een service-account krijgt sinds medio 2023 standaard 0 GB eigen
+        // opslagquotum, wat uploaden naar een gewoon (niet-Workspace)
+        // Google-account onbetrouwbaar maakt. Het Apps Script draait onder
+        // het ECHTE Google-account van de gebruiker, dus geen quotumprobleem.
+        // fclCsvUploadSecret is een door de gebruiker zelf verzonnen
+        // wachtwoord dat het script ook controleert — puur om te voorkomen
+        // dat iemand die de deploy-URL zou raden/vinden zomaar kan uploaden;
+        // geen vervanging voor een echte auth-laag.
+        buildConfigField(
+            "String", "FCL_CSV_UPLOAD_URL",
+            "\"${fclUpdateLocalProperties.getProperty("fclCsvUploadUrl", "")}\""
+        )
+        buildConfigField(
+            "String", "FCL_CSV_UPLOAD_SECRET",
+            "\"${fclUpdateLocalProperties.getProperty("fclCsvUploadSecret", "")}\""
+        )
+    }
 }
 
 

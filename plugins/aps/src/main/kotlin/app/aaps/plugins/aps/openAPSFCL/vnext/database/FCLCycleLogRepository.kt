@@ -9,6 +9,7 @@ import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.FrontloadLearner
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.FclLearnerBackup
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.toLogRow
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.PostHypoBrakeLogEntity
+import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.ExplosiveRiseLogEntity
 import app.aaps.plugins.aps.openAPSFCL.vnext.persist.VLearner
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
@@ -30,6 +31,7 @@ class FCLCycleLogRepository @Inject constructor(
     private val dao by lazy { db.cycleLogDao() }
     private val episodeDao by lazy { db.episodeDao() }
     private val postHypoBrakeDao by lazy { db.postHypoBrakeLogDao() }
+    private val explosiveRiseDao by lazy { db.explosiveRiseLogDao() }
     private val scope = CoroutineScope(Dispatchers.IO)
 
     private val persistDb by lazy {
@@ -83,6 +85,26 @@ class FCLCycleLogRepository @Inject constructor(
                 )
             )
             postHypoBrakeDao.deleteOlderThan(FCLAnalyzerDatabase.cutoffMs())
+        }
+    }
+
+    /**
+     * Log de eindstand van de EXPLOSIVE_RISE-boost per cyclus (3-4/9/2026) in
+     * een eigen, kleine tabel -- zie kdoc bij ExplosiveRiseLogEntity voor de
+     * aanleiding. Zelfde fire-and-forget patroon als logPostHypoBrake() hierboven.
+     */
+    fun logExplosiveRise(frac: Double, mul: Double, active: Boolean, projectedMinNoInsulin: Double, timestampMs: Long) {
+        scope.launch {
+            explosiveRiseDao.insert(
+                ExplosiveRiseLogEntity(
+                    timestampMs = timestampMs,
+                    frac = frac,
+                    mul = mul,
+                    active = active,
+                    projectedMinNoInsulin = projectedMinNoInsulin
+                )
+            )
+            explosiveRiseDao.deleteOlderThan(FCLAnalyzerDatabase.cutoffMs())
         }
     }
 
@@ -572,6 +594,9 @@ class FCLCycleLogRepository @Inject constructor(
         // Ontbreekt een match (vroegtijdige return, of de rij is ouder dan
         // deze feature) dan is de rem per definitie niet geevalueerd -> false/-1.
         val brakeByTs = postHypoBrakeDao.getSince(sevenDaysAgo).associateBy { it.timestampMs }
+        // 3-4/9/2026 -- zelfde patroon, voor de EXPLOSIVE_RISE-boost-diagnostiek
+        // (zie kdoc bij ExplosiveRiseLogEntity).
+        val explosiveByTs = explosiveRiseDao.getSince(sevenDaysAgo).associateBy { it.timestampMs }
 
         val dir = File(
             android.os.Environment.getExternalStorageDirectory(),
@@ -603,7 +628,11 @@ class FCLCycleLogRepository @Inject constructor(
         // timestampMs, zie exportCsvLast7DaysInternal() hierboven). LET OP
         // (zelfde punt als bij v9->v10 hierboven): verifieer dat de nieuwe
         // build ook echt actief is, anders blijft het toestel op v10 schrijven.
-        val file = File(dir, "FCLvNext_Log_v11.csv")
+        // v11->v12 (3-4/9/2026) -- +4 kolommen (explosive_rise_frac/mul/
+        // boost_active/projected_min_no_insulin, zie csvHeader() hieronder),
+        // afkomstig uit de nieuwe, aparte explosive_rise_log-tabel (zelfde
+        // samenvoeg-patroon als post_hypo_brake_log hierboven).
+        val file = File(dir, "FCLvNext_Log_v12.csv")
 
         val sep = ";"
         // 23/07/2026 — ts_utc blijft de bron van waarheid (ondubbelzinnig,
@@ -618,7 +647,15 @@ class FCLCycleLogRepository @Inject constructor(
             writer.newLine()
             rows.forEach { row ->
                 val brake = brakeByTs[row.timestampMs]
-                writer.write(row.toCsvLine(sep, fmt, fmtLocal, brake?.active ?: false, brake?.armedMinutes ?: -1))
+                val explosive = explosiveByTs[row.timestampMs]
+                writer.write(
+                    row.toCsvLine(
+                        sep, fmt, fmtLocal,
+                        brake?.active ?: false, brake?.armedMinutes ?: -1,
+                        explosive?.frac ?: 0.0, explosive?.mul ?: 1.0,
+                        explosive?.active ?: false, explosive?.projectedMinNoInsulin ?: -1.0
+                    )
+                )
                 writer.newLine()
             }
         }
@@ -677,6 +714,7 @@ private fun csvHeader(sep: String): String = listOf(
     "guard_iob_limited", "guard_peak_limited", "guard_maxsmb_limited", "guard_mindeliver_clipped",
     "guard_zone_limited", "afterload_fd60_scale", "afterload_high_iob_scale",
     "iob_overshoot_factor", "peak_approach_factor", "peak_approach_active",
+    "explosive_rise_frac", "explosive_rise_mul", "explosive_rise_boost_active", "projected_min_no_insulin",
     "peak_iob_brake_active", "topguard_active", "topguard_cap_factor", "top_plateau_confirmed",
     "burst_delivered_10m", "burst_cap_10m", "burst_remaining_10m", "iob_margin_to_brake",
     "iob_margin_to_lockout", "pred_margin_to_target", "slope_margin_to_brake", "suppress_reason",
@@ -714,7 +752,11 @@ private fun FCLCycleLogEntity.toCsvLine(
     fmt: DateTimeFormatter,
     fmtLocal: DateTimeFormatter,
     postHypoBrakeActive: Boolean,
-    postHypoBrakeArmedMinutes: Int
+    postHypoBrakeArmedMinutes: Int,
+    explosiveRiseFrac: Double,
+    explosiveRiseMul: Double,
+    explosiveRiseBoostActive: Boolean,
+    projectedMinNoInsulin: Double
 ): String {
     val ts = fmt.format(Instant.ofEpochMilli(timestampMs))
     val tsLocal = fmtLocal.format(Instant.ofEpochMilli(timestampMs))
@@ -774,7 +816,9 @@ private fun FCLCycleLogEntity.toCsvLine(
         bool(guards.guardMinDeliverClipped), bool(guards.guardZoneLimited),
         d2(peakBenadering.afterloadFutureDrop60Scale), d2(peakBenadering.afterloadHighIobLateScale),
         d2(forensic.iobOvershootFactor), d2(peakBenadering.peakApproachFactor),
-        bool(doseerruimte.peakApproachActive), bool(peakBenadering.peakIobBrakeActive),
+        bool(doseerruimte.peakApproachActive),
+        d2(explosiveRiseFrac), d2(explosiveRiseMul), bool(explosiveRiseBoostActive), d2(projectedMinNoInsulin),
+        bool(peakBenadering.peakIobBrakeActive),
         bool(topGuard.topGuardActive), d2(topGuard.topGuardCapFactor), bool(topGuard.topPlateauConfirmed),
         d2(burst.burstDelivered10m), d2(burst.burstCap10m), d2(burst.burstRemaining10m),
         d2(marges.iobMarginToBrake), d2(marges.iobMarginToLockout), d2(marges.predMarginToTarget),

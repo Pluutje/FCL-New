@@ -12,6 +12,7 @@ import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.NightWindowEntity
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.ProfileAutoAdjustLogEntity
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.IsfAutoAdjustLogEntity
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.PostHypoBrakeLogEntity
+import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.ExplosiveRiseLogEntity
 
 // ── MIGRATION_16_17 (16/07/2026) ─────────────────────────────────────
 // Zuiver additief: 6 nieuwe kolommen op de bestaande fcl_cycle_log-tabel.
@@ -143,6 +144,28 @@ val MIGRATION_21_22 = object : Migration(21, 22) {
     }
 }
 
+// ── MIGRATION_22_23 (3-4/9/2026) ─────────────────────────────────────
+// Nieuwe, lege tabel voor de EXPLOSIVE_RISE-boost-diagnostiek (frac/mul/
+// active/projectedMinNoInsulin) — zelfde bewezen patroon als
+// MIGRATION_21_22 hierboven (post_hypo_brake_log): een gewone CREATE TABLE,
+// geen wijziging aan fcl_cycle_log zelf, dus geen risico op de VerifyError
+// die MIGRATION_21_22's aanleiding was. Zie kdoc bij ExplosiveRiseLogEntity.
+val MIGRATION_22_23 = object : Migration(22, 23) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `explosive_rise_log` (" +
+                "`id` INTEGER NOT NULL, " +
+                "`timestampMs` INTEGER NOT NULL, " +
+                "`frac` REAL NOT NULL, " +
+                "`mul` REAL NOT NULL, " +
+                "`active` INTEGER NOT NULL, " +
+                "`projectedMinNoInsulin` REAL NOT NULL, " +
+                "PRIMARY KEY(`id`))"
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_explosive_rise_log_timestampMs` ON `explosive_rise_log` (`timestampMs`)")
+    }
+}
+
 @Database(
     entities = [
         FCLCycleLogEntity::class,
@@ -151,7 +174,8 @@ val MIGRATION_21_22 = object : Migration(21, 22) {
         BasalProfileHistoryEntity::class,
         ProfileAutoAdjustLogEntity::class,
         IsfAutoAdjustLogEntity::class,
-        PostHypoBrakeLogEntity::class
+        PostHypoBrakeLogEntity::class,
+        ExplosiveRiseLogEntity::class
     ],
     // v13→v15 (05/07/2026): +curveFitR2/+curveAcceleration/+toppingOutBoost
     // (in TrendsFields), en FCLCycleLogEntity herstructureerd in @Embedded-
@@ -225,7 +249,12 @@ val MIGRATION_21_22 = object : Migration(21, 22) {
     // PostHypoBrakeLogEntity voor de aanleiding (VerifyError-crash toen deze
     // velden via een ALTER TABLE op fcl_cycle_log zelf gingen, in de nooit
     // uitgeleverde v82-poging).
-    version = 22,
+    // v22->v23 (3-4/9/2026): +explosive_rise_log (nieuwe, lege tabel voor de
+    // EXPLOSIVE_RISE-boost-diagnostiek). Zuiver additief (nieuwe tabel, geen
+    // wijziging aan bestaande tabellen, dus ook fcl_cycle_log blijft exact
+    // zoals in v22) — MIGRATION_22_23 hierboven, zelfde bewezen patroon als
+    // v21->v22. Zie kdoc bij ExplosiveRiseLogEntity voor de aanleiding.
+    version = 23,
     exportSchema = false
 )
 abstract class FCLAnalyzerDatabase : RoomDatabase() {
@@ -237,6 +266,7 @@ abstract class FCLAnalyzerDatabase : RoomDatabase() {
     abstract fun profileAutoAdjustLogDao(): app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.ProfileAutoAdjustLogDao
     abstract fun isfAutoAdjustLogDao(): app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.IsfAutoAdjustLogDao
     abstract fun postHypoBrakeLogDao(): app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.PostHypoBrakeLogDao
+    abstract fun explosiveRiseLogDao(): app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.ExplosiveRiseLogDao
 
     companion object {
         private const val DB_NAME = "fcl_analyzer.db"
@@ -251,7 +281,7 @@ abstract class FCLAnalyzerDatabase : RoomDatabase() {
                     FCLAnalyzerDatabase::class.java,
                     DB_NAME
                 )
-                    .addMigrations(MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22)
+                    .addMigrations(MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23)
                     .fallbackToDestructiveMigration(dropAllTables = true)
                     .build()
                     .also { INSTANCE = it }

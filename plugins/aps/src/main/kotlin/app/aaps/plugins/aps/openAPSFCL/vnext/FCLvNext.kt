@@ -582,6 +582,21 @@ private var reserveCause: ReserveCause? = null
 private var reserveActionThisCycle: String = "NONE"
 private var reserveDeltaThisCycle: Double = 0.0
 
+// ── EXPLOSIEVE STIJGING — per-cyclus snapshot voor CSV-logging (3-4/9/2026) ──
+// Zelfde patroon als reserveActionThisCycle/reserveDeltaThisCycle hierboven:
+// elke cyclus gereset, ergens dieper in getAdvice() eventueel overschreven,
+// en aan het eind gelogd via cycleLogRepository.logExplosiveRise() — dat
+// schrijft naar een eigen, kleine tabel (explosive_rise_log), NIET als
+// extra velden op FCLCycleLogEntity (167+ velden daar, zie kdoc bij
+// PostHypoBrakeLogEntity voor de reden: dat brak eerder al bij ALTER TABLE
+// op fcl_cycle_log zelf). projectedMinNoInsulinThisCycle wordt ELKE cyclus
+// gezet (ongeacht of de boost actief is) — puur diagnostisch, nuttig voor
+// toekomstige analyse van de hypo-veiligheidsmarge in het algemeen.
+private var explosiveRiseFracThisCycle: Double = 0.0
+private var explosiveRiseMulThisCycle: Double = 1.0
+private var explosiveRiseActiveThisCycle: Boolean = false
+private var projectedMinNoInsulinThisCycle: Double = -1.0
+
 // ─────────────────────────────────────────────
 // ⚡ FAST-CARB micro ramp (earlier IOB without commit)
 // thresholds tuned from your CSV sample
@@ -1045,6 +1060,54 @@ private const val VROEGE_STIJGING_BGSTIJGT_DEMPING = 0.30
 // hier beschreven te-vroeg-plafonneren-probleem.
 private const val PEAK_ANCHOR_THRESHOLD_FRAC = 0.75
 
+// ── EXPLOSIEVE STIJGING — extra boost bij uitzonderlijk snelle BG-stijging
+// (3-4/9/2026) ──────────────────────────────────────────────────────────
+// AANLEIDING: maaltijd 3/9 18:39 (Gua Bao-broodjes) — recentDelta5m liep
+// 18:44-18:54 op tot 1,04/1,34/1,27 mmol per 5 min (dus >1 mmol/5min,
+// zeer snel). De gebruiker gaf aan dat hij dit, bij handmatig spuiten, al
+// vóór BG=10 met een fors extra bolus had bijgestuurd — het huidige systeem
+// reageert wel snel (via de bestaande "Force: strong rising trend"-gate),
+// maar die gate haalt alleen een DEMPING weg, hij vergroot de door het
+// energiemodel berekende dosis zelf niet. Er bestond dus geen mechanisme
+// dat de dosis-GROOTTE zelf opschaalt naar aanleiding van een uitzonderlijk
+// snelle, korte-termijn stijging (recentDelta5m/recentSlope), los van wat
+// de langzamere ctx.slope al "weet".
+//
+// BACKTEST (3-4/9/2026, zie gesprek): eerst een naïeve, pessimistische
+// aftrek-toets op 24 historische episodes (27/7-3/9) met recentDelta5m>=0,75
+// tijdens een bevestigde maaltijd liet zien dat ~30% daarvan al een dunne
+// BG-marge had ZONDER enige boost — een boost puur op delta5m-snelheid zou
+// daar te vaak ook onveilige gevallen meenemen. Herhaald met de bestaande
+// hypoProtection()-projectie (hypoNoInsulinProjection, dezelfde die al
+// elders in dit bestand de strongRisingWithIob-hypo-bypass bepaalt) als
+// EXTRA poort: bij alle 3 kwalificerende maaltijden in v90+ (de enige
+// versies die qua overige logica vergelijkbaar genoeg zijn, 2-4/9) stond
+// die projectie ruim boven 5,0 mmol (8,97-12,08) — deze poort onderscheidt
+// dus terecht een verse, snel stijgende, laag-IOB situatie (veilig te
+// boosten) van een risicovollere situatie met minder marge.
+//
+// ONTWERP (bewust conservatief, eerste versie): vloeiende (geen aan/uit)
+// opschaling tussen EXPLOSIVE_RISE_LOWER en EXPLOSIVE_RISE_UPPER, met een
+// kwadratische curve (EXPLOSIVE_RISE_POWER) zodat de boost dicht bij de
+// ondergrens nog nauwelijks meedoet en pas richting de bovengrens echt
+// oploopt — voorzichtiger dan een lineaire overgang, zoals de gebruiker
+// vroeg. Extra begrensd tot maximaal EXPLOSIVE_RISE_MAX_CYCLES
+// opeenvolgende cycli per episode (i.p.v. de hele episode lang), zodat de
+// boost niet ongelimiteerd blijft stapelen — de bestaande PEAK_IOB_BRAKE
+// (iobRatio>=0,70) blijft daarnaast gewoon actief als achtervang.
+// Startwaarde EXPLOSIVE_RISE_MAX_EXTRA bewust laag (15%): het "harde"
+// vergelijkbare monster (v90+) is met 3 maaltijden nog klein. Aanrader:
+// eerst een aantal kwalificerende maaltijden via de CSV volgen (nieuwe
+// kolommen explosive_rise_frac/mul/boost_active/projected_min_no_insulin,
+// zie FCLCycleLogRepository.kt) voordat deze waarde omhoog gaat.
+private const val EXPLOSIVE_RISE_LOWER = 0.75          // mmol/5min, ondergrens: 0% boost
+private const val EXPLOSIVE_RISE_UPPER = 1.00          // mmol/5min, bovengrens: volle boost, geen verdere opschaling erboven
+private const val EXPLOSIVE_RISE_POWER = 2.0           // >1 = kwadratisch/vloeiend-voorzichtig i.p.v. lineair
+private const val EXPLOSIVE_RISE_MAX_EXTRA = 0.15      // max. 15% extra bovenop de normale commit-dosis
+private const val EXPLOSIVE_RISE_MAX_IOB_RATIO = 0.50  // boven deze iobRatio geen boost (voldoende al afgeremd via commitIobFactor)
+private const val EXPLOSIVE_RISE_PROJ_MIN_GATE = 5.0   // mmol/L — hypoNoInsulinProjection moet hier minimaal boven zitten
+private const val EXPLOSIVE_RISE_MAX_CYCLES = 2        // max. opeenvolgende cycli per episode waarin de boost mag gelden
+
 // ── AIGF-B eigen freeze-drempel, losstaand van PEAK_ANCHOR_THRESHOLD_FRAC
 // (07/08/2026) ──────────────────────────────────────────────────────
 // AANLEIDING: "Deze maaltijd: nog geen eerste bevestigd commit" bleef de
@@ -1171,6 +1234,38 @@ private const val POST_HYPO_BRAKE_ARM_MIN_IOB_RATIO = 0.25
 private const val POST_HYPO_BRAKE_DISARM_ABOVE_TARGET = 3.0  // mmol/L boven target, vereist voor auto-disarm
 private const val POST_HYPO_BRAKE_MIN_ARMED_MIN = 15         // min. minuten gewapend voordat auto-disarm mag
 
+// ── Vlak/stijgend auto-disarm voor de post-hypo-brake (06/09/2026, de gebruiker) ──
+// AANLEIDING: de rem hierboven kende maar één ontgrendel-pad (bgNow >= target+3,0).
+// Bij twee maaltijden (5/9 16:29, 6/9 09:29) bleef de rem daardoor onnodig lang
+// dicht: de BG steeg wel degelijk, maar bleef binnen de eerste 15-20 minuten
+// onder target+3,0, dus de dosering bleef geklemd op smallCorrectionMaxU terwijl
+// er allang geen dalende trend meer was.
+//
+// Doorgerekend tegen alle post-hypo-brake-episodes >=10 minuten in 17 dagen
+// data (26 CSV's, gededupliceerd op tijdstip, 38 episodes): een aantal liep
+// 40-95 minuten door terwijl de BG intussen vlak bleef of zelfs steeg (bijv.
+// 27/8 13:19: 65 min. terwijl BG van 6,9 naar 8,6 steeg) — de target+3-eis
+// wordt bij een BG die rond de 7-9 blijft hangen simpelweg nooit gehaald.
+// Het nieuwe pad hieronder (bgNow >= 7,0 én niet gedaald t.o.v. het
+// aanslag-moment) had deze gevallen sneller losgelaten.
+//
+// VEILIGHEID: in geen van de 38 episodes zou dit nieuwe pad hebben losgelaten
+// terwijl de BG binnen de daaropvolgende 30 minuten alsnog onder 4,5 mmol/L
+// kwam — de episodes die wél verder doorzakten (naar 4,4-4,9) bleven allemaal
+// beschermd, omdat de BG daar al vanaf het aanslag-moment bleef dalen (dus
+// nooit aan "niet gedaald t.o.v. aanslag-moment" voldeed). Kanttekening: één
+// episode (4/9 10:44, 95 minuten) zakte na het gehele venster alsnog naar 4,7
+// mmol/L — maar dat gebeurde al met de bestaande, maximaal voorzichtige rem
+// die daar bijna niets doorliet, dus vroeger loslaten tijdens de duidelijk
+// stijgende fase lijkt dat niet te hebben veroorzaakt of kunnen voorkomen.
+//
+// Dit pad komt BOVENOP het bestaande target+3-pad (geen van beide drempels
+// hierboven is aangepast) en raakt de ratchet-vrijgave (POST_HYPO_BRAKE_
+// CATCHUP_*) niet — die blijft ongewijzigd verantwoordelijk voor vrijgave
+// tijdens een aanhoudende, bevestigde stijging.
+private const val POST_HYPO_BRAKE_FLAT_DISARM_MIN_BG = 7.0    // mmol/L, ondergrens (zelfde als POST_HYPO_BRAKE_CATCHUP_MIN_BG)
+private const val POST_HYPO_BRAKE_FLAT_DISARM_TOLERANCE = 0.3 // mmol/L, toegestane terugval t.o.v. aanslag-BG (ruismarge)
+
 // ─────────────────────────────────────────────
 // WatchingFrontload delta-to-target ramp (05/07/2026)
 // Vervangt de harde aan/uit-drempel op deltaToTarget door een kwadratische
@@ -1255,6 +1350,17 @@ private var lastHypoActiveAt: org.joda.time.DateTime? = null
 // plekken waar context wél beschikbaar is — zie FCLvNext-init en de
 // increment-site verderop).
 private var sensorBlipStreakCount: Int = 0
+
+// ── Explosieve-stijging-boost teller (3-4/9/2026) ────────────────────────
+// Episode-gebonden: telt hoeveel opeenvolgende cycli de EXPLOSIVE_RISE-boost
+// (zie kdoc bij EXPLOSIVE_RISE_LOWER hierboven) al heeft toegepast, zodat
+// deze na EXPLOSIVE_RISE_MAX_CYCLES vanzelf stopt binnen dezelfde episode.
+// Bewust GEEN app-restart-persistentie zoals sensorBlipStreakCount hierboven
+// (dat loste een ander, dieperliggend top-level-functie-probleem op) — hier
+// volstaat een simpele reset naar 0 bij herstart: in het ergste geval mag de
+// boost dan één cyclus te veel, wat ruim binnen de bestaande veiligheidsmarges
+// (PEAK_IOB_BRAKE, projectedMinNoInsulin-poort) blijft.
+private var explosiveRiseBoostCycles: Int = 0
 
 // Geldigheidsduur kort houden (15 min): een streak is per ontwerp maar 1-2
 // cycli relevant, dus een oudere opgeslagen waarde is toch al achterhaald
@@ -4038,6 +4144,7 @@ private fun maybeResetEarlyOnDecel(
     earlyDose = EarlyDoseContext()
     earlyConfirmDone = false
     sensorBlipStreakCount = 0
+    explosiveRiseBoostCycles = 0
     recentBgHistory.clear()
     recentCurveFitR2History.clear()
     peakBrakeWasActiveLastCycle = false
@@ -4302,7 +4409,7 @@ class FCLvNext(
     // "vNN-jjjj-mm-dd-uumm" (aanmaaktijdstip, geen omschrijving; die van
     // eerdere versies raakten toch achter). Alleen als het écht relevant
     // is een korte omschrijving toevoegen.
-    private val FCL_CODE_VERSION = "v93-2026-09-03-1006"
+    private val FCL_CODE_VERSION = "v99-2026-09-07-2359"
 
     // ── Restart-detectie (16/07/2026) ─────────────────────────────────
     // true op precies de EERSTE cyclus na het (her)starten van dit class-
@@ -5203,6 +5310,7 @@ class FCLvNext(
             earlyDose.boostCommitCount = savedBoostCount
             earlyConfirmDone = false
             sensorBlipStreakCount = 0
+            explosiveRiseBoostCycles = 0
             recentBgHistory.clear()
             recentCurveFitR2History.clear()
             peakBrakeWasActiveLastCycle = false
@@ -5253,6 +5361,7 @@ class FCLvNext(
             earlyDose = EarlyDoseContext()
             earlyConfirmDone = false
             sensorBlipStreakCount = 0
+            explosiveRiseBoostCycles = 0
             recentBgHistory.clear()
             recentCurveFitR2History.clear()
             peakBrakeWasActiveLastCycle = false
@@ -5300,6 +5409,7 @@ class FCLvNext(
                 earlyDose = EarlyDoseContext()
                 earlyConfirmDone = false
                 sensorBlipStreakCount = 0
+                explosiveRiseBoostCycles = 0
                 recentBgHistory.clear()
                 recentCurveFitR2History.clear()
                 peakBrakeWasActiveLastCycle = false
@@ -5635,6 +5745,10 @@ class FCLvNext(
         // reset reserve logging per cycle
         reserveActionThisCycle = "NONE"
         reserveDeltaThisCycle = 0.0
+        explosiveRiseFracThisCycle = 0.0
+        explosiveRiseMulThisCycle = 1.0
+        explosiveRiseActiveThisCycle = false
+        projectedMinNoInsulinThisCycle = -1.0
 
         // Snapshot vóór deze cyclus' eigen commit-beslissing: de post-big-
         // commit afterload-laag (zie hieronder) moet reageren op de VORIGE
@@ -6401,6 +6515,10 @@ class FCLvNext(
             config = config,
             mealSignal = mealSignal
         ).projectedMinNoInsulin
+        // Elke cyclus loggen (los van de EXPLOSIVE_RISE-boost hieronder, die
+        // dit hergebruikt als veiligheidspoort) — puur diagnostisch, zie
+        // kdoc bij explosiveRiseFracThisCycle hierboven.
+        projectedMinNoInsulinThisCycle = hypoNoInsulinProjection
 
         val early = computeEarlyDoseDecision(
             ctx = ctx,
@@ -7106,14 +7224,43 @@ class FCLvNext(
             )
         }
         if (watchingFrontloadTriggered) {
+            // 06/09/2026 (de gebruiker) — shortfall i.p.v. herhaalde volle vloer.
+            // AANLEIDING: maaltijd 6/9 18:34, waarbij de Early Confidence Boost om
+            // 18:49 al 3,32U had afgeleverd (early_target_u=5,38, commit_dose_final=3,33),
+            // en late_decay_mul daarna terecht naar 0,04-0,12 kelderde (18:54-19:04).
+            // Toch werd de vloer hieronder om 19:09 ÉN 19:14 allebei nog een keer
+            // opgetrokken naar het volle ceiling (3,58U), zonder te kijken naar wat
+            // er in de tussentijd al was gegeven — netto 1,60U + 3,21U extra terwijl
+            // IOB intussen al van 4,40 naar 5,78 (ratio 0,40→0,53) was gestegen. De
+            // vloer was dus een "geef minstens X" i.p.v. een "vul aan tot X", en kon
+            // daardoor hetzelfde doel meerdere keren optellen bovenop wat al uit was.
+            //
+            // FIX: trek af wat er deze episode/segment al daadwerkelijk is gegeven
+            // (episodeCumulativeCommandedU — dezelfde teller die elders al als "hoeveel
+            // is er al uit"-referentie dient en die al correct reset bij een nieuwe
+            // episode/re-entry). De vloer vult dan alleen het resterende gat tot de
+            // ceiling, in plaats van de ceiling telkens opnieuw als ondergrens te
+            // herhalen. Bij een oprecht grote/aanhoudende maaltijd waar de ceiling
+            // zelf blijft meegroeien (predictedPeak loopt verder op) blijft een
+            // tweede, aanvullende dosis nog steeds mogelijk — alleen het dubbel-
+            // tellen verdwijnt.
+            val wffAlreadyDeliveredU = episodeCumulativeCommandedU
+            val wffShortfallU = (watchingFrontloadTargetUEffective - wffAlreadyDeliveredU).coerceAtLeast(0.0)
 
-            if (finalDose < watchingFrontloadTargetUEffective) {
+            if (finalDose < wffShortfallU) {
                 status.append(
                     "WATCHING FRONTLOAD: " +
-                        "${"%.2f".format(finalDose)}→${"%.2f".format(watchingFrontloadTargetUEffective)}U " +
-                        "(ceiling=${"%.2f".format(watchingFrontloadTargetU)}U ramp=${"%.0f".format(watchingDeltaRampFrac * 100)}%)\n"
+                        "${"%.2f".format(finalDose)}→${"%.2f".format(wffShortfallU)}U " +
+                        "(ceiling=${"%.2f".format(watchingFrontloadTargetU)}U " +
+                        "al_gegeven=${"%.2f".format(wffAlreadyDeliveredU)}U " +
+                        "ramp=${"%.0f".format(watchingDeltaRampFrac * 100)}%)\n"
                 )
-                finalDose = watchingFrontloadTargetUEffective
+                finalDose = wffShortfallU
+            } else if (wffAlreadyDeliveredU > 0.01) {
+                status.append(
+                    "WATCHING FRONTLOAD: al gedekt (al_gegeven=${"%.2f".format(wffAlreadyDeliveredU)}U " +
+                        ">= ceiling=${"%.2f".format(watchingFrontloadTargetUEffective)}U), vloer niet toegepast\n"
+                )
             }
         }
 
@@ -7267,6 +7414,7 @@ class FCLvNext(
             earlyDose.boostCommitCount = savedBoostCountReentry
             earlyConfirmDone = false
             sensorBlipStreakCount = 0
+            explosiveRiseBoostCycles = 0
             recentBgHistory.clear()
             recentCurveFitR2History.clear()
             peakBrakeWasActiveLastCycle = false
@@ -7748,13 +7896,43 @@ class FCLvNext(
                     status.append("PLATEAU gedetecteerd na vroege-stijging-commit: bgStijgtNogFors terug op volle sterkte\n")
                 }
 
+                // 06/09/2026 (de gebruiker) — forsVloer/normaalVloer nu op één plek
+                // berekend, zodat dezelfde formules hergebruikt kunnen worden in de
+                // Naderend-blend hieronder (was eerst alleen inline in de if/else
+                // uitgeschreven).
+                val forsVloer = (0.45 * (1.0 - ctx.iobRatio * 1.0)).coerceIn(0.18, 0.40)
+                val normaalVloer = (0.35 * (1.0 - ctx.iobRatio * 1.2)).coerceIn(0.10, 0.35)
+                // AANLEIDING (6/9 18:54-19:14): bgNow-target bereikte in deze episode
+                // maximaal 2,8 — net onder de bgStijgtNogFors-drempel van 3,0 — terwijl
+                // curveAcceleration de hele tijd duidelijk positief en oplopend bleef
+                // (geen enkel omslag-signaal). decayFloorBaseRaw viel daardoor terug op
+                // de LAGE, normaalVloer-tak (0,10-0,35) — dezelfde harde knip bij 3,0
+                // die bgStijgtNogFors zelf ook kent. bgStijgtNogForsNaderend bestaat al
+                // precies voor dit "net-onder-de-drempel, nog altijd aantoonbaar
+                // stijgend" geval (zie kdoc bij BGSTIJGT_NOG_FORS_RAMP_WIDTH hierboven)
+                // en wordt verderop al hergebruikt om het cappedFinalDose-plafond
+                // geleidelijk te ontspannen — dezelfde geleidelijke overgang hoort ook
+                // hier: zonder deze blend bleef de vloer zelf bij zo'n "net-mis"
+                // volledig op de lage, normale stand hangen, ook al gedroeg de stijging
+                // zich feitelijk al net zo dwingend als bgStijgtNogFors zelf.
+                // Puur additief/geleidelijk (lerp), nooit een verlaging: forsVloer is
+                // voor elke iobRatio-waarde hoger dan normaalVloer (0,45× vs. 0,35×,
+                // resp. geclampt op [0,18-0,40] vs. [0,10-0,35]), dus deze blend kan de
+                // vloer nooit onder de bestaande normaalVloer duwen — alleen geleidelijk
+                // ertussenin optillen naarmate de drempel dichterbij komt. Raakt niet de
+                // bgStijgtNogFors-tak zelf (die blijft ongewijzigd) en niet de
+                // COMMIT_URGENCY-lerp verderop (die reageert op deltaToTarget, dit op
+                // dezelfde signaalkwaliteit als bgStijgtNogFors zelf: slope, geen
+                // (bijna-)omslag).
                 val decayFloorBaseRaw = if (bgStijgtNogFors) {
                     // Stijgende BG ver boven target: hogere vloer
                     // iobRatio=0.55 → 0.225, iobRatio=0.65 → 0.175, nooit onder 0.18
-                    (0.45 * (1.0 - ctx.iobRatio * 1.0)).coerceIn(0.18, 0.40)
+                    forsVloer
+                } else if (bgStijgtNogForsNaderend > 0.001) {
+                    lerp(normaalVloer, forsVloer, bgStijgtNogForsNaderend)
                 } else {
                     // Normaal: IOB-afhankelijke vloer
-                    (0.35 * (1.0 - ctx.iobRatio * 1.2)).coerceIn(0.10, 0.35)
+                    normaalVloer
                 }
                 // 15/08/2026 — zie kdoc bij commitUrgency() hierboven. Bewust
                 // ADDITIEF op de bestaande bgStijgtNogFors-vloer (die blijft
@@ -8028,9 +8206,41 @@ class FCLvNext(
                 // veilige deelverzameling bleek steeds lateDecayMul alléén te zijn, bij
                 // lage IOB — vandaar een smalle, specifieke tweede bodem op lateDecayMul
                 // zelf (LATE_DECAY_SECONDARY_FLOOR), niet op deze hele vermenigvuldiging.
+                // ── EXPLOSIEVE STIJGING — zie kdoc bij EXPLOSIVE_RISE_LOWER ──
+                // Vloeiende (kwadratische) boost tussen EXPLOSIVE_RISE_LOWER en
+                // EXPLOSIVE_RISE_UPPER mmol/5min, alleen tijdens een bevestigde
+                // maaltijd, bij voldoende betrouwbaar signaal, niet te hoge IOB,
+                // een ruime hypoNoInsulinProjection (dezelfde poort als de
+                // bestaande strongRisingWithIob-bypass), en maximaal
+                // EXPLOSIVE_RISE_MAX_CYCLES opeenvolgende cycli per episode.
+                val explosiveRiseGuardOk =
+                    mealSignal.state == MealState.CONFIRMED &&
+                        ctx.consistency >= config.minConsistency &&
+                        ctx.iobRatio < EXPLOSIVE_RISE_MAX_IOB_RATIO &&
+                        hypoNoInsulinProjection >= EXPLOSIVE_RISE_PROJ_MIN_GATE &&
+                        explosiveRiseBoostCycles < EXPLOSIVE_RISE_MAX_CYCLES
+                val explosiveRiseFrac =
+                    if (explosiveRiseGuardOk) {
+                        val raw = ((ctx.recentDelta5m - EXPLOSIVE_RISE_LOWER) /
+                            (EXPLOSIVE_RISE_UPPER - EXPLOSIVE_RISE_LOWER)).coerceIn(0.0, 1.0)
+                        Math.pow(raw, EXPLOSIVE_RISE_POWER)
+                    } else 0.0
+                val explosiveRiseMul = 1.0 + explosiveRiseFrac * EXPLOSIVE_RISE_MAX_EXTRA
+                if (explosiveRiseFrac > 0.0) {
+                    explosiveRiseBoostCycles++
+                    status.append(
+                        "EXPLOSIEVE STIJGING: delta5m=${"%.2f".format(ctx.recentDelta5m)} " +
+                            "frac=${"%.2f".format(explosiveRiseFrac)} mul=${"%.2f".format(explosiveRiseMul)} " +
+                            "(cyclus ${explosiveRiseBoostCycles}/${EXPLOSIVE_RISE_MAX_CYCLES})\n"
+                    )
+                }
+                explosiveRiseFracThisCycle = explosiveRiseFrac
+                explosiveRiseMulThisCycle = explosiveRiseMul
+                explosiveRiseActiveThisCycle = explosiveRiseFrac > 0.0
+
                 val commitDose =
                     if (allowCommitBoost && commitAccessOk)
-                        (config.maxSMB * fraction * commitIobFactor * prePeakMul * postPeak.commitFactor * rawPlateauPenalty * commitAggressionMul * lateDecayMul)
+                        (config.maxSMB * fraction * commitIobFactor * prePeakMul * postPeak.commitFactor * rawPlateauPenalty * commitAggressionMul * lateDecayMul * explosiveRiseMul)
                             .coerceAtMost(config.maxSMB)
                     else 0.0
                 logRow.commitDoseRaw = commitDose
@@ -8708,17 +8918,36 @@ class FCLvNext(
         }
 
         // ── Auto-disarm (zie kdoc bij POST_HYPO_BRAKE_DISARM_ABOVE_TARGET/
-        // POST_HYPO_BRAKE_MIN_ARMED_MIN hierboven) ─────────────────────────
+        // POST_HYPO_BRAKE_MIN_ARMED_MIN/POST_HYPO_BRAKE_FLAT_DISARM_MIN_BG
+        // hierboven) ─────────────────────────────────────────────────────
         // Bewust VOOR de RATCHET hieronder: als hier disarmed wordt, telt
         // dit cyclus meteen als normaal (geen clamping meer dit cyclus),
         // i.p.v. pas de volgende cyclus.
+        //
+        // Twee onafhankelijke ontgrendel-paden (06/09/2026, de gebruiker —
+        // zie kdoc bij POST_HYPO_BRAKE_FLAT_DISARM_MIN_BG voor de aanleiding
+        // en backtest): het oorspronkelijke pad (ruim boven target) blijft
+        // ongewijzigd; het nieuwe pad vangt de vlakke/stijgende gevallen die
+        // de target+3-eis anders nooit haalt.
+        val disarmAboveTarget =
+            ctx.input.bgNow >= ctx.input.targetBG + POST_HYPO_BRAKE_DISARM_ABOVE_TARGET
+        val disarmFlatOrRising =
+            ctx.input.bgNow >= POST_HYPO_BRAKE_FLAT_DISARM_MIN_BG &&
+                ctx.input.bgNow >= postHypoBrakeBg - POST_HYPO_BRAKE_FLAT_DISARM_TOLERANCE
         if (postHypoBrakeActive && !logRow.hypoActive &&
             minutesSince(postHypoBrakeArmedAt, now) >= POST_HYPO_BRAKE_MIN_ARMED_MIN &&
-            ctx.input.bgNow >= ctx.input.targetBG + POST_HYPO_BRAKE_DISARM_ABOVE_TARGET
+            (disarmAboveTarget || disarmFlatOrRising)
         ) {
+            val disarmReason =
+                if (disarmAboveTarget)
+                    "bgNow=${"%.1f".format(ctx.input.bgNow)} (target+" +
+                        "${"%.1f".format(POST_HYPO_BRAKE_DISARM_ABOVE_TARGET)} of hoger)"
+                else
+                    "bgNow=${"%.1f".format(ctx.input.bgNow)} vlak/stijgend t.o.v. " +
+                        "aanslag-BG=${"%.1f".format(postHypoBrakeBg)} " +
+                        "(>=${"%.1f".format(POST_HYPO_BRAKE_FLAT_DISARM_MIN_BG)}, niet gedaald)"
             status.append(
-                "POST-HYPO BRAKE AUTO-DISARM: bgNow=${"%.1f".format(ctx.input.bgNow)} " +
-                    "(target+${"%.1f".format(POST_HYPO_BRAKE_DISARM_ABOVE_TARGET)} of hoger), " +
+                "POST-HYPO BRAKE AUTO-DISARM: $disarmReason, " +
                     "${minutesSince(postHypoBrakeArmedAt, now)}m gewapend, geen actieve hypo-projectie " +
                     "dit cyclus → rem los, episodeHypoDebtU gewist\n"
             )
@@ -8779,6 +9008,18 @@ class FCLvNext(
         cycleLogRepository.logPostHypoBrake(
             active = postHypoBrakeActive,
             armedMinutes = if (postHypoBrakeActive) minutesSince(postHypoBrakeArmedAt, now) else -1,
+            timestampMs = now.millis
+        )
+
+        // Diagnostiek (3-4/9/2026): eindstand van de EXPLOSIVE_RISE-boost deze
+        // cyclus, zelfde eigen-tabel-patroon als post_hypo_brake_log hierboven
+        // (zie kdoc bij ExplosiveRiseLogEntity) — projectedMinNoInsulinThisCycle
+        // wordt altijd gelogd, ook als de boost zelf niet actief was.
+        cycleLogRepository.logExplosiveRise(
+            frac = explosiveRiseFracThisCycle,
+            mul = explosiveRiseMulThisCycle,
+            active = explosiveRiseActiveThisCycle,
+            projectedMinNoInsulin = projectedMinNoInsulinThisCycle,
             timestampMs = now.millis
         )
 

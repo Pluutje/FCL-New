@@ -355,6 +355,16 @@ class DetermineBasalFCL @Inject constructor(
     ): RT {
         consoleError.clear()
         consoleLog.clear()
+
+        // ── Update-checker (06/09/2026, de gebruiker) ──────────────────────
+        // Bovenaan, vóór alle vroege returns hieronder (stale/ruizige CGM-data
+        // etc.), zodat de 12u-check elke cyclus een kans krijgt, ongeacht hoe
+        // deze cyclus verder afloopt. FclUpdateScheduler.runIfDue() keert zelf
+        // direct terug (leest alleen SharedPreferences) als het interval nog
+        // niet verstreken is, en start de eigenlijke Drive-aanroep op zijn
+        // eigen achtergrond-executor — nooit op deze (APS-doserings-)thread.
+        app.aaps.plugins.aps.openAPSFCL.update.FclUpdateScheduler.runIfDue(context)
+
         var rT = RT(
             algorithm = APSResult.Algorithm.FCL,
             runningDynamicIsf = false,
