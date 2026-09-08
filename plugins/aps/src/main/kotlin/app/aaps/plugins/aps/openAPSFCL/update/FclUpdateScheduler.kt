@@ -41,6 +41,7 @@ object FclUpdateScheduler {
             try {
                 val result = FclUpdateChecker.checkForUpdate()
                 FclUpdatePrefs.saveResult(context, result)
+                notifyResult(context, result)
             } finally {
                 running.set(false)
             }
@@ -58,10 +59,34 @@ object FclUpdateScheduler {
             try {
                 val result = FclUpdateChecker.checkForUpdate()
                 FclUpdatePrefs.saveResult(context, result)
+                notifyResult(context, result)
                 mainHandler.post { onDone(result) }
             } finally {
                 running.set(false)
             }
+        }
+    }
+
+    /** Toont de update-melding bij UpdateAvailable, haalt 'm weg bij UpToDate
+     *  (08/09/2026, de gebruiker — zie FclUpdateNotificationHelper.kt). Zo
+     *  verdwijnt een eerder getoonde melding vanzelf zodra een latere check
+     *  UpToDate oplevert (bijv. na handmatig installeren).
+     *
+     *  Bij Error/NotConfigured bewust NIETS doen: FclUpdatePrefs.saveResult()
+     *  laat een eerder gevonden UpdateAvailable bij een Error onaangeroerd
+     *  staan (alleen lastError wordt bijgewerkt), dus een tijdelijke
+     *  netwerkfout mag een al getoonde, nog steeds geldige update-melding
+     *  niet laten verdwijnen. */
+    private fun notifyResult(context: Context, result: FclUpdateChecker.Result) {
+        when (result) {
+            is FclUpdateChecker.Result.UpdateAvailable ->
+                FclUpdateNotificationHelper.showUpdateAvailable(context, result.versionCode)
+
+            is FclUpdateChecker.Result.UpToDate ->
+                FclUpdateNotificationHelper.dismissUpdateNotice(context)
+
+            is FclUpdateChecker.Result.Error,
+            FclUpdateChecker.Result.NotConfigured -> Unit
         }
     }
 }

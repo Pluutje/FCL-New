@@ -36,7 +36,8 @@ import kotlin.math.sign
  *
  * Twee verschillen met de nacht-basaal-variant:
  *  A. De bron van de suggesties is hier IsfLearner (deterministisch, uit
- *     PersistentCorrectionController-fires — zie kdoc daar) i.p.v. een
+ *     geïsoleerde correctie-"bouts" in de gewone cyclus-log — bron verbreed
+ *     07/09/2026, zie de uitgebreide kdoc in IsfLearner.kt) i.p.v. een
  *     AI-adviseur. Confidence komt dus van IsfLearner.HourSuggestion, niet
  *     van een taalmodel. Een latere AI-verrijking kan zonder structuur-
  *     wijziging naast of bovenop deze suggesties landen (zelfde
@@ -377,11 +378,12 @@ object FclIsfAutoAdjuster {
         }
 
         // ── IsfLearner-suggesties ophalen ──
-        val persistEvents = app.aaps.plugins.aps.openAPSFCL.vnext.persist.FCLPersistDatabase.getInstance(context)
-            .persistEventDao().getSince(now - IsfLearner.LOOKBACK_DAYS.toLong() * 24 * 60 * 60 * 1000L)
+        // 07/09/2026 — geen aparte persistEvents-fetch meer: de bron is
+        // verbreed naar elke geïsoleerde correctie-bout uit de gewone
+        // cyclus-log (zie kdoc bovenaan IsfLearner.kt), die repository al
+        // intern inleest.
         val (suggestions, hourProgress) = IsfLearner.computeSuggestionsWithProgress(
             repository = cycleLogRepository,
-            persistEvents = persistEvents,
             currentIsfMgdlByHour = currentHourly,
             nowMs = now
         )

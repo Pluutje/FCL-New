@@ -150,6 +150,14 @@ enum class NotificationId(
     // vereist op korte termijn.
     FCL_AI_ADVISOR_READY(INFO, FCL),
 
+    // FCLvNext (08/09/2026, de gebruiker) — er staat een nieuwe FCLvNext-versie
+    // klaar in de update-map. Eigen entry i.p.v. FCL_AI_ADVISOR_READY hergebruiken
+    // (zoals FclLearnerNotificationHelper wel doet): een update-melding en een
+    // AI-advies-melding kunnen tegelijk relevant zijn en moeten onafhankelijk van
+    // elkaar kunnen staan/verdwijnen. Niveau INFO — zelfde reden als hierboven,
+    // gewoon informatief, geen dringende actie.
+    FCL_UPDATE_AVAILABLE(INFO, FCL),
+
     // Sync — Nightscout
     OLD_NS(IMPORTANT, SYNC),
     NSCLIENT_NO_WRITE_PERMISSION(NORMAL, SYNC),

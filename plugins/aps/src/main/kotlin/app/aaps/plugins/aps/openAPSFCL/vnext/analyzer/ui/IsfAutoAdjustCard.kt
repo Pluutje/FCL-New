@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import app.aaps.plugins.aps.openAPSFCL.vnext.BgUnits
 import app.aaps.plugins.aps.openAPSFCL.vnext.FclSystemMode
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 
 // ── IsfAutoAdjustCard (16/08/2026) ──────────────────────────────────────────
 // UI-tegenhanger van ProfileAutoAdjustCard (Advisorscreen.kt), nu voor de
@@ -430,6 +431,18 @@ fun IsfAutoAdjustCard(context: android.content.Context) {
 private fun mgdlPerUToDisplay(mgdlPerU: Double, mgdl: Boolean): Double =
     if (mgdl) mgdlPerU else mgdlPerU / 18.0182
 
+/**
+ * Buuruur-onzekerheid (07/09/2026, op verzoek) — als twee ECHT gemeten
+ * (niet-afgeleide) aangrenzende uren tegenstrijdig sterk uiteenlopen (bijv.
+ * 22:00 -10% en 23:00 +10%), is dat vaker een teken van een ruizige/kleine
+ * steekproef dan van een echt, plotseling uurverschil in ISF-behoefte — de
+ * bestaande pooling (WINDOW_RADIUS_HOURS in IsfLearner) overlapt de
+ * metingen van buururen al voor 80%, dus een tegengesteld teken ondanks die
+ * overlap is een sterk signaal. Puur een WEERGAVE-waarschuwing (geen extra
+ * blokkade van AUTO/MANUAL) — zie kdoc bij IsfAutoAdjustTable hieronder.
+ */
+private const val NEIGHBOR_DISAGREEMENT_THRESHOLD_PCT = 8.0
+
 @Composable
 private fun IsfAutoAdjustTable(
     oldHourly: Map<Int, Double>,
@@ -442,6 +455,16 @@ private fun IsfAutoAdjustTable(
     mgdl: Boolean
 ) {
     val unit = BgUnits.unitShort(mgdl)
+    // 07/09/2026 — welke uren wijken sterk af van een ECHT gemeten buuruur
+    // (zie kdoc bij NEIGHBOR_DISAGREEMENT_THRESHOLD_PCT hierboven)? Vooraf
+    // berekend (i.p.v. per rij opnieuw), puur voor de status-suffix en de
+    // toelichting onderaan de tabel.
+    val neighborDisagreementHours: Set<Int> = touchedHours.filter { hour ->
+        listOf((hour + 23) % 24, (hour + 1) % 24).any { nb ->
+            nb in touchedHours &&
+                abs((shiftByHour[hour] ?: 0.0) - (shiftByHour[nb] ?: 0.0)) >= NEIGHBOR_DISAGREEMENT_THRESHOLD_PCT
+        }
+    }.toSet()
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
             Text("Uur", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, modifier = Modifier.weight(0.8f))
@@ -475,7 +498,7 @@ private fun IsfAutoAdjustTable(
             // drift-cap sowieso nooit geraakt, maar de volgorde maakt de
             // bedoeling expliciet.
             val isAlreadyOptimal = hasDirectData && !isInterpolated &&
-                kotlin.math.abs(shiftPct) < app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.IsfLearner.ALREADY_OPTIMAL_THRESHOLD_PCT
+                abs(shiftPct) < app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.IsfLearner.ALREADY_OPTIMAL_THRESHOLD_PCT
             // 31/08/2026, op verzoek — "geen data" toont er nu een voortgangs-
             // indicatie bij (gewogen telling / drempel), zie kdoc bij
             // IsfLearner.HourProgress: zonder dit was "geen data" een
@@ -485,13 +508,20 @@ private fun IsfAutoAdjustTable(
                 " (${"%.1f".format(prog.weightedCount)}/" +
                     "${app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.IsfLearner.MIN_SAMPLES_PER_HOUR})"
             } ?: ""
-            val status = when {
-                isInterpolated -> "afgeleid" + (if (atCap) " (tegen grens)" else "")
-                !hasDirectData -> "geen data" + progressSuffix
-                isAlreadyOptimal -> "al optimaal"
-                atCap -> "tegen grens" + (if (hitCount > 0) " (${hitCount}d)" else "")
-                else -> "voorstel"
-            }
+            // 07/09/2026 — zie kdoc bij NEIGHBOR_DISAGREEMENT_THRESHOLD_PCT
+            // hierboven: alleen relevant voor uren met een ECHTE meting,
+            // "afgeleide" uren zijn zelf al een gedempte schatting op basis
+            // van hun buren en kunnen dus niet "van zichzelf" afwijken.
+            val hasDisagreement = hasDirectData && !isInterpolated && hour in neighborDisagreementHours
+            val status = (
+                when {
+                    isInterpolated -> "afgeleid" + (if (atCap) " (tegen grens)" else "")
+                    !hasDirectData -> "geen data" + progressSuffix
+                    isAlreadyOptimal -> "al optimaal"
+                    atCap -> "tegen grens" + (if (hitCount > 0) " (${hitCount}d)" else "")
+                    else -> "voorstel"
+                }
+            ) + (if (hasDisagreement) " ⚠️" else "")
             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
                 Text("%02d:00".format(hour), style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(0.8f))
                 Text(
@@ -505,10 +535,29 @@ private fun IsfAutoAdjustTable(
                 Text(
                     status,
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (isInterpolated) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+                    color = when {
+                        hasDisagreement -> MaterialTheme.colorScheme.error
+                        isInterpolated -> MaterialTheme.colorScheme.onSurfaceVariant
+                        else -> MaterialTheme.colorScheme.onSurface
+                    },
                     modifier = Modifier.weight(1f)
                 )
             }
+        }
+        // 07/09/2026, op verzoek — expliciete toelichting zodra minstens één
+        // uur tegen een echt gemeten buuruur in gaat (zie kdoc bij
+        // NEIGHBOR_DISAGREEMENT_THRESHOLD_PCT hierboven): het ⚠️-teken alleen
+        // is zonder uitleg niet vanzelfsprekend.
+        if (neighborDisagreementHours.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "⚠️ Uren met dit teken wijken sterk af van een aangrenzend, ECHT gemeten uur " +
+                    "(bijv. het ene uur duidelijk omlaag, het andere duidelijk omhoog). Dat wijst " +
+                    "eerder op een kleine, ruizige steekproef dan op een echt uurverschil — extra " +
+                    "voorzichtig mee zijn, ook al haalt het uur zelf de gewone drempel.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
         }
     }
 }

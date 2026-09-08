@@ -60,4 +60,22 @@ interface LoopHub {
         avgHeartRate: Int,
         device: String?
     )
+
+    /**
+     * Stores step counts for the given sampling interval, in the same rolling
+     * 5/10/15/30/60/180-minute buckets as the Wear OS path already uses
+     * (08/09/2026, de gebruiker — overgezet uit OpenApsAIMI's GarminPlugin.kt,
+     * zodat een Garmin-horloge dat stappen meestuurt dezelfde AIGF-berekening
+     * kan voeden als het bestaande Wear OS-pad, zonder dat pad zelf te raken).
+     */
+    fun storeStepsCount(
+        samplingStart: Instant, samplingEnd: Instant,
+        steps5min: Int,
+        steps10min: Int,
+        steps15min: Int,
+        steps30min: Int,
+        steps60min: Int,
+        steps180min: Int,
+        device: String?
+    )
 }

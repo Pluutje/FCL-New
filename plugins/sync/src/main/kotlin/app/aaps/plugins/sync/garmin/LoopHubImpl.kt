@@ -5,6 +5,7 @@ import app.aaps.core.data.model.GV
 import app.aaps.core.data.model.GlucoseUnit
 import app.aaps.core.data.model.HR
 import app.aaps.core.data.model.RM
+import app.aaps.core.data.model.SC
 import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
 import app.aaps.core.data.ue.ValueWithUnit
@@ -171,6 +172,38 @@ class LoopHubImpl @Inject constructor(
         )
         appScope.launch {
             persistenceLayer.insertOrUpdateHeartRates(listOf(hr))
+        }
+    }
+
+    /** Stores step counts for the given sampling interval (08/09/2026, de gebruiker —
+     *  overgezet uit OpenApsAIMI, zie kdoc bij LoopHub.storeStepsCount). Gebruikt bewust
+     *  de al bestaande, meervoudige insertOrUpdateStepsCounts(List) i.p.v. een nieuwe
+     *  PersistenceLayer-methode toe te voegen — precies dezelfde ingang die het
+     *  Wear OS-pad ook al gebruikt. */
+    override fun storeStepsCount(
+        samplingStart: Instant, samplingEnd: Instant,
+        steps5min: Int,
+        steps10min: Int,
+        steps15min: Int,
+        steps30min: Int,
+        steps60min: Int,
+        steps180min: Int,
+        device: String?
+    ) {
+        val sc = SC(
+            timestamp = samplingEnd.toEpochMilli(),
+            duration = samplingEnd.toEpochMilli() - samplingStart.toEpochMilli(),
+            dateCreated = clock.millis(),
+            steps5min = steps5min,
+            steps10min = steps10min,
+            steps15min = steps15min,
+            steps30min = steps30min,
+            steps60min = steps60min,
+            steps180min = steps180min,
+            device = device ?: "Garmin",
+        )
+        appScope.launch {
+            persistenceLayer.insertOrUpdateStepsCounts(listOf(sc))
         }
     }
 }

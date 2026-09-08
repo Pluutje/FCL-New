@@ -82,6 +82,7 @@ import app.aaps.core.interfaces.logging.LTag
 import app.aaps.core.interfaces.maintenance.FileListProvider
 import app.aaps.core.interfaces.navigation.ElementType
 import app.aaps.core.interfaces.notifications.NotificationId
+import app.aaps.plugins.aps.openAPSFCL.update.FclUpdateNotificationHelper
 import app.aaps.core.interfaces.notifications.NotificationLevel
 import app.aaps.core.interfaces.notifications.NotificationManager
 import app.aaps.core.interfaces.overview.graph.OverviewDataCache
@@ -965,6 +966,23 @@ class ComposeMainActivity : AppCompatActivity() {
                 val fclPlugin = activePlugin.getPluginsList()
                     .find { it.javaClass.simpleName == "OpenAPSFCLPlugin" }
                 if (fclPlugin != null) handlePluginClick(fclPlugin)
+            }
+
+            // 08/09/2026 (de gebruiker): tik op de FCLvNext update-melding →
+            // zelfde route als hierboven; FclUpdateNotificationHelper zet de
+            // navigatievlag die FCLComposeContent.kt bij het openen leest om
+            // meteen op het Settings-tabblad met opengeklapte Updates-sectie
+            // te starten i.p.v. het dashboard.
+            NotificationId.FCL_UPDATE_AVAILABLE    -> {
+                val fclPlugin = activePlugin.getPluginsList()
+                    .find { it.javaClass.simpleName == "OpenAPSFCLPlugin" }
+                if (fclPlugin != null) {
+                    // Vlag zetten vóórdat het scherm opent — FCLComposeContent.kt
+                    // leest 'm bij het opbouwen van de compositie om meteen op het
+                    // Settings-tabblad met opengeklapte Updates-sectie te starten.
+                    FclUpdateNotificationHelper.requestNavigate()
+                    handlePluginClick(fclPlugin)
+                }
             }
 
             else                                   -> Unit

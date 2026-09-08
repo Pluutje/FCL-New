@@ -32,6 +32,7 @@ import app.aaps.plugins.aps.openAPSFCL.vnext.lang.FclStrings
 import app.aaps.plugins.aps.openAPSFCL.update.FclCsvUploader
 import app.aaps.plugins.aps.openAPSFCL.update.FclUpdateChecker
 import app.aaps.plugins.aps.openAPSFCL.update.FclUpdateInstaller
+import app.aaps.plugins.aps.openAPSFCL.update.FclUpdateNotificationHelper
 import app.aaps.plugins.aps.openAPSFCL.update.FclUpdatePrefs
 import app.aaps.plugins.aps.openAPSFCL.update.FclUpdateScheduler
 import app.aaps.plugins.aps.openAPSFCL.update.FclWhatsNewChecker
@@ -40,7 +41,15 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @Composable
-fun FCLSettingsScreen(preferences: Preferences, sp: SP) {
+fun FCLSettingsScreen(
+    preferences: Preferences,
+    sp: SP,
+    // 08/09/2026 (de gebruiker) — true als dit scherm net geopend is via een
+    // tik op de update-melding (zie FclUpdateNotificationHelper.kt); klapt de
+    // Updates-sectie hieronder direct open i.p.v. dat de gebruiker 'm zelf
+    // moet vinden en aantikken.
+    startExpandedOnUpdates: Boolean = false
+) {
 
     // Link naar het externe FCLvNext-handboek (Google Doc) — los bestand,
     // zodat het bijwerken van de uitleg geen nieuwe app-build vereist.
@@ -806,7 +815,7 @@ fun FCLSettingsScreen(preferences: Preferences, sp: SP) {
             // (nu bevroren) Android-versionCode, zie kdoc bij die constante
             // in FCLvNextStatusFormatter.kt en bij Versions.versionCode.
             val currentVersionCode = FCL_STATUS_VERSION
-            var expandedUpdates by remember { mutableStateOf(false) }
+            var expandedUpdates by remember { mutableStateOf(startExpandedOnUpdates) }
             var updateChecking by remember { mutableStateOf(false) }
             var updateInstalling by remember { mutableStateOf(false) }
             var availableUpdate by remember { mutableStateOf(FclUpdatePrefs.availableUpdate(ctx)) }
@@ -851,6 +860,14 @@ fun FCLSettingsScreen(preferences: Preferences, sp: SP) {
                 // aanroep als er toevalligerwijs al een controle loopt
                 // (bijv. de periodieke achtergrond-check).
                 LaunchedEffect(Unit) {
+                    // 08/09/2026 (de gebruiker) — de gebruiker heeft de Updates-
+                    // sectie nu daadwerkelijk gezien (open­geklapt, hetzij
+                    // handmatig hetzij via de update-melding), dus de eerder
+                    // getoonde melding kan weg. Als checkNow hieronder een
+                    // nieuwere versie vindt (bijv. omdat er ná de vorige check
+                    // alweer een build is geüpload) verschijnt de melding vanzelf
+                    // opnieuw via FclUpdateScheduler.notifyResult().
+                    FclUpdateNotificationHelper.dismissUpdateNotice(ctx)
                     if (!updateChecking) {
                         updateChecking = true
                         FclUpdateScheduler.checkNow(ctx) { result ->
@@ -963,7 +980,23 @@ fun FCLSettingsScreen(preferences: Preferences, sp: SP) {
                 AlertDialog(
                     onDismissRequest = { whatsNewDialogText = null },
                     title = { Text("Wat is nieuw") },
-                    text = { Text(whatsNewDialogText ?: "") },
+                    // 07/09/2026 (de gebruiker) — was een kale Text() zonder
+                    // scroll-mogelijkheid: bij één langere versietekst (of,
+                    // erger, meerdere versies achter elkaar via
+                    // FclWhatsNewChecker.fetchSince() als er een tijdje niet
+                    // is bijgewerkt) viel de tekst gewoon van het scherm af,
+                    // onleesbaar. Zelfde patroon als de "Versie wijzigen"-
+                    // dialoog hieronder: een hoogte-begrensde, scrollbare
+                    // Column.
+                    text = {
+                        Column(
+                            modifier = Modifier
+                                .heightIn(max = 400.dp)
+                                .verticalScroll(rememberScrollState())
+                        ) {
+                            Text(whatsNewDialogText ?: "")
+                        }
+                    },
                     confirmButton = {
                         TextButton(onClick = { whatsNewDialogText = null }) { Text(s.close) }
                     }

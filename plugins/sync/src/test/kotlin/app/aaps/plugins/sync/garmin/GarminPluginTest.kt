@@ -5,6 +5,7 @@ import app.aaps.core.data.model.GlucoseUnit
 import app.aaps.core.data.model.SourceSensor
 import app.aaps.core.data.model.TrendArrow
 import app.aaps.core.interfaces.db.PersistenceLayer
+import app.aaps.core.interfaces.sharedPreferences.SP
 import app.aaps.core.keys.BooleanNonKey
 import app.aaps.core.keys.IntNonKey
 import app.aaps.core.keys.StringNonKey
@@ -50,17 +51,24 @@ class GarminPluginTest : TestBaseWithProfile() {
 
     @Mock private lateinit var loopHub: LoopHub
     @Mock private lateinit var persistenceLayer: PersistenceLayer
+
+    // 08/09/2026, de gebruiker: nieuw i.v.m. de overgezette Garmin-stappenondersteuning
+    // (ingestHttpTotalSteps gebruikt sp om de laatst bekende totaalstand te onthouden).
+    // -1 als default zodat de "eerste keer" (baseline)-tak hetzelfde gedrag krijgt als
+    // een echte, nog-nooit-gebruikte SharedPreferences-key.
+    @Mock private lateinit var sp: SP
     private val clock = Clock.fixed(Instant.ofEpochMilli(10_000), ZoneId.of("UTC"))
 
     @BeforeEach
     fun setup() {
-        gp = GarminPlugin(aapsLogger, rh, preferences, context, loopHub, persistenceLayer)
+        gp = GarminPlugin(aapsLogger, rh, preferences, sp, context, loopHub, persistenceLayer)
         gp.clock = clock
         whenever(loopHub.currentProfileName).thenReturn("Default")
         whenever(preferences.get(GarminIntKey.LocalHttpPort)).thenReturn(28890)
         whenever(preferences.get(any<IntNonKey>())).thenAnswer { i -> 0 }
         whenever(preferences.get(any<BooleanNonKey>())).thenAnswer { i -> false }
         whenever(preferences.get(any<StringNonKey>())).thenAnswer { i -> "" }
+        whenever(sp.getInt(any<String>(), any<Int>())).thenReturn(-1)
     }
 
     @AfterEach

@@ -1,71 +1,118 @@
 package app.aaps.plugins.aps.openAPSFCL.vnext.analyzer
 
+import app.aaps.plugins.aps.openAPSFCL.vnext.database.FCLCycleLogEntity
 import app.aaps.plugins.aps.openAPSFCL.vnext.database.FCLCycleLogRepository
-import app.aaps.plugins.aps.openAPSFCL.vnext.persist.FCLPersistEventEntity
 import org.joda.time.DateTime
 import org.joda.time.DateTimeZone
 import kotlin.math.abs
 
 /**
- * IsfLearner (16/08/2026) — berekent per uur-van-de-dag (0-23, zelfde
- * blokgrootte als een AAPS-ISF-profiel) een voorgestelde %-verschuiving op
- * de profiel-ISF, puur datagedreven uit de eigen cyclus-historie. Geen AI:
- * dit is bewust de "NachtLearner-achtige" deterministische eerste stap —
- * FclIsfAutoAdjuster consumeert het resultaat in exact dezelfde vorm
- * (uur, %-shift, confidence) als FclNightBasalAutoAdjuster van de AI-
- * adviseur verwacht, zodat een latere AI-verrijking (zoals bij de nacht-
- * basaal) er zonder structuurwijziging naast of bovenop kan.
+ * IsfLearner (16/08/2026, bron verbreed 07/09/2026) — berekent per
+ * uur-van-de-dag (0-23, zelfde blokgrootte als een AAPS-ISF-profiel) een
+ * voorgestelde %-verschuiving op de profiel-ISF, puur datagedreven uit de
+ * eigen cyclus-historie. Geen AI: dit is bewust de "NachtLearner-achtige"
+ * deterministische eerste stap — FclIsfAutoAdjuster consumeert het
+ * resultaat in exact dezelfde vorm (uur, %-shift, confidence) als
+ * FclNightBasalAutoAdjuster van de AI-adviseur verwacht, zodat een latere
+ * AI-verrijking (zoals bij de nacht-basaal) er zonder structuurwijziging
+ * naast of bovenop kan.
  *
- * ── Waarom PersistentCorrectionController-fires, niet maaltijd-episodes ──
+ * ── Waarom geïsoleerde correctie-"bouts", niet maaltijd-episodes ─────────
  * EpisodeMetrics (de bron van DFLearner) mengt insuline- én koolhydraat-
  * effect door elkaar: tijdens een maaltijd daalt/stijgt BG door BEIDE
- * tegelijk, dus je kunt er geen betrouwbare ISF uit terugrekenen.
- * BELANGRIJKE CORRECTIE (16/08/2026, n.a.v. een terechte controlevraag):
- * een PersistentCorrectionController-fire is GEEN garantie op een maaltijd-
- * vrij moment. tickAndMaybeFire() wordt elke cyclus onvoorwaardelijk
- * aangeroepen (FCLvNext.kt, "PERSISTENT CORRECTION LOOP"), zonder enige
- * check op een actieve maaltijd-episode — hij vuurt puur op BG-kinetiek
- * (delta/slope/acceleratie/consistentie). Als BG tijdens een technisch nog
- * actieve episode toch even afvlakt (plateau), kan de controller daar
- * gewoon vuren, terwijl de koolhydraten van die maaltijd de BG-respons
- * erna nog beïnvloeden. Dat maakt zo'n fire ONGESCHIKT als "zuivere"
- * ISF-meting. evaluateFire() hieronder controleert dit daarom expliciet en
- * apart, via de bestaande mealEpisode-velden in FCLCycleLogEntity
- * (mealEpisodeId/minutesSinceMealStart, -1 = geen actieve episode):
- *   (a) op het fire-moment zelf mag er geen actieve episode lopen — TENZIJ
- *       die episode al minstens LATE_EPISODE_MIN_MINUTES loopt (verruimd
- *       18/08/2026, zie kdoc daar: zonder deze uitzondering overleefde in
- *       de praktijk vrijwel geen enkele fire deze check, want "persistent
- *       hoog en stabiel" is bijna per definitie ook "nog in de staart van
- *       een maaltijd"), EN
- *   (b) gedurende het hele antwoordvenster ná de fire (RESPONSE_WINDOW_
- *       MINUTES) mag geen ANDERE, nieuwe episode starten dan die van (a) —
- *       anders wordt de gemeten BG-daling mede door koolhydraten van die
- *       nieuwe maaltijd veroorzaakt, niet alleen door de dosis.
- * Kan het fire-moment niet met voldoende zekerheid worden gekoppeld aan een
- * cyclus-rij (geen rij dicht genoeg bij het fire-tijdstip), dan wordt de
- * meting ook verworpen — bij twijfel niet meetellen, in plaats van een
- * ongecontroleerd risico op een besmette meting te nemen.
+ * tegelijk, dus je kunt er geen betrouwbare ISF uit terugrekenen. Dat
+ * argument staat nog steeds; alleen de BRON van de te meten dosis-momenten
+ * is op 07/09/2026 verbreed — zie hieronder.
  *
- * ── Methode per fire ─────────────────────────────────────────────────────
- *  1. BG vlak vóór de fire (al in FCLPersistEventEntity.bgMmol).
- *  2. BG rond RESPONSE_WINDOW_MINUTES ná de fire — opgezocht in de
- *     hoofd-cyclus-log (FCLCycleLogRepository), niet in fcl_persist_event
- *     zelf: een persist-cluster kan intussen allang zijn afgelopen
- *     (persistentie is niet vereist om de BG-respons te meten), dus de
- *     volledige cyclus-log dekt dat venster altijd, ongeacht clusterduur.
- *  3. "Schoon"-check: de som van alle commandedDose in het venster ná de
- *     fire (exclusief de fire's eigen dosis) mag niet meer zijn dan
- *     CONTAMINATION_MAX_U — anders heeft een latere, aparte dosis de
- *     BG-daling mede veroorzaakt en is deze meting niet bruikbaar.
- *  4. iobRatio op het moment van de fire mag niet al hoog zijn (te veel
+ * ── Bron verbreed van "alleen PersistentCorrectionController" naar "elke
+ *    geïsoleerde correctie" (07/09/2026, de gebruiker) ────────────────────
+ * AANLEIDING: na ruim een maand productie bleef het aantal bruikbare
+ * metingen per uur vrijwel overal onder MIN_SAMPLES_PER_HOUR — een
+ * CSV-analyse (7 dagen, 2003 cycli) wees twee aparte oorzaken aan:
+ *  1. Schone (maaltijd-vrije) momenten zijn zelf al schaars: buiten de
+ *     avond/nacht was <20% (vaak 0%) van de cycli per uur "schoon" (geen
+ *     actieve episode of episode >=LATE_EPISODE_MIN_MINUTES oud) — geen
+ *     dosis-drempel-probleem, gewoon te weinig maaltijd-vrije tijd in dit
+ *     dagpatroon.
+ *  2. Zelfs bínnen schone momenten was een LOSSE dosis >=MIN_DOSE_U op
+ *     precies één cyclus zeldzaam: PersistentCorrectionController (de
+ *     enige bron tot dan toe) vuurt pas na >=2 bevestigde "persistent
+ *     hoog + stabiel"-cycli en schaalt dan bewust op tot een meetbaar
+ *     dosisje — de gewone hoofd-engine daarentegen corrigeert meestal in
+ *     veel kleinere dosisjes (0,05-0,2U) verspreid over meerdere cycli,
+ *     die individueel allemaal onder MIN_DOSE_U bleven en dus altijd
+ *     werden weggegooid, ook al waren ze samen een prima testdosis.
+ * Optie "een koolhydraat-/absorptiemodel gebruiken om ELKE cyclus te
+ * benutten, ook tijdens maaltijden" (autotune/autosens-stijl) is
+ * expliciet AFGEWEZEN (07/09/2026, de gebruiker): dat vereist een
+ * koolhydraatschatting, en bij gewone (ongewogen) maaltijden is die volgens
+ * de gebruiker niet betrouwbaarder dan ±30% — precies de aanname-vrije
+ * garantie die deze module wil behouden. De oplossing raakt dus niet de
+ * FILTERS (die blijven identiek streng), maar WELKE dosis-momenten als
+ * kandidaat worden aangeboden:
+ *  - Elke aaneengesloten reeks cycli met commandedDose>0 (uit de gewone
+ *    hoofd-cyclus-log, ongeacht welk intern mechanisme de dosis besliste —
+ *    PersistentCorrectionController's dosis loopt net zo goed via
+ *    finalDose→commandedDose, dus die telt hier automatisch ook nog mee,
+ *    zonder een aparte FCLPersistEventEntity-bron nodig te hebben) wordt
+ *    samengevoegd tot één "bout" (zie buildCandidateEvents()/CandidateEvent
+ *    hieronder) — kleine dosisjes vlak na elkaar tellen dus samen als één
+ *    testdosis, precies zoals ze fysiologisch ook als één correctie
+ *    werken.
+ *  - Een bout telt alleen mee als kandidaat als de SOM van de dosis
+ *    >=MIN_DOSE_U is, de iobRatio bij de START van de bout <=
+ *    MAX_IOB_RATIO_AT_FIRE is, en de bout zelf niet langer dan
+ *    BOUT_MAX_DURATION_MINUTES duurt (anders is het geen losse testdosis
+ *    meer, maar een uitgerekte correctie-episode die zijn eigen
+ *    antwoordvenster opeet).
+ * Alle bestaande zuiverheids-filters hieronder (maaltijd-uitsluiting incl.
+ * de late-episode-uitzondering, besmettingscheck, plausibiliteitsgrenzen)
+ * blijven ONGEWIJZIGD van toepassing — alleen op bouts i.p.v. losse fires.
+ * Dit lost knelpunt 2 op (meer bruikbare metingen in de uren die al af en
+ * toe schoon zijn); knelpunt 1 (uren die structureel nooit schoon zijn,
+ * bijv. midden op de dag bij een regelmatig etende gebruiker) lost dit niet
+ * op — dat blijft opgevangen door interpolateGaps() in FclIsfAutoAdjuster,
+ * bewust zichtbaar gelabeld als "afgeleid" i.p.v. een echte meting.
+ *
+ * evaluateCandidate() hieronder controleert de maaltijd-zuiverheid daarom
+ * expliciet en apart, via de bestaande mealEpisode-velden in
+ * FCLCycleLogEntity (mealEpisodeId/minutesSinceMealStart, -1 = geen
+ * actieve episode):
+ *   (a) op het moment dat de bout BEGINT mag er geen actieve episode lopen
+ *       — TENZIJ die episode al minstens LATE_EPISODE_MIN_MINUTES loopt
+ *       (verruimd 18/08/2026, zie kdoc daar: zonder deze uitzondering
+ *       overleefde in de praktijk vrijwel geen enkele fire deze check,
+ *       want "persistent hoog en stabiel" is bijna per definitie ook "nog
+ *       in de staart van een maaltijd"), EN
+ *   (b) gedurende het hele antwoordvenster ná het begin van de bout
+ *       (RESPONSE_WINDOW_MINUTES) mag geen ANDERE, nieuwe episode starten
+ *       dan die van (a) — anders wordt de gemeten BG-daling mede door
+ *       koolhydraten van die nieuwe maaltijd veroorzaakt, niet alleen door
+ *       de dosis.
+ * Kan het beginmoment van de bout niet met voldoende zekerheid worden
+ * gekoppeld aan een cyclus-rij (geen rij dicht genoeg bij dat tijdstip),
+ * dan wordt de meting ook verworpen — bij twijfel niet meetellen, in
+ * plaats van een ongecontroleerd risico op een besmette meting te nemen.
+ *
+ * ── Methode per bout ──────────────────────────────────────────────────────
+ *  1. BG bij de START van de bout (CandidateEvent.bgMmol).
+ *  2. BG rond RESPONSE_WINDOW_MINUTES ná de START van de bout — opgezocht
+ *     in de hoofd-cyclus-log, die het venster altijd dekt ongeacht hoelang
+ *     de bout zelf duurde.
+ *  3. "Schoon"-check: de som van alle commandedDose STRIKT NA het EINDE
+ *     van de bout zelf (dus na de laatste dosis-rij die nog bij deze bout
+ *     hoort — niet na het begin, anders zou de bout zichzelf als
+ *     besmetting tellen) mag niet meer zijn dan CONTAMINATION_MAX_U —
+ *     anders heeft een latere, aparte dosis de BG-daling mede veroorzaakt
+ *     en is deze meting niet bruikbaar.
+ *  4. iobRatio bij de START van de bout mag niet al hoog zijn (te veel
  *     nog-actieve IOB van eerdere doses vertekent hoeveel van de daling aan
- *     ÉÉN dosis is toe te schrijven).
- *  5. impliedIsf = (bgVoor - bgNa) / doseU, alleen gebruikt als doseU groot
- *     genoeg is (ruis bij een piepklein dosisje) en de uitkomst binnen een
- *     fysiologisch plausibele bandbreedte valt (anders weggegooid als
- *     uitschieter, niet geclipt — een geclipte uitschieter zou de mediaan
- *     alsnog vertekenen).
+ *     DEZE bout is toe te schrijven).
+ *  5. impliedIsf = (bgVoor - bgNa) / doseU (doseU = de SOM van de bout),
+ *     alleen gebruikt als doseU groot genoeg is (ruis bij een piepklein
+ *     dosisje) en de uitkomst binnen een fysiologisch plausibele
+ *     bandbreedte valt (anders weggegooid als uitschieter, niet geclipt —
+ *     een geclipte uitschieter zou de mediaan alsnog vertekenen).
  *
  * Per uur: bij minstens MIN_SAMPLES_PER_HOUR bruikbare metingen wordt de
  * MEDIAAN (robuust tegen uitschieters) vergeleken met de huidige profiel-ISF
@@ -92,6 +139,12 @@ object IsfLearner {
     const val MIN_SAMPLES_PER_HOUR = 4
     const val LOOKBACK_DAYS = 14
 
+    // ── Bout-aggregatie (07/09/2026) — zie kdoc bovenaan dit bestand voor de
+    //    volledige aanleiding. Opeenvolgende cycli met commandedDose>0 tellen
+    //    samen als één testdosis i.p.v. losse, vaak te kleine dosisjes.
+    const val BOUT_GAP_TOLERANCE_MINUTES = 12   // ~2 gemiste 5-min-cycli — langere stilte breekt de bout
+    const val BOUT_MAX_DURATION_MINUTES = 30    // langer = geen losse testdosis meer, maar een uitgerekte episode
+
     // ── Glijdend venster i.p.v. per-uur-strikt (30/08/2026) ──────────────
     // AANLEIDING: vergelijking van Ecko's en Gijs' effectieve-ISF-curve (uit de
     // FCLvNext_Log-CSV's, buiten deze code om geanalyseerd) liet bij Gijs een
@@ -99,10 +152,12 @@ object IsfLearner {
     // Ecko's eigen profiel — geen aanwijzing voor een blokvormig verkeerd-
     // getuned profiel. Gesprek daarna: IsfLearner zelf accumuleert in de
     // praktijk zelden ≥MIN_SAMPLES_PER_HOUR schone metingen in exact hetzelfde
-    // uur (PersistentCorrectionController-fires zijn al schaars, en de
-    // meal-/IOB-/plausibiliteits-filters in evaluateFire() dunnen verder uit) —
-    // met 24 losse uur-bakjes duurt het daardoor weken tot een eerste uur ooit
-    // een suggestie geeft, zoals bij Ecko's eigen installatie zichtbaar was.
+    // uur (destijds waren PersistentCorrectionController-fires de enige bron
+    // en al schaars — zie de bron-verbreding van 07/09/2026 bovenaan dit
+    // bestand — en de meal-/IOB-/plausibiliteits-filters in evaluateCandidate()
+    // dunnen verder uit) — met 24 losse uur-bakjes duurt het daardoor weken tot
+    // een eerste uur ooit een suggestie geeft, zoals bij Ecko's eigen
+    // installatie zichtbaar was.
     //
     // OVERWOGEN ALTERNATIEF: 4-6 grote, vaste tijdblokken (bijv. 00-04u,
     // 04-08u, ...). Verworpen op uitdrukkelijk argument van de gebruiker: een
@@ -179,6 +234,22 @@ object IsfLearner {
         val impliedIsf: Double
     )
 
+    /**
+     * Eén kandidaat-testdosis (07/09/2026) — de samengevoegde vorm van een
+     * "bout" (zie buildCandidateEvents() hieronder). Vervangt de oude,
+     * rechtstreekse FCLPersistEventEntity-fire als invoer voor
+     * evaluateCandidate(): PersistentCorrectionController's dosis komt hier
+     * nu automatisch ook in terecht (via commandedDose in de hoofd-cyclus-
+     * log), een aparte bron is niet meer nodig.
+     */
+    private data class CandidateEvent(
+        val timestampMs: Long,       // moment dat de bout BEGON (het "fire"-equivalent)
+        val endTimestampMs: Long,    // moment van de LAATSTE dosis-rij in de bout
+        val doseU: Double,           // som van alle commandedDose in de bout
+        val iobRatio: Double,        // iobRatio bij het BEGIN van de bout
+        val bgMmol: Double           // bg bij het BEGIN van de bout
+    )
+
     /** Eén uur-suggestie, zelfde vorm als een AI-suggestie bij de nacht-basaal
      *  (hourLabel/suggestedShiftPct/confidence) zodat FclIsfAutoAdjuster geen
      *  onderscheid hoeft te maken tussen een deterministische en een
@@ -228,11 +299,10 @@ object IsfLearner {
      */
     suspend fun computeSuggestions(
         repository: FCLCycleLogRepository,
-        persistEvents: List<FCLPersistEventEntity>,
         currentIsfMgdlByHour: Map<Int, Double>,
         nowMs: Long
     ): List<HourSuggestion> =
-        computeSuggestionsWithProgress(repository, persistEvents, currentIsfMgdlByHour, nowMs).first
+        computeSuggestionsWithProgress(repository, currentIsfMgdlByHour, nowMs).first
 
     /**
      * Zelfde berekening als computeSuggestions(), maar geeft ERNAAST ook de
@@ -240,22 +310,27 @@ object IsfLearner {
      * de uren die de drempel niet halen en dus normaal stilzwijgend worden
      * overgeslagen. computeSuggestions() blijft bestaan als dunne wrapper
      * (backward-compatible) voor eventuele andere aanroepers.
+     *
+     * 07/09/2026 — geen persistEvents-parameter meer (zie kdoc bovenaan dit
+     * bestand): de kandidaat-testdosissen komen nu volledig uit de gewone
+     * cyclus-log via buildCandidateEvents(), in één query vooraf ingelezen
+     * i.p.v. een aparte DB-aanroep per kandidaat.
      */
     suspend fun computeSuggestionsWithProgress(
         repository: FCLCycleLogRepository,
-        persistEvents: List<FCLPersistEventEntity>,
         currentIsfMgdlByHour: Map<Int, Double>,
         nowMs: Long
     ): Pair<List<HourSuggestion>, Map<Int, HourProgress>> {
         val sinceMs = nowMs - LOOKBACK_DAYS.toLong() * 24 * 60 * 60 * 1000L
-        val fires = persistEvents.filter {
-            it.fired && it.timestampMs >= sinceMs && it.doseU >= MIN_DOSE_U && it.iobRatio <= MAX_IOB_RATIO_AT_FIRE
-        }
-        if (fires.isEmpty()) return emptyList<HourSuggestion>() to emptyMap()
+        val allRows = repository.getSince(sinceMs).sortedBy { it.timestampMs }
+        if (allRows.isEmpty()) return emptyList<HourSuggestion>() to emptyMap()
+
+        val candidates = buildCandidateEvents(allRows)
+        if (candidates.isEmpty()) return emptyList<HourSuggestion>() to emptyMap()
 
         val readings = mutableListOf<CleanReading>()
-        for (fire in fires) {
-            val reading = evaluateFire(repository, fire) ?: continue
+        for (candidate in candidates) {
+            val reading = evaluateCandidate(allRows, candidate) ?: continue
             readings.add(reading)
         }
         if (readings.isEmpty()) return emptyList<HourSuggestion>() to emptyMap()
@@ -321,20 +396,78 @@ object IsfLearner {
     private fun currentIsfMgdlToMmol(mgdlPerU: Double?): Double? =
         mgdlPerU?.takeIf { it > 0.0 }?.div(18.0182)
 
-    private suspend fun evaluateFire(
-        repository: FCLCycleLogRepository,
-        fire: FCLPersistEventEntity
+    /**
+     * Groepeert de al-ingelezen cyclus-rijen (allRows, oplopend gesorteerd)
+     * tot "bouts" — zie kdoc bovenaan dit bestand (07/09/2026). Een bout is
+     * een aaneengesloten reeks rijen met commandedDose>0, waarbij twee
+     * opeenvolgende dosis-rijen nooit meer dan BOUT_GAP_TOLERANCE_MINUTES
+     * uit elkaar liggen; rijen met commandedDose==0 ertussenin breken een
+     * bout dus niet vanzelf (alleen de TIJD sinds de vorige dosis-rij telt).
+     * Alleen bouts die (a) in totaal >=MIN_DOSE_U opleveren, (b) bij aanvang
+     * een iobRatio <=MAX_IOB_RATIO_AT_FIRE hadden, en (c) niet langer dan
+     * BOUT_MAX_DURATION_MINUTES duurden, worden als kandidaat teruggegeven —
+     * puur qua GROOTTE/DUUR van de bout zelf; de maaltijd-/besmettings-
+     * check gebeurt apart in evaluateCandidate().
+     */
+    private fun buildCandidateEvents(rows: List<FCLCycleLogEntity>): List<CandidateEvent> {
+        val gapToleranceMs = BOUT_GAP_TOLERANCE_MINUTES * 60 * 1000L
+        val maxDurationMs = BOUT_MAX_DURATION_MINUTES * 60 * 1000L
+        val result = mutableListOf<CandidateEvent>()
+
+        var boutStart: FCLCycleLogEntity? = null
+        var boutLastTs = 0L
+        var boutDoseSum = 0.0
+
+        fun flush() {
+            val start = boutStart ?: return
+            if (boutDoseSum >= MIN_DOSE_U &&
+                start.glucoseIob.iobRatio <= MAX_IOB_RATIO_AT_FIRE &&
+                (boutLastTs - start.timestampMs) <= maxDurationMs
+            ) {
+                result.add(
+                    CandidateEvent(
+                        timestampMs = start.timestampMs,
+                        endTimestampMs = boutLastTs,
+                        doseU = boutDoseSum,
+                        iobRatio = start.glucoseIob.iobRatio,
+                        bgMmol = start.glucoseIob.bg
+                    )
+                )
+            }
+            boutStart = null
+            boutDoseSum = 0.0
+        }
+
+        for (row in rows) {
+            if (row.delivery.commandedDose <= 0.0) continue
+            val start = boutStart
+            if (start == null || (row.timestampMs - boutLastTs) > gapToleranceMs) {
+                flush()
+                boutStart = row
+                boutDoseSum = row.delivery.commandedDose
+                boutLastTs = row.timestampMs
+            } else {
+                boutDoseSum += row.delivery.commandedDose
+                boutLastTs = row.timestampMs
+            }
+        }
+        flush()
+        return result
+    }
+
+    private fun evaluateCandidate(
+        allRows: List<FCLCycleLogEntity>,
+        candidate: CandidateEvent
     ): CleanReading? {
-        val windowStart = fire.timestampMs
-        val windowEnd = fire.timestampMs + RESPONSE_WINDOW_MINUTES * 60 * 1000L
+        val windowStart = candidate.timestampMs
+        val windowEnd = candidate.timestampMs + RESPONSE_WINDOW_MINUTES * 60 * 1000L
         val slackMs = RESPONSE_WINDOW_SLACK_MINUTES * 60 * 1000L
         val preFireMarginMs = PRE_FIRE_LOOKUP_MARGIN_MINUTES * 60 * 1000L
 
-        // Query start iets vóór windowStart, puur om ook de cyclus-rij op/vlak
-        // vóór het fire-moment zelf te pakken te krijgen (voor de meal-check
-        // hieronder) — verandert niets aan de respons-/besmettingslogica die
-        // nog altijd strikt vanaf windowStart rekent.
-        val rows = repository.getRowsInRange(windowStart - preFireMarginMs, windowEnd + slackMs)
+        // allRows is al volledig ingelezen (zie computeSuggestionsWithProgress) —
+        // hier alleen nog in-memory filteren op het relevante venster, geen
+        // aparte DB-aanroep per kandidaat meer nodig (was repository.getRowsInRange()).
+        val rows = allRows.filter { it.timestampMs in (windowStart - preFireMarginMs)..(windowEnd + slackMs) }
         if (rows.isEmpty()) return null
 
         // Dichtstbijzijnde cyclus rond het volle venster (kan iets vóór of ná
@@ -344,8 +477,8 @@ object IsfLearner {
         if (abs(responseRow.timestampMs - windowEnd) > slackMs) return null
 
         // ── Maaltijd-uitsluiting (16/08/2026, verruimd 18/08/2026) ──────
-        // (a) Meal-status exact op het fire-moment: de dichtstbijzijnde rij
-        //     rond windowStart moet binnen de opzoek-marge liggen — anders is
+        // (a) Meal-status exact bij het BEGIN van de bout: de dichtstbijzijnde
+        //     rij rond windowStart moet binnen de opzoek-marge liggen — anders is
         //     er geen betrouwbaar antwoord op "was er toen een maaltijd
         //     actief" en wordt de meting bij twijfel verworpen.
         val fireRow = rows.minByOrNull { abs(it.timestampMs - windowStart) } ?: return null
@@ -353,7 +486,7 @@ object IsfLearner {
         val fireEpisodeId = fireRow.mealEpisode.mealEpisodeId
         val fireIsCleanNoMeal = fireEpisodeId == -1L
         // Late-episode uitzondering (zie kdoc bij LATE_EPISODE_MIN_MINUTES
-        // hierboven): een fire tijdens een AL LANG lopende, afgevlakte
+        // hierboven): een bout tijdens een AL LANG lopende, afgevlakte
         // episode telt niet meer als besmet — de vuurcondities zelf tonen
         // al aan dat BG niet meer actief door de maaltijd wordt opgestuwd.
         val fireIsLateEnoughEpisode = !fireIsCleanNoMeal &&
@@ -361,7 +494,7 @@ object IsfLearner {
         if (!fireIsCleanNoMeal && !fireIsLateEnoughEpisode) return null
 
         // (b) Binnen het antwoordvenster (windowStart t/m windowEnd+slack)
-        //     mag geen ANDERE (nieuwe) episode dan die van het fire-moment
+        //     mag geen ANDERE (nieuwe) episode dan die van het beginmoment
         //     zelf verschijnen — de doorlopende, al-late episode van (a)
         //     hierboven is geen nieuw besmettingsrisico (die was al
         //     "toegestaan"), maar een écht NIEUWE maaltijd die tijdens het
@@ -376,20 +509,23 @@ object IsfLearner {
         }
         if (newMealDuringWindow) return null
 
-        // Besmetting: alle dosis in het venster NA de fire zelf (dus rijen
-        // strikt na windowStart) mag niet meer dan CONTAMINATION_MAX_U zijn.
-        val laterDoseSum = rows.filter { it.timestampMs > windowStart }
+        // Besmetting: alle dosis STRIKT NA HET EINDE VAN DEZE BOUT ZELF
+        // (candidate.endTimestampMs) mag niet meer dan CONTAMINATION_MAX_U
+        // zijn — niet "na windowStart", want de bout kan zelf uit meerdere
+        // dosis-rijen bestaan (zie buildCandidateEvents()) en zou zichzelf
+        // anders als besmetting meetellen.
+        val laterDoseSum = rows.filter { it.timestampMs > candidate.endTimestampMs }
             .sumOf { it.delivery.commandedDose }
         if (laterDoseSum > CONTAMINATION_MAX_U) return null
 
-        val bgVoor = fire.bgMmol
+        val bgVoor = candidate.bgMmol
         val bgNa = responseRow.glucoseIob.bg
-        val impliedIsf = (bgVoor - bgNa) / fire.doseU
+        val impliedIsf = (bgVoor - bgNa) / candidate.doseU
 
         if (!impliedIsf.isFinite()) return null
         if (impliedIsf < MIN_PLAUSIBLE_ISF || impliedIsf > MAX_PLAUSIBLE_ISF) return null
 
-        val hour = DateTime(fire.timestampMs, AMSTERDAM).hourOfDay().get()
+        val hour = DateTime(candidate.timestampMs, AMSTERDAM).hourOfDay().get()
         return CleanReading(hour, impliedIsf)
     }
 

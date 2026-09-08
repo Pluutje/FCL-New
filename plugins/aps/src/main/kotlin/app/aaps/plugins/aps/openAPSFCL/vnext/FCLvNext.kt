@@ -646,6 +646,35 @@ private const val CURVE_FIT_MIN_R2 = 0.90            // onder deze R² wordt de 
 // de laagste waarde in dit venster >=0.70. 0.50 zit met ruime marge
 // daartussen.
 private const val EARLY_DELIVERY_MIN_RECENT_R2 = 0.50
+// ── EarlyBoost-veto bij afwezig/zwak maaltijdsignaal (07/09/2026, de gebruiker) ──
+// AANLEIDING: incident 15:49-16:04 — een vlakke BG-schommeling (5,8→6,3 mmol,
+// nooit meer dan 0,87 mmol boven target) werd bij 15:54 als UNCERTAIN-maaltijd
+// gezien en kreeg de volle EarlyBoost-vermenigvuldiger (×2,75), samen 1,39U
+// insuline, terwijl rise_since_meal_start achteraf maar 0,06 mmol bleek —
+// geen echte maaltijd. Resultaat: een hypo die gecorrigeerd moest worden.
+//
+// Backtest op de meegeleverde week-CSV (154 cycli met boostActive=true) liet
+// twee aparte gaten zien in de bestaande boostActive-voorwaarden (regel
+// ~3389 hieronder), die tot nu toe uitsluitend op de samengestelde `conf`-
+// score leunden zonder een eigen ondergrens op het maaltijdsignaal zelf:
+//  1. 26 van de 154 boosts vuurden terwijl mealSignal.state == NONE (de
+//     maaltijd-detector zag HELEMAAL GEEN maaltijd) — de helft daarvan zelfs
+//     bij een delta_target ONDER nul (BG op of onder target). Een "maaltijd-
+//     boost" heeft dan aantoonbaar geen bestaansreden.
+//  2. Bij mealSignal.state == UNCERTAIN (het stadium van het incident) lag
+//     de mediane delta_target van de overige 45 boosts op 1,68 mmol — het
+//     incident zelf zat daar met 0,82 mmol duidelijk onder (25e percentiel
+//     lag op 0,90). Een harde ondergrens van 1.0 mmol sluit het incident en
+//     vergelijkbare randgevallen uit, terwijl ~72% van de overige, kennelijk
+//     legitieme UNCERTAIN-boosts in deze dataset erboven bleef.
+// EEN LOSSE recentSlope-ondergrens (bijv. 2.5, elders in dit bestand als
+// "duidelijke, actuele stijging" gebruikt bij stage2MinByAccel) bleek NIET
+// bruikbaar hiervoor: bij CONFIRMED-episodes zat al de HELFT van de
+// boostActive-cycli onder die 2.5-grens (mediaan recentSlope 4,04, maar 25e
+// percentiel 2,51) — dat zou legitieme, bevestigde maaltijdrespons net zo
+// hard geraakt hebben als het incident. delta_target + de meal-state zelf
+// bleken een veel scherper onderscheid te geven dan recentSlope alleen.
+private const val EARLY_BOOST_UNCERTAIN_MIN_DELTA_MMOL = 1.0
 // 15/08/2026 — zie kdoc bij lastHypoActiveAt/de reentry-
 // vrijstelling: backtest tegen 41 reentry-momenten (alle logs) vond 1
 // geval (6/8 10:17) dat eigenlijk een post-hypo-koolhydraatrebound was
@@ -1266,6 +1295,36 @@ private const val POST_HYPO_BRAKE_MIN_ARMED_MIN = 15         // min. minuten gew
 private const val POST_HYPO_BRAKE_FLAT_DISARM_MIN_BG = 7.0    // mmol/L, ondergrens (zelfde als POST_HYPO_BRAKE_CATCHUP_MIN_BG)
 private const val POST_HYPO_BRAKE_FLAT_DISARM_TOLERANCE = 0.3 // mmol/L, toegestane terugval t.o.v. aanslag-BG (ruismarge)
 
+// ── Geleidelijke ratchet i.p.v. alles-of-niets (08/09/2026, de gebruiker) ──
+// Vervangt de oude "clamp op smallCorrectionMaxU tot riseSinceBrake>=
+// CATCHUP_RISE, dan in één keer volledig los"-ratchet (zie toepassing
+// verderop) door een vloeiende curve: het toegestane aandeel van de
+// berekende dosis groeit kwadratisch mee met riseSinceBrake, i.p.v. in één
+// sprong. AANLEIDING: maaltijd 8/9 12:29 — de rem hield 3 cycli achtereen
+// vast op 0,31U (berekend: 0,98-1,44U) en gaf toen in één keer de volledige
+// 1,05U vlak op de piek (13:09) — in strijd met "zoveel mogelijk zo vroeg
+// mogelijk". Backtest tegen alle 33 keer dat de rem in de week 1-8/9
+// aansloeg: een kale vloeiende curve (zonder de afremming hieronder) gaf
+// gemiddeld eerder en meer insuline, met in 32/33 gevallen een ruime marge
+// nadien (laagste BG nadien >=5,1 mmol) — maar in 1 geval (4/9 10:44, waar
+// vlak vóór het aanslaan al 3,59U in 10 minuten was gegeven) zou het +2,90U
+// extra hebben gegeven in een traject dat ook mét de bestaande voorzichtige
+// dosering al tot 3,9 mmol zakte.
+//
+// POST_HYPO_BRAKE_RECENT_AGGRESSION_LOW/HIGH bakenen een tweede, eveneens
+// vloeiende afremming af — geen harde knip — op basis van hoeveel insuline
+// er VLAK VOOR het aanslaan al onderweg was (burst_delivered_10m +
+// openstaande episodeHypoDebtU op het moment van aanslaan, "recente-
+// agressie-score"). Bij het 4/9-incident lag die score duidelijk hoger
+// (4,48) dan bij de 32 veilige gevallen (doorgaans <=3,9, ook bij
+// vergelijkbare bursts op zichzelf). MAX_DAMP=0,60 remt de ramp bij de
+// hoogste scores tot 60% af, maar sluit 'm nooit volledig — doorgerekend:
+// het 4/9-incident zakt hiermee van +2,90U naar +0,85U extra, terwijl de
+// 32 veilige gevallen samen nog ~84% van de kale-curve-winst behouden.
+private const val POST_HYPO_BRAKE_RECENT_AGGRESSION_LOW = 3.5   // burst_10m + episodeHypoDebtU bij aanslaan, U
+private const val POST_HYPO_BRAKE_RECENT_AGGRESSION_HIGH = 4.5  // U
+private const val POST_HYPO_BRAKE_RECENT_AGGRESSION_MAX_DAMP = 0.60  // fractie, max. afremming van rampFrac
+
 // ─────────────────────────────────────────────
 // WatchingFrontload delta-to-target ramp (05/07/2026)
 // Vervangt de harde aan/uit-drempel op deltaToTarget door een kwadratische
@@ -1395,6 +1454,30 @@ private val recentBgHistory: ArrayDeque<Double> = ArrayDeque(3)
 // eerste-echte-commit-vrijstelling (episodeAnyRealDeliveryDone) verderop
 // wordt toegekend — zie kdoc bij EARLY_DELIVERY_MIN_RECENT_R2 hierboven.
 private val recentCurveFitR2History: ArrayDeque<Double> = ArrayDeque(5)
+
+// ── Koude-start-vrijstelling voor recentCurveFitR2History (08/09/2026, de
+// gebruiker) ──────────────────────────────────────────────────────────────
+// AANLEIDING: 8/9 7:24-7:44 ontbijt — de "vroege stijging bevestigd"-reset
+// (lateDecayMul→1.0, dé frontload-dosis) mocht pas om 7:44 vuren terwijl
+// sustainedHighSlopeMinutes de 15-minutendrempel al om 7:34 haalde. Oorzaak:
+// de allereerste curve-fit van de episode (7:19, r²=0,45) bleef in dit
+// 5-cycli-venster zitten tot hij er om 7:44 pas uitschoof. Die eerste fit
+// van een verse episode is per definitie nog gebaseerd op maar 1-2 punten en
+// daardoor structureel zwak — dat is geen sensor-artefact zoals waar deze
+// vrijwaring voor bedoeld is (zie kdoc bij EARLY_DELIVERY_MIN_RECENT_R2:
+// een compression-low MIDDEN in een al lopende, betrouwbare fit), maar een
+// onvermijdelijke opstart-eigenschap die elke episode treft.
+// Backtest 1-8/9: raakt precies de 2 gevallen deze week waar de vertraging
+// aantoonbaar aan deze koude-start lag (8/9 7:24-incident zelf: 10 min
+// eerder; 4/9 15:54-incident: 15 min eerder) — de overige 7 onderzochte
+// vertragingen bleven ongewijzigd, want die kwamen door consistency- of
+// acceleratie-afvlakking, niet door deze koude start (zie ook: "het is per
+// definitie altijd veiliger om hem zo vroeg mogelijk te geven" — de
+// gebruiker, 8/9/2026).
+// Werking: de EERSTE meting ná elke clear() wordt niet aan de geschiedenis
+// toegevoegd (dus niet meegewogen in het minimum), zonder de vrijwaring
+// zelf te verzwakken voor alle latere metingen in dezelfde episode.
+private var recentCurveFitR2HistorySkipNext: Boolean = true
 
 // ── Peak-brake deceleratie-tracking ──────────────────────────────────────
 // recentSlope (fast lane) van de vórige cyclus, nodig om een knik/afvlakking
@@ -3386,9 +3469,23 @@ private fun computeEarlyDoseDecision(
             .coerceIn(0.20, config.maxSMB * 0.40)
 
 
+    // 07/09/2026 (de gebruiker) — zie kdoc bij EARLY_BOOST_UNCERTAIN_MIN_DELTA_MMOL
+    // hierboven voor de volledige aanleiding (incident 15:49-16:04) en de
+    // backtest die deze twee voorwaarden onderbouwt:
+    //  (a) geen boost zonder ENIG maaltijdsignaal (mealSignal.state NONE) —
+    //      een "maaltijd"-boost zonder maaltijdsignaal is per definitie
+    //      ongegrond, ongeacht hoe de samengestelde conf-score uitpakt.
+    //  (b) bij UNCERTAIN (het onzekerste stadium) een eigen, harde minimum-
+    //      afstand tot target — CONFIRMED blijft ongemoeid, want dat stadium
+    //      vereist al meer bevestiging om er te komen.
+    val mealSignalPresent = mealSignal.state != MealState.NONE
+    val uncertainDeltaOk = mealSignal.state != MealState.UNCERTAIN ||
+        ctx.deltaToTarget >= EARLY_BOOST_UNCERTAIN_MIN_DELTA_MMOL
     val boostActive =
         config.earlyBoostFactor > 1.0 + 1e-9 &&
             conf >= config.earlyBoostMinConfidence &&
+            mealSignalPresent &&
+            uncertainDeltaOk &&
             earlyDose.boostCommitCount < effectiveMaxCommits &&
             // IOB-rem: als er al substantieel insuline actief is, heeft een
             // versterkte vroege dosis geen zin meer — die werkt pas na de piek
@@ -4147,6 +4244,7 @@ private fun maybeResetEarlyOnDecel(
     explosiveRiseBoostCycles = 0
     recentBgHistory.clear()
     recentCurveFitR2History.clear()
+    recentCurveFitR2HistorySkipNext = true
     peakBrakeWasActiveLastCycle = false
     prevRawDecelForBrake = false
 
@@ -4409,7 +4507,7 @@ class FCLvNext(
     // "vNN-jjjj-mm-dd-uumm" (aanmaaktijdstip, geen omschrijving; die van
     // eerdere versies raakten toch achter). Alleen als het écht relevant
     // is een korte omschrijving toevoegen.
-    private val FCL_CODE_VERSION = "v99-2026-09-07-2359"
+    private val FCL_CODE_VERSION = "v107-2026-09-08-1540"
 
     // ── Restart-detectie (16/07/2026) ─────────────────────────────────
     // true op precies de EERSTE cyclus na het (her)starten van dit class-
@@ -5164,10 +5262,22 @@ class FCLvNext(
     // actuele BG, dus geen apart eenmalig-gebruikt-vlag meer nodig. Zie kdoc
     // bij de toepassing verderop en bij POST_HYPO_BRAKE_ARM_MIN_IOB_RATIO.
     private var postHypoBrakeBg: Double = 0.0
-    // Tijdstip van wapenen — apart van postHypoBrakeBg (dat ratchet mee met
-    // elke vrijgave) — nodig voor de POST_HYPO_BRAKE_MIN_ARMED_MIN-grace-
-    // period van de auto-disarm hieronder.
+    // Tijdstip van wapenen — apart van postHypoBrakeBg — nodig voor de
+    // POST_HYPO_BRAKE_MIN_ARMED_MIN-grace-period van de auto-disarm
+    // hieronder. (08/09/2026: postHypoBrakeBg ratchet niet meer mee met
+    // elke vrijgave — zie kdoc bij POST_HYPO_BRAKE_RECENT_AGGRESSION_LOW
+    // hierboven — blijft nu vast op de BG bij aanslaan.)
     private var postHypoBrakeArmedAt: DateTime? = null
+
+    // Vastgezette "recente-agressie-afremming" voor de volledige duur van
+    // deze wapening (08/09/2026, de gebruiker) — zie kdoc bij
+    // POST_HYPO_BRAKE_RECENT_AGGRESSION_LOW hierboven. Bewust ÉÉN keer
+    // vastgelegd bij het aanslaan (niet elke cyclus herberekend): dit meet
+    // hoe agressief de levering was VLAK VOOR de rem aansloeg, niet hoe die
+    // daarna verandert — herberekenen zou het eigen effect van de rem
+    // (minder leveren) laten meetellen als "minder agressief", en de
+    // afremming dus ten onrechte laten wegvallen.
+    private var postHypoBrakeRampDamp: Double = 1.0
 
     // ── Sustained Rise tracking ───────────────────────────────────────────
     // Telt hoeveel minuten de slope al aanhoudend boven de drempel is.
@@ -5313,6 +5423,7 @@ class FCLvNext(
             explosiveRiseBoostCycles = 0
             recentBgHistory.clear()
             recentCurveFitR2History.clear()
+            recentCurveFitR2HistorySkipNext = true
             peakBrakeWasActiveLastCycle = false
             prevRawDecelForBrake = false
         }
@@ -5364,6 +5475,7 @@ class FCLvNext(
             explosiveRiseBoostCycles = 0
             recentBgHistory.clear()
             recentCurveFitR2History.clear()
+            recentCurveFitR2HistorySkipNext = true
             peakBrakeWasActiveLastCycle = false
             prevRawDecelForBrake = false
             activeMealEpisodeId = -1
@@ -5412,6 +5524,7 @@ class FCLvNext(
                 explosiveRiseBoostCycles = 0
                 recentBgHistory.clear()
                 recentCurveFitR2History.clear()
+                recentCurveFitR2HistorySkipNext = true
                 peakBrakeWasActiveLastCycle = false
                 prevRawDecelForBrake = false
             }
@@ -6576,8 +6689,17 @@ class FCLvNext(
         recentBgHistory.addLast(ctx.input.bgNow)
 
         // Zie kdoc bij recentCurveFitR2History (declaratie hierboven).
-        if (recentCurveFitR2History.size >= 5) recentCurveFitR2History.removeFirst()
-        recentCurveFitR2History.addLast(ctx.curveFitR2)
+        // recentCurveFitR2HistorySkipNext (08/09/2026, de gebruiker): de
+        // allereerste meting ná een clear() telt bewust niet mee — die is per
+        // definitie nog gebaseerd op te weinig punten om iets over sensor-ruis
+        // te zeggen, en zou anders de vroege-stijging-reset onnodig 1-2 cycli
+        // vertragen. Zie kdoc bij de declaratie hierboven.
+        if (recentCurveFitR2HistorySkipNext) {
+            recentCurveFitR2HistorySkipNext = false
+        } else {
+            if (recentCurveFitR2History.size >= 5) recentCurveFitR2History.removeFirst()
+            recentCurveFitR2History.addLast(ctx.curveFitR2)
+        }
         val recentCurveFitR2Min = recentCurveFitR2History.minOrNull() ?: ctx.curveFitR2
 
         // bgRising3Cycles: alle 3 recentste delta's positief (elke meting hoger dan vorige)
@@ -7186,13 +7308,53 @@ class FCLvNext(
             (1.0 - WATCHING_DELTA_RAMP_FLOOR) * watchingDeltaRampX * watchingDeltaRampX
         val watchingFrontloadTargetUEffective = watchingFrontloadTargetU * watchingDeltaRampFrac
 
+        // ── Recente-omslag-veto (07/09/2026, de gebruiker) ────────────────
+        // AANLEIDING: maaltijd 7/9 17:39 — WATCHING FRONTLOAD vulde om 18:44
+        // nog bij richting zijn cumulatieve doel (~3,33U), terwijl de BG al
+        // 3 cycli daalde (recentSlope -1,65, recentDelta5m -0,14) en de
+        // hoofd-commit-motor daar al op 0,00 stond. watchingSlopeOk/
+        // watchingDeltaOk kijken naar de TRAGERE slope/deltaToTarget en
+        // zagen die omslag nog niet — MICRO RAMP (regel ~2707) en PRE-MEAL
+        // RISE FLOOR (regel ~2083) hadden op exact datzelfde moment al wél
+        // afgehaakt, want die gebruiken deze grenzen al langer. Dezelfde,
+        // al bestaande MEAL_ABORT_*-grenzen hier hergebruikt i.p.v. nieuwe
+        // getallen verzinnen.
+        //
+        // Backtest op een week productiedata (7 dagen, 2003 cycli): deze
+        // regel blokkeert 24 van de 216 WFF-triggers (11%) — bij 15 daarvan
+        // (63%) stond de hoofd-motor al op (nagenoeg) nul, dus WFF was daar
+        // de enige reden voor een dosis. Vangt BEWUST NIET het randgeval
+        // waarbij alleen de RUWE BG al één stap terugzakte maar
+        // recentDelta5m/recentSlope deze grens nog niet raken (bijv. 18:39
+        // in hetzelfde incident, en 2 vergelijkbare momenten elders die
+        // week — samen 3x/week, kleine bedragen 0,08-0,26U) — dat vraagt
+        // een ander signaal (afstand tot de eigen episode-piek) en is
+        // bewust NIET in deze fix meegenomen, zie taak "18:39-type" voor
+        // een eventuele latere, aparte uitwerking.
+        val watchingRecentReversal =
+            ctx.recentDelta5m <= MEAL_ABORT_DELTA5M ||
+                ctx.recentSlope <= MEAL_ABORT_SLOPE_HR ||
+                ctx.acceleration <= MEAL_ABORT_ACCEL
+
 // 3) Echte triggerconditie
         val watchingFrontloadTriggered =
             watchingContextOk &&
                 watchingSlopeOk &&
                 watchingDeltaOk &&
                 watchingPeakRiseOk &&
-                watchingIobOk
+                watchingIobOk &&
+                !watchingRecentReversal
+
+        if (watchingRecentReversal && watchingContextOk && watchingSlopeOk &&
+            watchingDeltaOk && watchingPeakRiseOk && watchingIobOk
+        ) {
+            status.append(
+                "WATCHING FRONTLOAD geblokkeerd (recente omslag): " +
+                    "Δ5m=${"%.2f".format(ctx.recentDelta5m)} " +
+                    "recentSlope=${"%.2f".format(ctx.recentSlope)} " +
+                    "accel=${"%.2f".format(ctx.acceleration)}\n"
+            )
+        }
 
 // 4) ✅ LogRow velden gegroepeerd vullen (hier is alle info beschikbaar)
         logRow.watchingSlopeOk = watchingSlopeOk
@@ -7417,6 +7579,7 @@ class FCLvNext(
             explosiveRiseBoostCycles = 0
             recentBgHistory.clear()
             recentCurveFitR2History.clear()
+            recentCurveFitR2HistorySkipNext = true
             peakBrakeWasActiveLastCycle = false
             prevRawDecelForBrake = false
 
@@ -8581,6 +8744,58 @@ class FCLvNext(
                 status.append("OBSERVE (commit cooldown)\n")
             }
         }
+
+        // ── Snelle-omslag-veto op het fallback-pad (08/09/2026, de gebruiker) ──
+        // AANLEIDING: 7-8/9 22:19-22:29 en 00:59-01:04 — kleine doses (0,13-0,16U)
+        // bleven doorlopen terwijl de ruwe BG al niet meer gestegen was, omdat dit
+        // NIET via de commit-motor liep (committedDose haalde effectiveMinCommitDose
+        // niet) en NIET via de persistente-correctie-functie (persistentOverrideActive).
+        // In dat "restpad" viel commandedDose terug op de ongefilterde finalDose uit
+        // het energiemodel, die geen enkele omslag-check kent — zelfs niet de
+        // langzamere recentSlope/recentDelta5m-check die elders al bestaat (die
+        // loopt met vertraging achter de ruwe meting aan, zie ook de WFF-fix
+        // hierboven bij watchingRecentReversal).
+        //
+        // Backtest over 1-8/9 (1999 cycli, alle code-versies): dit pad kwam 22 keer
+        // voor waarbij de laatste ruwe BG-meting niet gestegen was terwijl de
+        // bestaande, langzamere omslag-check nog niet aansloeg. In alle 22 gevallen
+        // bleek de BG er na ook daadwerkelijk gedaald/vlak te blijven (0 gevallen
+        // waarin de stijging achteraf alsnog doorzette) — dus 1 niet-gestegen meting
+        // is in dit smalle restpad al een betrouwbaar signaal (i.t.t. elders in de
+        // code, waar dat te gevoelig voor ruis zou zijn: hier heeft de commit-motor
+        // zelf al besloten dat het geen "echte" dosis meer is).
+        //
+        // Bewust GEEN afhankelijkheid van delta-target of IOB toegevoegd: de
+        // bedragen zijn hoe dan ook klein (0,13-0,44U per voorval in de backtest)
+        // en de data liet geen betrouwbaar verband zien tussen delta-target op het
+        // moment zelf en het risico op een hypo later in dezelfde episode (2 van de
+        // 3 hypo-gevallen in de backtest hadden juist een hoge, geen lage
+        // delta-target — vermoedelijk domineert de opgebouwde IOB van de hele
+        // episode, niet dit laatste restje).
+        //
+        // persistentOverrideActive expliciet uitgezonderd: die functie is bedoeld
+        // om juist door te gaan bij een vlakke, te hoge BG — dat mag deze veto niet
+        // raken.
+        if (!commandedDoseIsFromCommit &&
+            !persistentOverrideActive &&
+            mealSignal.state != MealState.NONE &&
+            commandedDose > 0.0
+        ) {
+            val sortedBgForVeto = ctx.input.bgHistory.sortedBy { it.first.millis }
+            if (sortedBgForVeto.size >= 2) {
+                val bgNowRaw = sortedBgForVeto[sortedBgForVeto.size - 1].second
+                val bgPrevRaw = sortedBgForVeto[sortedBgForVeto.size - 2].second
+                if (bgNowRaw <= bgPrevRaw + 0.001) {
+                    status.append(
+                        "FALLBACK-OMSLAG-VETO: ruwe BG niet gestegen " +
+                            "(${"%.2f".format(bgPrevRaw)}→${"%.2f".format(bgNowRaw)}) → " +
+                            "commandedDose ${"%.2f".format(commandedDose)}→0.00U\n"
+                    )
+                    commandedDose = 0.0
+                }
+            }
+        }
+
 // ─────────────────────────────────────────────
 // 🟧 RESERVE POOL LOGIC
 // 1) Reset / TTL
@@ -8909,11 +9124,21 @@ class FCLvNext(
             postHypoBrakeActive = true
             postHypoBrakeBg = ctx.input.bgNow
             postHypoBrakeArmedAt = now
+            // 08/09/2026 — zie kdoc bij POST_HYPO_BRAKE_RECENT_AGGRESSION_LOW
+            // hierboven. deliveredInLastMinutes() leest alleen VORIGE cycli
+            // (deliveryHistory wordt pas ver verderop in deze cyclus bijgewerkt),
+            // dus dit meet zuiver de levering VLAK VOOR het aanslaan.
+            val recentAggressionScore = deliveredInLastMinutes(now, 10) + episodeHypoDebtU
+            postHypoBrakeRampDamp = 1.0 - smooth01(
+                (recentAggressionScore - POST_HYPO_BRAKE_RECENT_AGGRESSION_LOW) /
+                    (POST_HYPO_BRAKE_RECENT_AGGRESSION_HIGH - POST_HYPO_BRAKE_RECENT_AGGRESSION_LOW)
+            ) * POST_HYPO_BRAKE_RECENT_AGGRESSION_MAX_DAMP
             status.append(
                 "POST-HYPO BRAKE AAN: episodeHypoDebtU=${"%.2f".format(episodeHypoDebtU)}U, " +
                     "iobRatio=${"%.2f".format(ctx.iobRatio)} bij CONFIRMED stijging " +
                     "(bgNow=${"%.1f".format(ctx.input.bgNow)}) — mogelijk correctie-koolhydraten " +
-                    "i.p.v. nieuwe maaltijd\n"
+                    "i.p.v. nieuwe maaltijd (recente-agressie-score=${"%.2f".format(recentAggressionScore)}U, " +
+                    "rampDamp=${"%.2f".format(postHypoBrakeRampDamp)})\n"
             )
         }
 
@@ -8956,44 +9181,55 @@ class FCLvNext(
             postHypoBrakeArmedAt = null
         }
 
-        // RATCHET (25/07/2026): was een eenmalige catch-up ("1x los,
-        // daarna voorgoed weer dicht"). Backtest tegen de lunch van 25/07
-        // (kibbeling met patat, BG bleef na de ene catch-up gewoon doorstijgen
-        // van 8,0 naar 19,2 mmol terwijl de rem 90+ minuten potdicht bleef)
-        // toonde dat dat bij een écht doorlopende maaltijd tot een gevaarlijk
-        // lange, onnodige onderdrukking leidt. Nu: elke vrijgave verschuift
-        // het ankerpunt (postHypoBrakeBg) naar de actuele BG, dus een
-        // aanhoudende stijging kan steeds opnieuw (met dezelfde 1,0 mmol/
-        // 2,0-slope/7,0-mmol-eisen) insuline vrijgeven — geen limiet op het
-        // aantal vrijgaves per episode. Vlakt de stijging af (recentSlope
-        // zakt onder de drempel, bijv. rond de piek), dan stopt de rem
-        // vanzelf weer met vrijgeven, net als voorheen. Doorgerekend tegen 21
-        // historische episodes: max. ononderbroken onderdrukking binnen een
-        // episode nu <=10 min (was tot 120 min), voor elke geteste iobRatio-
-        // drempel.
+        // GELEIDELIJKE VRIJGAVE (08/09/2026, de gebruiker — vervangt de oude
+        // alles-of-niets-ratchet van 25/07/2026, zie kdoc bij
+        // POST_HYPO_BRAKE_RECENT_AGGRESSION_LOW hierboven voor de volledige
+        // aanleiding en backtest). De oude ratchet gaf ofwel de volle,
+        // ofwel slechts smallCorrectionMaxU — met als gevolg dat een
+        // aanhoudende stijging soms meerdere cycli achtereen op de bodem
+        // bleef hangen en dan in één keer de volledige dosis kreeg, vlak op
+        // of na de piek (8/9 12:29-incident). Nu groeit het toegestane
+        // aandeel van de berekende dosis vloeiend mee met riseSinceBrake
+        // (kwadratisch, verzadigt bij POST_HYPO_BRAKE_CATCHUP_RISE mmol),
+        // afgeremd door postHypoBrakeRampDamp (vastgelegd bij het aanslaan,
+        // zie hierboven). postHypoBrakeBg ratchet niet meer mee — de curve
+        // verzadigt vanzelf naar volledige vrijgave en blijft daar, geen
+        // aparte "opnieuw dicht"-stap per vrijgave meer nodig. Zakt de
+        // stijging weg (recentSlope onder de drempel) of onder de
+        // BG-ondergrens, dan klemt de harde vloer (smallCorrectionMaxU) nog
+        // steeds vast, net als voorheen.
         if (postHypoBrakeActive && commandedDose > 0.0) {
-            val riseSinceBrake = ctx.input.bgNow - postHypoBrakeBg
-            if (riseSinceBrake >= POST_HYPO_BRAKE_CATCHUP_RISE &&
-                ctx.recentSlope >= POST_HYPO_BRAKE_CATCHUP_SLOPE &&
-                ctx.input.bgNow >= POST_HYPO_BRAKE_CATCHUP_MIN_BG
-            ) {
-                val prevAnchor = postHypoBrakeBg
-                postHypoBrakeBg = ctx.input.bgNow   // ratchet: nieuw ankerpunt voor de volgende vrijgave
-                status.append(
-                    "POST-HYPO BRAKE RATCHET-VRIJGAVE: BG ${"%.1f".format(prevAnchor)}→" +
-                        "${"%.1f".format(ctx.input.bgNow)} ondanks rem doorgestegen, boven " +
-                        "${"%.1f".format(POST_HYPO_BRAKE_CATCHUP_MIN_BG)} mmol/L " +
-                        "(recentSlope=${"%.2f".format(ctx.recentSlope)}) — dit lijkt toch een echte " +
-                        "maaltijd, dosis dit cyclus toegestaan; rem blijft aan voor de volgende ${"%.1f".format(POST_HYPO_BRAKE_CATCHUP_RISE)} mmol\n"
-                )
+            val riseSinceBrake = (ctx.input.bgNow - postHypoBrakeBg).coerceAtLeast(0.0)
+            val slopeOk = ctx.recentSlope >= POST_HYPO_BRAKE_CATCHUP_SLOPE
+            val bgFloorOk = ctx.input.bgNow >= POST_HYPO_BRAKE_CATCHUP_MIN_BG
+            val before = commandedDose
+            if (slopeOk && bgFloorOk && riseSinceBrake > 0.001) {
+                val rampX = (riseSinceBrake / POST_HYPO_BRAKE_CATCHUP_RISE).coerceIn(0.0, 1.0)
+                val rampFrac = (rampX * rampX) * postHypoBrakeRampDamp
+                val cap = config.smallCorrectionMaxU +
+                    (commandedDose - config.smallCorrectionMaxU).coerceAtLeast(0.0) * rampFrac
+                commandedDose = commandedDose.coerceAtMost(cap)
+                if (before > commandedDose) {
+                    status.append(
+                        "POST-HYPO BRAKE GELEIDELIJK: ${"%.2f".format(before)}→${"%.2f".format(commandedDose)}U " +
+                            "(sinds rem ${"%.2f".format(riseSinceBrake)}/${"%.1f".format(POST_HYPO_BRAKE_CATCHUP_RISE)} mmol, " +
+                            "rampFrac=${"%.2f".format(rampFrac)}, rampDamp=${"%.2f".format(postHypoBrakeRampDamp)})\n"
+                    )
+                    logRow.guardPeakLimited = true
+                } else if (rampFrac >= 0.999) {
+                    status.append(
+                        "POST-HYPO BRAKE GELEIDELIJK VOLLEDIG VRIJ: sinds rem " +
+                            "${"%.2f".format(riseSinceBrake)} mmol gestegen (>=${"%.1f".format(POST_HYPO_BRAKE_CATCHUP_RISE)}), " +
+                            "geen extra rem meer dit cyclus\n"
+                    )
+                }
             } else {
-                val before = commandedDose
                 commandedDose = commandedDose.coerceAtMost(config.smallCorrectionMaxU)
                 if (before > commandedDose) {
                     status.append(
                         "POST-HYPO BRAKE: ${"%.2f".format(before)}→${"%.2f".format(commandedDose)}U " +
                             "(episodeHypoDebtU=${"%.2f".format(episodeHypoDebtU)}U, sinds rem " +
-                            "${"%.2f".format(riseSinceBrake)} mmol gestegen)\n"
+                            "${"%.2f".format(riseSinceBrake)} mmol gestegen, slopeOk=$slopeOk bgFloorOk=$bgFloorOk)\n"
                     )
                     logRow.guardPeakLimited = true
                 }

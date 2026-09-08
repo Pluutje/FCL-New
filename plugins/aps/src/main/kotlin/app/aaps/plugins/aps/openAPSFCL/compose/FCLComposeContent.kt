@@ -57,7 +57,21 @@ class FCLComposeContent(
         val navigateToLearner = remember {
             app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.FclLearnerNotificationHelper.consumeNavigateRequest()
         }
-        var selectedTab by remember { mutableIntStateOf(if (navigateToAiAdvisor || navigateToLearner) 1 else 0) }
+        // 08/09/2026 (de gebruiker) — zelfde one-shot-patroon voor de
+        // update-melding. Kan niet tegelijk met de twee vlaggen hierboven true
+        // zijn (elke melding zet alleen haar eigen vlag).
+        val navigateToUpdate = remember {
+            app.aaps.plugins.aps.openAPSFCL.update.FclUpdateNotificationHelper.consumeNavigateRequest()
+        }
+        var selectedTab by remember {
+            mutableIntStateOf(
+                when {
+                    navigateToAiAdvisor || navigateToLearner -> 1
+                    navigateToUpdate                          -> 3
+                    else                                       -> 0
+                }
+            )
+        }
         val scope = rememberCoroutineScope()
         val viewModel = remember {
             OpenAPSViewModel(
@@ -105,7 +119,7 @@ class FCLComposeContent(
                     startOnLearner = navigateToLearner
                 )
                 2 -> FclStatisticsScreen()
-                3 -> FCLSettingsScreen(preferences = preferences, sp = sp)
+                3 -> FCLSettingsScreen(preferences = preferences, sp = sp, startExpandedOnUpdates = navigateToUpdate)
             }
         }
     }
