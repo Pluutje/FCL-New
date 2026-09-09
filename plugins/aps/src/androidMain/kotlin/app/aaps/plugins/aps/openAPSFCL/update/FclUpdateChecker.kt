@@ -9,11 +9,19 @@ import app.aaps.plugins.aps.openAPSFCL.vnext.FCL_STATUS_VERSION
  * het FCLGlucoLink-overdrachtsdocument).
  *
  * Bestandsnaamconventie (het hele mechanisme leunt hierop):
- *  - `FCL-V7_v<versienummer>.apk` — <versienummer> is FCL_STATUS_VERSION
- *    (zie FCLvNextStatusFormatter.kt), NIET het Android-versionCode uit
- *    Versions.kt (dat is sinds v98 bevroren, zie kdoc daar) en NIET de
- *    vrije-tekst versionName.
- *  - `FCL-V7_v<versienummer>_whatsnew.txt` — optioneel, zie FclWhatsNewChecker.
+ *  - `<willekeurig voorvoegsel>_v<versienummer>.apk` — <versienummer> is
+ *    FCL_STATUS_VERSION (zie FCLvNextStatusFormatter.kt), NIET het
+ *    Android-versionCode uit Versions.kt (dat is sinds v98 bevroren, zie kdoc
+ *    daar) en NIET de vrije-tekst versionName. Het voorvoegsel zelf
+ *    (bijvoorbeeld "FCL-V7" of "FCL-V8") wordt NIET meer gecontroleerd
+ *    (09/09/2026, de gebruiker) — alleen de "_v<cijfers>.apk"-staart telt.
+ *    Zo kan het voorvoegsel op een moment naar keuze wisselen (bijvoorbeeld
+ *    van "FCL-V7" naar "FCL-V8" zodra alle gebruikers op v108+ zitten) zonder
+ *    dat oudere, nog niet opgeruimde bestanden in de Drive-map ineens
+ *    genegeerd worden en zonder dat iedereen opnieuw handmatig een build
+ *    moet uploaden.
+ *  - `<zelfde voorvoegsel>_v<versienummer>_whatsnew.txt` — optioneel, zie
+ *    FclWhatsNewChecker.
  *  - Geen datumcontrole (Drive's "laatst gewijzigd" verandert ook zonder een
  *    echte nieuwe versie) en geen downloaden van de apk zelf om 'm te
  *    controleren — puur de bestandsnaam bevat het versienummer. Bij meerdere
@@ -30,9 +38,10 @@ import app.aaps.plugins.aps.openAPSFCL.vnext.FCL_STATUS_VERSION
  */
 object FclUpdateChecker {
 
-    /** Regex exact zoals in het FCLGlucoLink-overdrachtsdocument: underscore, v/V, dan alleen cijfers. */
-    private val VERSION_REGEX = Regex("""_[vV](\d+)""")
-    private const val APK_PREFIX = "FCL-V7"
+    /** Underscore, v/V, dan alleen cijfers, vlak voor ".apk" aan het eind van de
+     *  bestandsnaam. Het voorvoegsel ervoor (FCL-V7, FCL-V8, ...) doet er bewust
+     *  niet toe — zie de kdoc hierboven. */
+    private val VERSION_REGEX = Regex("""_[vV](\d+)\.apk$""")
 
     sealed class Result {
         data class UpdateAvailable(
@@ -74,14 +83,14 @@ object FclUpdateChecker {
         return try {
             val files = FclUpdateApi.listFiles(folderId, apiKey)
             val newest = files
-                .filter { it.name.startsWith(APK_PREFIX) && it.name.endsWith(".apk") }
+                .filter { it.name.endsWith(".apk") }
                 .mapNotNull { f ->
                     VERSION_REGEX.find(f.name)?.groupValues?.get(1)?.toIntOrNull()?.let { vc -> f to vc }
                 }
                 .maxByOrNull { (_, vc) -> vc }
 
             when {
-                newest == null -> Result.Error("Geen geldig FCL-V7_v<versionCode>.apk bestand gevonden in de map")
+                newest == null -> Result.Error("Geen geldig *_v<versionCode>.apk bestand gevonden in de map")
                 newest.second > currentVersionCode -> Result.UpdateAvailable(
                     versionCode = newest.second,
                     fileId = newest.first.id,
@@ -94,7 +103,7 @@ object FclUpdateChecker {
         }
     }
 
-    /** Alle geldige FCL-V7_v<versionCode>.apk-bestanden in de Drive-map,
+    /** Alle geldige *_v<versionCode>.apk-bestanden in de Drive-map (elk voorvoegsel),
      *  aflopend gesorteerd op versionCode (07/09/2026, de gebruiker —
      *  "versie wijzigen"/terugzetten). Zelfde bestandsnaam-parsing als
      *  checkForUpdate() hierboven, maar zonder de "nieuwer dan huidige"-
@@ -112,7 +121,7 @@ object FclUpdateChecker {
         return try {
             val files = FclUpdateApi.listFiles(folderId, apiKey)
             val versions = files
-                .filter { it.name.startsWith(APK_PREFIX) && it.name.endsWith(".apk") }
+                .filter { it.name.endsWith(".apk") }
                 .mapNotNull { f ->
                     VERSION_REGEX.find(f.name)?.groupValues?.get(1)?.toIntOrNull()
                         ?.let { vc -> VersionEntry(versionCode = vc, fileId = f.id, fileName = f.name) }

@@ -93,9 +93,10 @@ data class FclUiSnapshot(
  *     (installedVersionCode), i.p.v. PackageManager.longVersionCode,
  *  3) FCLSettingsScreen.kt's "Huidige versie"-weergave en de
  *     "(huidige)"-markering in de "Versie wijzigen"-lijst,
- *  4) de Drive-bestandsnaamconventie: FCL-V7_v<dit getal>.apk — GEEN
- *     +1500-offset meer, dat sloeg op het Android-versionCode dat nu niet
- *     meer meebeweegt.
+ *  4) de Drive-bestandsnaamconventie: <voorvoegsel>_v<dit getal>.apk — het
+ *     voorvoegsel (FCL-V7, FCL-V8, ...) doet er sinds 09/09/2026 niet meer toe,
+ *     zie FclUpdateChecker.kt — GEEN +1500-offset meer, dat sloeg op het
+ *     Android-versionCode dat nu niet meer meebeweegt.
  *
  * BIJWERKEN: bij elke FCLvNext-wijziging die via de update-checker moet
  * worden aangeboden, dit getal ophogen — SAMEN met FCL_CODE_VERSION in
@@ -265,7 +266,7 @@ class FCLvNextStatusFormatter(
     ): String = buildString {
         val str = FclStrings.get(context)
         appendLine("════════════════════════")
-        appendLine(" 🧠 FCL V7 v6-$FCL_STATUS_VERSION")
+        appendLine(" 🧠 FCL V8 v-$FCL_STATUS_VERSION")
         appendLine("════════════════════════")
         appendLine()
 
