@@ -5,7 +5,11 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 object Versions {
 
     // On change edit aaps-ci.yml
-    const val appVersion = "4.0B-FCL-v7.6"
+    // 09/09/2026 (de gebruiker) — nieuw schema: "4.0<letter>-v<generatie>-v<buildnummer>".
+    // Het buildnummer loopt voortaan gelijk op met FCL_STATUS_VERSION (FCLvNextStatusFormatter.kt)
+    // en FCL_CODE_VERSION (FCLvNext.kt) — alle drie samen ophogen bij elke FCLvNext-wijziging die
+    // het waard is. Zichtbaar op het hoofdscherm via VersionOverlay.kt (config.VERSION_NAME).
+    const val appVersion = "4.0C-v8-v108"
 
     // BEVROREN OP 1598 (07/09/2026, de gebruiker) — NIET MEER OPHOGEN.
     //
