@@ -365,6 +365,16 @@ class DetermineBasalFCL @Inject constructor(
         // eigen achtergrond-executor — nooit op deze (APS-doserings-)thread.
         app.aaps.plugins.aps.openAPSFCL.update.FclUpdateScheduler.runIfDue(context)
 
+        // ── Health Connect stappen/hartslag-sync (10/09/2026, de gebruiker) ──
+        // Voor niet-Wear OS-horloges (Garmin e.d.) — zie kdoc bij
+        // FclHealthConnectSync voor waarom. Zelfde patroon als
+        // FclUpdateScheduler hierboven: runIfDue() keert zelf direct terug,
+        // de eigenlijke Health Connect-call en database-schrijf draaien nooit
+        // op deze (APS-doserings-)thread. Stille no-op zolang Health Connect
+        // niet geïnstalleerd is of de gebruiker nog geen toestemming heeft
+        // gegeven (zie FCLSettingsScreen.kt).
+        app.aaps.plugins.aps.openAPSFCL.vnext.healthconnect.FclHealthConnectSync.runIfDue(context, persistenceLayer)
+
         var rT = RT(
             algorithm = APSResult.Algorithm.FCL,
             runningDynamicIsf = false,

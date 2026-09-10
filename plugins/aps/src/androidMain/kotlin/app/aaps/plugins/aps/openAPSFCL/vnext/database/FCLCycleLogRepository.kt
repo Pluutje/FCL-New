@@ -571,7 +571,13 @@ class FCLCycleLogRepository @Inject constructor(
     // gebeurde. Bij een fout wordt alleen deze ene export overgeslagen, met
     // een regel in logcat; de rest van de cyclus (inclusief dosering) gaat
     // gewoon door.
-    private suspend fun exportCsvLast7Days() {
+    // Niet meer 'private' (10/09/2026, de gebruiker): de "Upload CSV"-knop in
+    // FCLSettingsScreen.kt roept dit nu ook rechtstreeks aan, vóór de upload,
+    // zodat er altijd een verse export t/m de laatst beschikbare cyclus wordt
+    // verstuurd — voorheen kon de knop tot een uur oude data versturen omdat
+    // export en upload losgekoppeld waren (export liep alleen 1x/uur mee in
+    // de normale cyclusverwerking, zie maybeExportCsv() hierboven).
+    suspend fun exportCsvLast7Days() {
         try {
             exportCsvLast7DaysInternal()
         } catch (e: Exception) {

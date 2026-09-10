@@ -395,6 +395,12 @@ private data class PeakEstimatorContext(
     var momentum: Double = 0.0,          // mmol/L (decayed posSlopeArea)
     var lastAt: DateTime? = null,
 
+    // Hoogste bg sinds episode-start (10/09/2026, analyse gebruiker) — nodig
+    // om TAIL-suppressie en de WATCHING→CONFIRMED-overgang te kunnen eisen
+    // dat de bg ook daadwerkelijk gedaald is, niet alleen dat de
+    // korte-termijn-slope toevallig vlak is. Zie TAIL_MIN_DECLINE_FROM_PEAK_MMOL.
+    var maxBgSeen: Double = 0.0,
+
     // state machine
     var state: PeakPredictionState = PeakPredictionState.IDLE,
     var confirmCounter: Int = 0
@@ -1370,6 +1376,18 @@ private const val MICRO_MIN_CONS = 0.45
 // ─────────────────────────────────────────────
 private const val EARLY_RESET_ACCEL = -0.02   // zodra accel negatief wordt (licht)
 private const val EARLY_RESET_SLOPE = 0.00    // of zodra macro slope niet meer positief is
+
+// Minimale, daadwerkelijke daling t.o.v. peakEstimator.maxBgSeen (10/09/2026,
+// analyse gebruiker) — vereist voordat TAIL-suppressie en de WATCHING→
+// CONFIRMED-overgang een "vlakke korte-termijn-slope" mogen interpreteren als
+// "piek voorbij, tijd om af te bouwen". Zonder deze eis werd een bg die een
+// vol uur vlak op ~10,2 mmol bleef hangen (zonder ooit te dalen) hetzelfde
+// behandeld als een bg die écht over de top is: TAIL blokkeerde herhaaldelijk
+// 0,3-0,5U, en peak.state ging naar CONFIRMED terwijl bg niet was gezakt.
+// 0.3 mmol is bewust net boven de typische CGM-meetruis (±0,1-0,2 mmol), zodat
+// dit geen vals-positieve "daling" bij ruis toestaat, maar ook niet onnodig
+// lang wacht op een grotere, overtuigende daling.
+private const val TAIL_MIN_DECLINE_FROM_PEAK_MMOL = 0.3
 
 
 // ── EARLY DOSE CONTROLLER (persistent) ──
@@ -3102,22 +3120,29 @@ private fun computeEarlyDoseDecision(
     sustainT1BoostActive: Boolean = false
 ): EarlyDoseDecision {
 
+    // NB: boostCommitNr geeft hier bewust earlyDose.boostCommitCount door (de
+    // lopende, persistente teller), niet 0 — anders toont de CSV-log
+    // (early_boost_count) een misleidende "reset naar 0" op elke cyclus die
+    // hier vroegtijdig terugkeert, terwijl de teller zelf niet is gereset.
+    // Zie analyse 10/09/2026 (gebruiker): dit maakte het lastig om in de log
+    // te onderscheiden tussen "EarlyBoost echt gereset" en "deze cyclus
+    // vuurt toevallig niet, teller blijft gewoon staan".
     if (ctx.consistency < config.episodeMinConsistency) {
-        return EarlyDoseDecision(false, 0, 0.0, 0.0, "EARLY: low consistency", remainingDebtU = episodeHypoDebtU)
+        return EarlyDoseDecision(false, 0, 0.0, 0.0, "EARLY: low consistency", remainingDebtU = episodeHypoDebtU, boostCommitNr = earlyDose.boostCommitCount)
     }
 
     // Fastlane veto: CGM laat al dip zien → geen early push
     if (ctx.recentDelta5m <= -0.06 || ctx.recentSlope <= -0.20) {
-        return EarlyDoseDecision(false, 0, 0.0, 0.0, "EARLY blocked: fastlane dip", remainingDebtU = episodeHypoDebtU)
+        return EarlyDoseDecision(false, 0, 0.0, 0.0, "EARLY blocked: fastlane dip", remainingDebtU = episodeHypoDebtU, boostCommitNr = earlyDose.boostCommitCount)
     }
 
     if ((bgZone == BgZone.LOW || bgZone == BgZone.IN_RANGE) && ctx.iobRatio >= 0.55) {
-        return EarlyDoseDecision(false, 0, 0.0, 0.0, "EARLY blocked: low BG zone", remainingDebtU = episodeHypoDebtU)
+        return EarlyDoseDecision(false, 0, 0.0, 0.0, "EARLY blocked: low BG zone", remainingDebtU = episodeHypoDebtU, boostCommitNr = earlyDose.boostCommitCount)
     }
 
 
     if (peak.state == PeakPredictionState.CONFIRMED) {
-        return EarlyDoseDecision(false, 0, 0.0, 0.0, "EARLY: peak confirmed", remainingDebtU = episodeHypoDebtU)
+        return EarlyDoseDecision(false, 0, 0.0, 0.0, "EARLY: peak confirmed", remainingDebtU = episodeHypoDebtU, boostCommitNr = earlyDose.boostCommitCount)
     }
 
     val slopeScore = smooth01((ctx.slope - 0.20) / (1.20 - 0.20))
@@ -3367,22 +3392,32 @@ private fun computeEarlyDoseDecision(
 
     // ── High-BG continuation: hervatting van earlyBoost na stage3 ───────────
     // Na stage3 is de earlyBoost normaal klaar (geen stage4+ gedefinieerd).
-    // Maar bij extreme maaltijden (BG >= 12.0 mmol en stijgend) is de
+    // Maar bij extreme maaltijden (BG >= 10.5 mmol en stijgend) is de
     // gebruikelijke 3 commits onvoldoende.
+    //
+    // Drempel verlaagd van 12.0 naar 10.5 (10/09/2026, analyse gebruiker):
+    // extraCommitsFromBgRise hierboven geeft al vanaf bgNow >= 10.5 extra
+    // commit-budget vrij, maar highBgContinuation kon dat budget pas
+    // gebruiken vanaf 12.0 — een gat van 10.5-12.0 mmol waarin het budget
+    // wel bestond maar niets het kon afvuren. Praktijkvoorbeeld: maaltijd
+    // 10/09 12:04, bg bleef 10.0-10.2 (net onder 12.0) terwijl slope nog
+    // ~6.7 was — earlyBoost stopte na stage3 en het (veel voorzichtigere)
+    // commit-pad moest de rest van een nog stevig stijgende bg alleen
+    // opvangen. Nu consistent met de 10.5-drempel van extraCommitsFromBgRise.
     //
     // Hervatting toegestaan als:
     //   1. stage3 al gevuurd (earlyDose.stage >= 3)
-    //   2. BG >= 12.0 mmol — expliciet hoge glycemie, niet een normale piek
+    //   2. BG >= 10.5 mmol — expliciet hoge glycemie, niet een normale piek
     //   3. slope >= 2.0 — stijging is nog actief en substantieel
     //   4. iobRatio < 0.80 — enige ruimte voor meer insuline
-    //      (veilig: bij BG=12 heeft een extra commit van 2.45U nauwelijks
+    //      (veilig: bij BG=10.5-12 heeft een extra commit van 2.45U nauwelijks
     //       hypo-risico — maximale BG-daling 2.45×4.7=11.5 mmol over 90 min,
     //       maar de bestaande iobRatio-penalty in de dosisberekening remt dit af)
     //   5. Minimaal 8 min na de laatste commit (cooldown, iets langer dan normaal)
     //   6. boostCommitCount < effectiveMaxCommits (de dynamische grens respecteren)
     val highBgContinuation =
         earlyDose.stage >= 3 &&
-            ctx.input.bgNow >= 12.0 &&
+            ctx.input.bgNow >= 10.5 &&
             ctx.slope >= 2.0 &&
             ctx.iobRatio < 0.80 &&
             minutesSinceLastFire >= 8 &&
@@ -3427,11 +3462,11 @@ private fun computeEarlyDoseDecision(
         else -> 0
     }
     if (earlyDose.stage == 1 && conf >= stage2Min && minutesSinceLastFire >= minWachttijdStage2 && !allowLarge) {
-        return EarlyDoseDecision(false, 0, conf, 0.0, "EARLY: stage2 blocked (trend=${trend.state})", remainingDebtU = episodeHypoDebtU)
+        return EarlyDoseDecision(false, 0, conf, 0.0, "EARLY: stage2 blocked (trend=${trend.state})", remainingDebtU = episodeHypoDebtU, boostCommitNr = earlyDose.boostCommitCount)
     }
 
     if (stageToFire == 0) {
-        return EarlyDoseDecision(false, 0, conf, 0.0, "EARLY: no fire", remainingDebtU = episodeHypoDebtU)
+        return EarlyDoseDecision(false, 0, conf, 0.0, "EARLY: no fire", remainingDebtU = episodeHypoDebtU, boostCommitNr = earlyDose.boostCommitCount)
     }
 
     val (minF, maxF) = when (stageToFire) {
@@ -3962,12 +3997,21 @@ private fun evaluatePostPeak(
         ctx.recentSlope >= 0.35 ||
             ctx.recentDelta5m >= 0.08
 
+    // 10/09/2026 (analyse gebruiker) — fastPlateau alleen (vlakke korte-
+    // termijn-slope) kan niet onderscheiden "bg is echt over de top en zakt"
+    // van "bg zit vast op een te hoog niveau zonder te dalen". Eis daarom ook
+    // een daadwerkelijke daling t.o.v. het hoogste punt van deze episode
+    // (peakEstimator.maxBgSeen) — zie kdoc bij TAIL_MIN_DECLINE_FROM_PEAK_MMOL.
+    val declinedFromPeak =
+        (peakEstimator.maxBgSeen - ctx.input.bgNow) >= TAIL_MIN_DECLINE_FROM_PEAK_MMOL
+
     val tailSuppress =
         episodeLike && reliable &&
             peak.riseSinceStart >= 1.0 &&
             ctx.deltaToTarget >= 1.0 &&
             ctx.iobRatio >= config.tailSuppressIobMin &&
             fastPlateau &&
+            declinedFromPeak &&
             !risingAgainTail
 
     // ✅ GECONSOLIDEERD (30/06/2026): predictieve IOB-rem via computePeakBrake().
@@ -4507,7 +4551,7 @@ class FCLvNext(
     // "vNN-jjjj-mm-dd-uumm" (aanmaaktijdstip, geen omschrijving; die van
     // eerdere versies raakten toch achter). Alleen als het écht relevant
     // is een korte omschrijving toevoegen.
-    private val FCL_CODE_VERSION = "v108-2026-09-09-1157"
+    private val FCL_CODE_VERSION = "v112-2026-09-10-1900"
 
     // ── Restart-detectie (16/07/2026) ─────────────────────────────────
     // true op precies de EERSTE cyclus na het (her)starten van dit class-
@@ -4799,6 +4843,9 @@ class FCLvNext(
     private val TAPER_STATE_RECENT_FRONTLOAD_DOSE_U_KEY = "recent_frontload_dose_u"
     private val TAPER_STATE_RECENT_FRONTLOAD_AT_KEY = "recent_frontload_at_ms"
     private val TAPER_STATE_RECENT_EPISODE_COMMITS_KEY = "recent_episode_commits_json"
+    // 10/09/2026 (analyse gebruiker, Rick's maaltijd 10-9 11:49) — zie kdoc bij
+    // lastKnownCommitDoseFinalU hieronder voor de aanleiding.
+    private val TAPER_STATE_LAST_COMMIT_DOSE_FINAL_U_KEY = "last_known_commit_dose_final_u"
 
     private fun loadEpisodePeakCommitU(): Double =
         context.getSharedPreferences(TAPER_STATE_PREFS, android.content.Context.MODE_PRIVATE)
@@ -4815,6 +4862,14 @@ class FCLvNext(
     private fun saveLateDecayMul(value: Double) =
         context.getSharedPreferences(TAPER_STATE_PREFS, android.content.Context.MODE_PRIVATE)
             .edit().putFloat(TAPER_STATE_LATE_DECAY_MUL_KEY, value.toFloat()).apply()
+
+    private fun loadLastKnownCommitDoseFinalU(): Double =
+        context.getSharedPreferences(TAPER_STATE_PREFS, android.content.Context.MODE_PRIVATE)
+            .getFloat(TAPER_STATE_LAST_COMMIT_DOSE_FINAL_U_KEY, 0.0f).toDouble()
+
+    private fun saveLastKnownCommitDoseFinalU(value: Double) =
+        context.getSharedPreferences(TAPER_STATE_PREFS, android.content.Context.MODE_PRIVATE)
+            .edit().putFloat(TAPER_STATE_LAST_COMMIT_DOSE_FINAL_U_KEY, value.toFloat()).apply()
 
     private fun loadEpisodeBoostBudgetU(): Double =
         context.getSharedPreferences(TAPER_STATE_PREFS, android.content.Context.MODE_PRIVATE)
@@ -5089,6 +5144,39 @@ class FCLvNext(
     private var lastKnownLateDecayMul: Double = loadLateDecayMul()
         set(value) {
             if (field != value) saveLateDecayMul(value)
+            field = value
+        }
+
+    // ── Persistente commitDoseFinal-referentie voor de taper-clamp (10/09/2026,
+    // analyse gebruiker n.a.v. Rick's maaltijd 10-9 11:49) ───────────────────
+    // AANLEIDING: de "Universele taper-clamp" verderop gebruikt bij
+    // episodeCommitCount>1 als plafond-referentie `logRow.commitDoseFinal` —
+    // maar logRow wordt ELKE cyclus vers aangemaakt, en commitDoseFinal wordt
+    // alleen gevuld als de commit-tak die cyclus ook echt draait. Op een
+    // cyclus waar het commit-pad stilligt (bv. commitCooldown, net als bij
+    // lastKnownLateDecayMul hierboven) staat commitDoseFinal dus op 0,00 —
+    // niet omdat er niks nodig was, maar omdat er simpelweg niet naar
+    // gekeken is. De clamp las dat als "de getemperde commit was zo goed als
+    // niks" en zette het plafond op de bodemwaarde (config.minCommitDose×0,5
+    // = 0,15U), ongeacht wat het energiemodel (finalDose) zelf berekende.
+    //
+    // Concreet, Rick's csv 10/09 12:04-12:59: rijen 678/683/688/689 (elk een
+    // cyclus zonder commit) kregen zo commandedDose=0,15U geknepen terwijl
+    // finalDose 2,86/2,34/0,72/0,70U was — zonder dat ook maar 1 guard-vlag
+    // afging, want dit pad zet er geen. 175 minuten aanhoudende onderdosering
+    // tijdens een 6,0→15,2+ mmol-stijging was het gevolg.
+    //
+    // OPLOSSING: exact hetzelfde patroon als lastKnownLateDecayMul hierboven
+    // — een toegewijd, over cycli (en herstarts) heen bewaard veld, alleen
+    // bijgewerkt wanneer de commit-tak ook echt draait (zie de toekenning
+    // vlak na "logRow.commitDoseFinal = committedDose" verderop). De
+    // taper-clamp leest voortaan dit veld i.p.v. het per-cyclus resettende
+    // logRow.commitDoseFinal — zo blijft de oorspronkelijke 14/08-bescherming
+    // (zie kdoc bij de clamp zelf) intact, maar vuurt hij niet langer per
+    // ongeluk op cycli waar er gewoon geen commit was.
+    private var lastKnownCommitDoseFinalU: Double = loadLastKnownCommitDoseFinalU()
+        set(value) {
+            if (field != value) saveLastKnownCommitDoseFinalU(value)
             field = value
         }
     // 11/07/2026 — puur diagnostisch, geen invloed op dosering. Vastgelegd
@@ -5401,6 +5489,7 @@ class FCLvNext(
             peakEstimator.active = true
             peakEstimator.startedAt = now
             peakEstimator.startBg = ctx.input.bgNow
+            peakEstimator.maxBgSeen = ctx.input.bgNow
             peakEstimator.maxSlope = ctx.slope.coerceAtLeast(0.0)
             peakEstimator.maxAccel = ctx.acceleration.coerceAtLeast(0.0)
             peakEstimator.posSlopeArea = 0.0
@@ -5489,6 +5578,7 @@ class FCLvNext(
             episodeAigfBFrozen = false
             episodePeakCommitU = 0.0
             lastKnownLateDecayMul = 1.0
+            lastKnownCommitDoseFinalU = 0.0
             episodeHypoDebtU = 0.0
             postHypoBrakeActive = false
             postHypoBrakeBg = 0.0
@@ -5536,6 +5626,13 @@ class FCLvNext(
         val dtH = (dtMin / 60.0).coerceAtMost(0.2) // cap dt om rare jumps te dempen
 
         peakEstimator.lastAt = now
+
+        // Bijhouden los van dtH — ook bij dtH==0 is de huidige bg-meting
+        // geldig; dit hoeft niet gekoppeld te zijn aan de slope/momentum-
+        // rate-berekeningen hieronder.
+        if (peakEstimator.active) {
+            peakEstimator.maxBgSeen = maxOf(peakEstimator.maxBgSeen, ctx.input.bgNow)
+        }
 
         if (peakEstimator.active && dtH > 0.0) {
             peakEstimator.maxSlope = maxOf(peakEstimator.maxSlope, ctx.slope.coerceAtLeast(0.0))
@@ -5670,6 +5767,14 @@ class FCLvNext(
         val nearPredictedTop =
             (predictedPeak - bgNow) <= 0.8
 
+        // 10/09/2026 (analyse gebruiker) — zelfde eis als bij tailSuppress
+        // (zie TAIL_MIN_DECLINE_FROM_PEAK_MMOL): "vlak" mag pas als "piek
+        // bevestigd" gelden als bg ook echt gedaald is t.o.v. het hoogste
+        // punt van de episode, anders bevestigt het model een piek terwijl
+        // de bg nog gewoon op een te hoog niveau vastzit.
+        val declinedFromPeakForConfirm =
+            (peakEstimator.maxBgSeen - bgNow) >= TAIL_MIN_DECLINE_FROM_PEAK_MMOL
+
 // 3) State machine
         when (peakEstimator.state) {
 
@@ -5693,7 +5798,8 @@ class FCLvNext(
 
             PeakPredictionState.WATCHING -> {
                 // Confirm only when we're near the top AND flattening is real (not one random sample)
-                if (peakEstimator.active && nearPredictedTop && flattening) {
+                // AND bg daadwerkelijk gedaald is t.o.v. het episode-maximum (declinedFromPeakForConfirm)
+                if (peakEstimator.active && nearPredictedTop && flattening && declinedFromPeakForConfirm) {
                     peakEstimator.confirmCounter += 1
                     if (peakEstimator.confirmCounter >= 2) {   // 2 cycles confirm hysteresis
                         peakEstimator.state = PeakPredictionState.CONFIRMED
@@ -6238,6 +6344,7 @@ class FCLvNext(
             episodeAigfBFrozen = false
             episodePeakCommitU = 0.0
             lastKnownLateDecayMul = 1.0
+            lastKnownCommitDoseFinalU = 0.0
             episodeHypoDebtU = 0.0
             postHypoBrakeActive = false
             postHypoBrakeBg = 0.0
@@ -6291,6 +6398,7 @@ class FCLvNext(
             episodeAigfBFrozen = false
             episodePeakCommitU = 0.0
             lastKnownLateDecayMul = 1.0
+            lastKnownCommitDoseFinalU = 0.0
             episodeHypoDebtU = 0.0
             postHypoBrakeActive = false
             postHypoBrakeBg = 0.0
@@ -8672,6 +8780,11 @@ class FCLvNext(
                     status.append("AIGF-B COMMIT BOOST ×${"%.2f".format(aigfCommitBoost)} (aigf-b=${"%.1f".format(episodeAigfBPct)})\n")
                 }
                 logRow.commitDoseFinal = committedDose
+                // 10/09/2026 — zie kdoc bij lastKnownCommitDoseFinalU-declaratie:
+                // alleen HIER bijwerken (dus alleen als deze tak echt draait), zodat
+                // de taper-clamp verderop op een cyclus zonder commit de laatst
+                // bekende, echte waarde erft i.p.v. een per-cyclus-default van 0,00.
+                lastKnownCommitDoseFinalU = committedDose
                 // ── Piek-anker alleen bij een "echte" commit (15/07/2026) ──
                 // Zie kdoc bij PEAK_ANCHOR_THRESHOLD_FRAC hierboven — een kleine
                 // correctie (bijv. 20% van maxSMB) mag het referentiepunt voor de
@@ -9411,12 +9524,29 @@ class FCLvNext(
         // scenario gebouwd is) — geen garantie dat de getemperde waarde altijd de
         // optimale dosis is. Zie "als dit ongewenst gedrag geeft" in de
         // leveringsbeschrijving.
+        //
+        // BUGFIX (10/09/2026, analyse gebruiker n.a.v. Rick's maaltijd 10-9
+        // 11:49): de episodeCommitCount>1-tak hierboven gebruikte tot nu toe
+        // logRow.commitDoseFinal — maar logRow wordt ELKE cyclus vers
+        // aangemaakt, dus commitDoseFinal staat op 0,00 op elke cyclus waar
+        // de commit-tak niet draait (bv. commitCooldown), niet alleen op
+        // cycli waar een echte commit naar 0 werd afgebouwd. Gevolg: elke
+        // niet-commit-cyclus na de eerste commit kreeg een plafond van
+        // exact config.minCommitDose×0,5 = 0,15U, ongeacht wat finalDose
+        // zelf berekende. Rick's csv (10/09 12:04-12:59, rijen 678/683/
+        // 688/689): commandedDose steeds naar 0,15U geknepen terwijl
+        // finalDose 2,86/2,34/0,72/0,70U was — 175 minuten aanhoudende
+        // onderdosering tijdens een 6,0→15,2+ mmol-stijging, zonder dat één
+        // guard-vlag afging (dit pad zet er geen). Fix: gebruik
+        // lastKnownCommitDoseFinalU (zie kdoc bij de declaratie) — hetzelfde
+        // "overleeft de cyclus"-patroon als lastKnownLateDecayMul hierboven
+        // al had, nu ook hier.
         if (commandedDose > 0.0 && !lastBgStijgtNogFors && !commandedDoseIsFromCommit) {
             val taperCeiling = when {
                 episodePeakCommitU > 0.0 ->
                     (episodePeakCommitU * lateDecayMul).coerceAtLeast(config.minCommitDose * 0.5)
                 episodeCommitCount > 1 ->
-                    logRow.commitDoseFinal.coerceAtLeast(config.minCommitDose * 0.5)
+                    lastKnownCommitDoseFinalU.coerceAtLeast(config.minCommitDose * 0.5)
                 else -> null
             }
             if (taperCeiling != null && commandedDose > taperCeiling) {
@@ -9426,6 +9556,7 @@ class FCLvNext(
                     "TAPER CLAMP: ${"%.2f".format(before)}->${"%.2f".format(commandedDose)}U " +
                         "(episodePeakCommitU=${"%.2f".format(episodePeakCommitU)} " +
                         "commitDoseFinal=${"%.2f".format(logRow.commitDoseFinal)} " +
+                        "lastKnownCommitDoseFinalU=${"%.2f".format(lastKnownCommitDoseFinalU)} " +
                         "xlateDecayMul=${"%.2f".format(lateDecayMul)})\n"
                 )
             }

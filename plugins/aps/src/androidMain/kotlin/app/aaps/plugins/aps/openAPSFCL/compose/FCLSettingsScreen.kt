@@ -1,5 +1,6 @@
 package app.aaps.plugins.aps.openAPSFCL.compose
 
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
@@ -20,6 +21,8 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.health.connect.client.HealthConnectClient
+import androidx.health.connect.client.PermissionController
 import app.aaps.core.interfaces.sharedPreferences.SP
 import app.aaps.core.keys.DoubleKey
 import app.aaps.core.keys.StringKey
@@ -28,6 +31,8 @@ import app.aaps.core.ui.compose.pickers.TimeWheelPicker
 import app.aaps.core.ui.compose.pickers.WeekDaySelector
 import app.aaps.plugins.aps.openAPSFCL.vnext.FCL_STATUS_VERSION
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.DFLearner
+import app.aaps.plugins.aps.openAPSFCL.vnext.database.FCLCycleLogRepository
+import app.aaps.plugins.aps.openAPSFCL.vnext.healthconnect.FclHealthConnectPermissions
 import app.aaps.plugins.aps.openAPSFCL.vnext.lang.FclStrings
 import app.aaps.plugins.aps.openAPSFCL.update.FclCsvUploader
 import app.aaps.plugins.aps.openAPSFCL.update.FclUpdateChecker
@@ -1116,6 +1121,11 @@ fun FCLSettingsScreen(
             val coroutineScope = rememberCoroutineScope()
             var expandedCsvUpload by remember { mutableStateOf(false) }
             var uploading by remember { mutableStateOf(false) }
+            // 10/09/2026 (de gebruiker): apart van 'uploading' zodat de knoptekst
+            // het verversen en het versturen kan onderscheiden — de gebruiker
+            // zag eerder geen verschil en wist niet of hij nog even moest wachten
+            // op een paar extra cycli voordat de upload de laatste data meenam.
+            var refreshingCsv by remember { mutableStateOf(false) }
             var uploadResultText by remember { mutableStateOf<String?>(null) }
             var uploadIsError by remember { mutableStateOf(false) }
 
@@ -1125,9 +1135,10 @@ fun FCLSettingsScreen(
                 onToggle = { expandedCsvUpload = !expandedCsvUpload }
             ) {
                 Text(
-                    "Stuurt je meest recente 7-dagen-logboek naar de gedeelde " +
-                        "Drive-map, zodat die bekeken kan worden zonder dat je " +
-                        "zelf een bestand hoeft te versturen.",
+                    "Ververst het logboek eerst t/m de laatst beschikbare cyclus " +
+                        "en stuurt het daarna naar de gedeelde Drive-map, zodat die " +
+                        "bekeken kan worden zonder dat je zelf een bestand hoeft te " +
+                        "versturen.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -1143,6 +1154,21 @@ fun FCLSettingsScreen(
                         uploading = true
                         uploadResultText = null
                         coroutineScope.launch {
+                            // Eerst een verse export t/m de laatste cyclus (10/09/2026,
+                            // de gebruiker) — voorheen kon de knop tot een uur oude
+                            // data versturen, omdat het logboek anders alleen 1x/uur
+                            // automatisch werd bijgewerkt (zie maybeExportCsv() in
+                            // FCLCycleLogRepository.kt). Fouten hier zijn niet fataal:
+                            // bij een mislukte export wordt gewoon het bestaande
+                            // bestand op disk geüpload (zelfde gedrag als voorheen).
+                            refreshingCsv = true
+                            try {
+                                FCLCycleLogRepository(ctx, preferences).exportCsvLast7Days()
+                            } catch (e: Exception) {
+                                android.util.Log.w("FCLSettingsScreen", "Verversen CSV mislukt vóór upload, ga door met bestaand bestand", e)
+                            }
+                            refreshingCsv = false
+
                             when (val result = FclCsvUploader.upload(ctx)) {
                                 is FclCsvUploader.Result.Success -> {
                                     uploadIsError = false
@@ -1167,7 +1193,112 @@ fun FCLSettingsScreen(
                     enabled = !uploading,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(if (uploading) "Bezig met uploaden…" else "Upload CSV")
+                    Text(
+                        when {
+                            refreshingCsv -> "Logboek verversen…"
+                            uploading     -> "Bezig met uploaden…"
+                            else          -> "Upload CSV"
+                        }
+                    )
+                }
+            }
+        }
+
+        // ── Health Connect (10/09/2026, de gebruiker) ────────────────────
+        // Voor horloges die hun stappen/hartslag niet al via de AAPS-Wear-app
+        // leveren — Garmin kan die app sowieso niet draaien, maar ook een
+        // Samsung Galaxy Watch (Wear OS) kan hierbij horen als Samsung Health
+        // naar Health Connect synct in plaats van de AAPS-app rechtstreeks.
+        // Zie EstimatedCaloriesCalculator.kt voor de geschiedenis van het
+        // bestaande Wear-sensorpad (bijv. een OnePlus Watch met de AAPS-app).
+        // Dit kaartje regelt alleen de toestemming; het uitlezen zelf
+        // gebeurt stil op de achtergrond bij elke APS-cyclus, zie
+        // FclHealthConnectSync.kt.
+        run {
+            val coroutineScope = rememberCoroutineScope()
+            var expandedHealthConnect by remember { mutableStateOf(false) }
+            var hcAvailable by remember { mutableStateOf(true) }
+            var checkingStatus by remember { mutableStateOf(true) }
+            var grantedPermissions by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+            suspend fun refreshStatus() {
+                checkingStatus = true
+                hcAvailable = HealthConnectClient.getSdkStatus(ctx) == HealthConnectClient.SDK_AVAILABLE
+                grantedPermissions = if (hcAvailable) {
+                    try {
+                        HealthConnectClient.getOrCreate(ctx).permissionController.getGrantedPermissions()
+                    } catch (e: Exception) {
+                        emptySet()
+                    }
+                } else {
+                    emptySet()
+                }
+                checkingStatus = false
+            }
+
+            // RE-VERIFIEERT na een toestemmingsaanvraag altijd de echte bron
+            // (client.permissionController), i.p.v. blind te vertrouwen op
+            // wat de launcher teruggeeft — zelfde voorzichtigheid als AIMI's
+            // implementatie (AIMIHealthConnectPermissionActivityMTR.kt).
+            val requestPermissionLauncher = rememberLauncherForActivityResult(
+                contract = PermissionController.createRequestPermissionResultContract()
+            ) {
+                coroutineScope.launch { refreshStatus() }
+            }
+
+            FCLSection(
+                title = "Health Connect (Garmin e.d.)",
+                expanded = expandedHealthConnect,
+                onToggle = { expandedHealthConnect = !expandedHealthConnect }
+            ) {
+                LaunchedEffect(Unit) { refreshStatus() }
+
+                Text(
+                    "Voor horloges die hun stappen/hartslag niet al via de AAPS-app op " +
+                        "het horloge zelf doorgeven. Bijvoorbeeld een Garmin (kan die app " +
+                        "helemaal niet draaien), maar ook een Samsung Galaxy Watch als " +
+                        "Samsung Health de gegevens naar Health Connect stuurt. Werkt de " +
+                        "AAPS-app op je horloge al goed (zoals bij een OnePlus Watch), dan " +
+                        "hoef je dit niet te gebruiken.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                when {
+                    checkingStatus -> {
+                        Text("Status controleren…", style = MaterialTheme.typography.bodySmall)
+                    }
+
+                    !hcAvailable -> {
+                        Text(
+                            "Health Connect is niet beschikbaar op dit toestel.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+
+                    FclHealthConnectPermissions.hasAllPermissions(grantedPermissions) -> {
+                        Text(
+                            "✅ Gekoppeld — stappen en hartslag worden uitgelezen.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+
+                    else -> {
+                        val missing = FclHealthConnectPermissions.getMissingPermissions(grantedPermissions)
+                        Text(
+                            "Ontbreekt: " + missing.joinToString(", ") { FclHealthConnectPermissions.displayName(it) },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                        Button(
+                            onClick = { requestPermissionLauncher.launch(FclHealthConnectPermissions.STEPS_AND_HR_PERMISSIONS) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Toegang verlenen")
+                        }
+                    }
                 }
             }
         }

@@ -42,6 +42,19 @@
     <!-- To receive data from Aidex -->
     <uses-permission android:name="com.microtechmd.cgms.aidex.permissions.RECEIVE_BG_ESTIMATE" />
 
+    <!-- Health Connect (10/09/2026, de gebruiker) — stappen/hartslag voor
+         niet-Wear OS-horloges (Garmin e.d.). Zie
+         FclHealthConnectPermissions.kt/FclHealthConnectSync.kt. Bewust
+         alleen stappen+hartslag, geen slaap/HRV/temperatuur — zie kdoc
+         daar voor waarom. -->
+    <uses-permission android:name="android.permission.health.READ_STEPS" />
+    <uses-permission android:name="android.permission.health.READ_HEART_RATE" />
+
+    <!-- Health Connect-beschikbaarheid detecteren (pakket-zichtbaarheid vanaf Android 11). -->
+    <queries>
+        <package android:name="com.google.android.apps.healthdata" />
+    </queries>
+
     <application
         android:name="app.aaps.MainApp"
         android:allowBackup="true"
@@ -80,6 +93,30 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Health Connect rationale-scherm (10/09/2026, de gebruiker) — VEREIST,
+             niet optioneel: zonder deze activity + activity-alias opent Health
+             Connect's eigen toestemmingsscherm helemaal niet. Zie kdoc bij
+             FclHealthConnectRationaleActivity.kt voor de volledige uitleg
+             (incl. bron: developer.android.com/health-and-fitness/health-connect/get-started). -->
+        <activity
+            android:name="app.aaps.plugins.aps.openAPSFCL.vnext.healthconnect.FclHealthConnectRationaleActivity"
+            android:exported="true"
+            android:theme="@style/AppTheme">
+            <intent-filter>
+                <action android:name="androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE" />
+            </intent-filter>
+        </activity>
+        <activity-alias
+            android:name="app.aaps.plugins.aps.openAPSFCL.vnext.healthconnect.ViewPermissionUsageActivity"
+            android:exported="true"
+            android:targetActivity="app.aaps.plugins.aps.openAPSFCL.vnext.healthconnect.FclHealthConnectRationaleActivity"
+            android:permission="android.permission.START_VIEW_PERMISSION_USAGE">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW_PERMISSION_USAGE" />
+                <category android:name="android.intent.category.HEALTH_PERMISSIONS" />
+            </intent-filter>
+        </activity-alias>
 
         <!-- Powers the screen on for a background alarm without USE_FULL_SCREEN_INTENT.
              Fired by AlarmManager.setAlarmClock() from AlarmNotificationManager. -->

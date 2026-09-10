@@ -123,6 +123,9 @@ kotlin {
                 implementation(libs.androidx.work.runtime)
                 implementation(libs.org.slf4j.api)
                 implementation(libs.net.danlew.android.joda)
+                // Health Connect — stappen/hartslag voor niet-Wear OS-horloges (Garmin e.d.).
+                // Zie FclHealthConnectPermissions.kt/FclHealthConnectSync.kt.
+                implementation(libs.androidx.health.connect.client)
                 // APS (it should be androidTestImplementation but it doesn't work)
                 runtimeOnly(libs.org.mozilla.rhino)
 
