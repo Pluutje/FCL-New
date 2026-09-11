@@ -238,6 +238,9 @@ dependencies {
     implementation(libs.androidx.wear.compose.foundation)
 
     implementation(libs.com.google.android.gms.playservices.wearable)
+    // ActivityTypeListener.kt (06/07/2026, Ecko) gebruikt ActivityRecognitionClient —
+    // stond nog niet hier, zie kdoc bij die klasse ("VEREIST, nog niet toegevoegd").
+    implementation(libs.com.google.android.gms.playservices.location)
     implementation(files("${rootDir}/wear/libs/hellocharts-library-1.5.8.aar"))
 
     // Declared here rather than inherited: :shared:impl used to export it, and stopped when it became

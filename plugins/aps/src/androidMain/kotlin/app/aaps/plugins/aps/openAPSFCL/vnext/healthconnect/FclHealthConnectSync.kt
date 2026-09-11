@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.records.HeartRateRecord
+import androidx.health.connect.client.records.HeartRateRecord.Sample
 import androidx.health.connect.client.records.StepsRecord
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
@@ -58,6 +59,20 @@ object FclHealthConnectSync {
     // (core/data/.../model/SC.kt), zelfde vensters als het Wear-sensorpad
     // al jaren gebruikt.
     private val STEP_WINDOWS_MIN = intArrayOf(5, 10, 15, 30, 60, 180)
+
+    // Terugval-vensters voor hartslag (11/09/2026, Rick) — AANLEIDING: bij
+    // stappen wordt met STEP_WINDOWS_MIN hierboven altijd een breed venster
+    // (180 min) opgehaald, dus een trage Garmin-sync mist nooit een cyclus.
+    // syncHeartRate() vroeg tot nu toe altijd maar een hard venster van 5
+    // minuten op — kwam Garmin's HR-data net niet binnen dat venster, dan
+    // werd er STIL niets geschreven (samples.isEmpty() -> return), cyclus na
+    // cyclus, want horloge-apps schrijven hartslag doorgaans minder vaak naar
+    // Health Connect weg dan de lopende stappenteller. Zelfde "één brede
+    // read, lokaal versmallen"-aanpak als bij stappen, maar dan andersom: bij
+    // verse data (5 min heeft al iets) verandert er niets aan de kwaliteit —
+    // pas als dat venster leeg is, valt hij terug op een breder venster, tot
+    // en met 60 minuten.
+    private val HR_FALLBACK_WINDOWS_MIN = intArrayOf(5, 15, 30, 60)
 
     private var lastRunAtMs: Long = 0L
     private val running = AtomicBoolean(false)
@@ -144,26 +159,46 @@ object FclHealthConnectSync {
 
     private suspend fun syncHeartRate(client: HealthConnectClient, persistenceLayer: PersistenceLayer) {
         val now = Instant.now()
-        val windowMinutes = 5L
+        val widestWindowMin = HR_FALLBACK_WINDOWS_MIN.max()
 
+        // Eén request voor het breedste venster, zelfde patroon als
+        // syncSteps() hierboven — scheelt aparte Health Connect-aanroepen
+        // per terugval-venster.
         val records = try {
             client.readRecords(
                 ReadRecordsRequest(
                     recordType = HeartRateRecord::class,
-                    timeRangeFilter = TimeRangeFilter.between(now.minusSeconds(windowMinutes * 60), now)
+                    timeRangeFilter = TimeRangeFilter.between(now.minusSeconds(widestWindowMin * 60L), now)
                 )
             ).records
         } catch (e: Exception) {
             Log.d(TAG, "Heart rate read failed: ${e.message}")
             return
         }
+        if (records.isEmpty()) return
 
-        val samples = records.flatMap { it.samples }
-        if (samples.isEmpty()) return // geen fictieve waarde schrijven als er niets gemeten is
+        // Smalste venster met data wint — zie kdoc bij HR_FALLBACK_WINDOWS_MIN
+        // hierboven. Bij verse data (5 min heeft al iets) identiek aan het
+        // oude gedrag; pas bij een leeg 5-min-venster valt dit terug op een
+        // breder venster, i.p.v. die cyclus stil niets te schrijven.
+        var usedWindowMin = -1
+        var samples = emptyList<Sample>()
+        for (windowMin in HR_FALLBACK_WINDOWS_MIN) {
+            val start = now.minusSeconds(windowMin * 60L)
+            val inWindow = records
+                .filter { !it.endTime.isBefore(start) }
+                .flatMap { it.samples }
+            if (inWindow.isNotEmpty()) {
+                usedWindowMin = windowMin
+                samples = inWindow
+                break
+            }
+        }
+        if (samples.isEmpty()) return // geen fictieve waarde schrijven als er niets gemeten is, ook niet binnen 60 min
 
         val averageBpm = samples.map { it.beatsPerMinute }.average()
         val hr = HR(
-            duration = TimeUnit.MINUTES.toMillis(windowMinutes),
+            duration = TimeUnit.MINUTES.toMillis(usedWindowMin.toLong()),
             timestamp = now.toEpochMilli(),
             beatsPerMinute = averageBpm,
             device = "HealthConnect"

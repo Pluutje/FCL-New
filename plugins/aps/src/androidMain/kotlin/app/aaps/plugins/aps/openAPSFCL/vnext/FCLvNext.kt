@@ -1217,6 +1217,30 @@ private const val POST_HYPO_BRAKE_CATCHUP_SLOPE = 2.0  // recentSlope, zelfde dr
 // het scenario af dat de gebruiker signaleerde.
 private const val POST_HYPO_BRAKE_CATCHUP_MIN_BG = 7.0 // mmol/L, ondergrens voor het vangnet
 
+// ── Langere vrijgave-afstand specifiek na een écht recente hypo (11/09/2026, de gebruiker) ──
+// AANLEIDING: 11/9 09:44-13:54 — een BG-rebound na een echte hypo (recentLowArm-pad,
+// dus bg<=4,4 binnen de laatste 45 minuten, niet de lichtere hypoDebtArm-route) door
+// snelle koolhydraten blies met +1,9 mmol in één cyclus (6,4->8,3) al meteen door de
+// normale POST_HYPO_BRAKE_CATCHUP_RISE=1,0 mmol heen. Gevolg: de ratchet liet al in
+// cyclus 2 (5 min na aanslaan) vrijwel volledig los, met 3,13U en 3,77U in de twee
+// cycli erna — IOB piekte tot 7,6U en 50 minuten later volgde een tweede hypo (4,3
+// mmol). De 1,0 mmol-drempel zelf blijft ongewijzigd (zie kdoc hierboven, 24/07): die
+// is bewust laag getuned op een gewone, geleidelijke maaltijd na een lichte
+// hypoDebtArm-right-sizing, en dat scenario komt met deze wijziging niet in de buurt
+// van de nieuwe, hogere drempel.
+//
+// Specifiek ná een bevestigde, echte hypo is een snelle grote rebound juist het
+// risicovolle geval, niet het geruststellende: dezelfde koolhydraten die de rebound
+// veroorzaken hebben op een gegeven moment wel insuline nodig (anders loopt de BG te
+// ver en te lang door), maar niet in één klap binnen één cyclus — vandaar een hogere,
+// aparte rise-drempel die alleen bij recentLowArm geldt. Bij 3,5 mmol duurt volledige
+// vrijgave bij een vergelijkbare rebound ca. 2-3 cycli (10-15 min) i.p.v. 1 cyclus (5
+// min), met een geleidelijk oplopende tussendosis (kwadratische curve, ongewijzigd) —
+// dus geen "alles-of-niets" uitstel, en de genuine hoge BG (hier 12,0 mmol) krijgt nog
+// steeds tijdig volledige correctie om rustig te kunnen dalen. Rest van de ratchet
+// (curve, rampDamp, auto-disarm) blijft voor beide wapen-paden identiek.
+private const val POST_HYPO_BRAKE_CATCHUP_RISE_AFTER_LOW = 3.5  // mmol/L, alleen bij recentLowArm
+
 // AANSCHERPING (25/07/2026) — twee nieuwe, structurele valse triggers
 // gevonden binnen 24 uur na livegang (24/07 20:38-22:28 en 25/07 13:58-lunch,
 // kibbeling met patat): allebei een doodgewone maaltijd, GEEN voorafgaande
@@ -4551,7 +4575,7 @@ class FCLvNext(
     // "vNN-jjjj-mm-dd-uumm" (aanmaaktijdstip, geen omschrijving; die van
     // eerdere versies raakten toch achter). Alleen als het écht relevant
     // is een korte omschrijving toevoegen.
-    private val FCL_CODE_VERSION = "v112-2026-09-10-1900"
+    private val FCL_CODE_VERSION = "v114-2026-09-11-1500"
 
     // ── Restart-detectie (16/07/2026) ─────────────────────────────────
     // true op precies de EERSTE cyclus na het (her)starten van dit class-
@@ -5367,6 +5391,14 @@ class FCLvNext(
     // afremming dus ten onrechte laten wegvallen.
     private var postHypoBrakeRampDamp: Double = 1.0
 
+    // Welk wapen-pad heeft deze wapening geactiveerd (11/09/2026, de gebruiker) — zie
+    // kdoc bij POST_HYPO_BRAKE_CATCHUP_RISE_AFTER_LOW hierboven. Bepaalt welke
+    // rise-drempel de geleidelijke vrijgave verderop gebruikt: true = recentLowArm
+    // (echte recente hypo, hogere drempel), false = alleen hypoDebtArm (lichte
+    // right-sizing, normale drempel). Net als postHypoBrakeRampDamp ÉÉN keer
+    // vastgelegd bij het aanslaan, niet herberekend.
+    private var postHypoBrakeArmedByRecentLow: Boolean = false
+
     // ── Sustained Rise tracking ───────────────────────────────────────────
     // Telt hoeveel minuten de slope al aanhoudend boven de drempel is.
     // Niet gereset bij episode-grenzen — meet puur de actuele BG-trend.
@@ -5583,6 +5615,7 @@ class FCLvNext(
             postHypoBrakeActive = false
             postHypoBrakeBg = 0.0
             postHypoBrakeArmedAt = null
+            postHypoBrakeArmedByRecentLow = false
             episodePeakRecentSlope = 0.0
             rapidDecelLocked = false
             rapidDecelConfirm = 0
@@ -6349,6 +6382,7 @@ class FCLvNext(
             postHypoBrakeActive = false
             postHypoBrakeBg = 0.0
             postHypoBrakeArmedAt = null
+            postHypoBrakeArmedByRecentLow = false
             episodePeakRecentSlope = 0.0
             rapidDecelLocked = false
             rapidDecelConfirm = 0
@@ -6403,6 +6437,7 @@ class FCLvNext(
             postHypoBrakeActive = false
             postHypoBrakeBg = 0.0
             postHypoBrakeArmedAt = null
+            postHypoBrakeArmedByRecentLow = false
             episodePeakRecentSlope = 0.0
             rapidDecelLocked = false
             rapidDecelConfirm = 0
@@ -7921,6 +7956,7 @@ class FCLvNext(
                     postHypoBrakeActive = false
                     postHypoBrakeBg = 0.0
                     postHypoBrakeArmedAt = null
+                    postHypoBrakeArmedByRecentLow = false
                 }
 
                 val commitNr = episodeCommitCount + 1
@@ -9317,6 +9353,9 @@ class FCLvNext(
             postHypoBrakeActive = true
             postHypoBrakeBg = ctx.input.bgNow
             postHypoBrakeArmedAt = now
+            // 11/09/2026 — zie kdoc bij POST_HYPO_BRAKE_CATCHUP_RISE_AFTER_LOW
+            // hierboven: bepaalt welke rise-drempel de vrijgave verderop gebruikt.
+            postHypoBrakeArmedByRecentLow = recentLowArm
             // 08/09/2026 — zie kdoc bij POST_HYPO_BRAKE_RECENT_AGGRESSION_LOW
             // hierboven. deliveredInLastMinutes() leest alleen VORIGE cycli
             // (deliveryHistory wordt pas ver verderop in deze cyclus bijgewerkt),
@@ -9373,6 +9412,7 @@ class FCLvNext(
             postHypoBrakeActive = false
             episodeHypoDebtU = 0.0
             postHypoBrakeArmedAt = null
+            postHypoBrakeArmedByRecentLow = false
         }
 
         // GELEIDELIJKE VRIJGAVE (08/09/2026, de gebruiker — vervangt de oude
@@ -9397,8 +9437,14 @@ class FCLvNext(
             val slopeOk = ctx.recentSlope >= POST_HYPO_BRAKE_CATCHUP_SLOPE
             val bgFloorOk = ctx.input.bgNow >= POST_HYPO_BRAKE_CATCHUP_MIN_BG
             val before = commandedDose
+            // 11/09/2026 — zie kdoc bij POST_HYPO_BRAKE_CATCHUP_RISE_AFTER_LOW
+            // hierboven: na een écht recente hypo is meer rise nodig voordat de
+            // ratchet volledig loslaat dan na een lichte hypoDebtArm-right-sizing.
+            val catchupRise =
+                if (postHypoBrakeArmedByRecentLow) POST_HYPO_BRAKE_CATCHUP_RISE_AFTER_LOW
+                else POST_HYPO_BRAKE_CATCHUP_RISE
             if (slopeOk && bgFloorOk && riseSinceBrake > 0.001) {
-                val rampX = (riseSinceBrake / POST_HYPO_BRAKE_CATCHUP_RISE).coerceIn(0.0, 1.0)
+                val rampX = (riseSinceBrake / catchupRise).coerceIn(0.0, 1.0)
                 val rampFrac = (rampX * rampX) * postHypoBrakeRampDamp
                 val cap = config.smallCorrectionMaxU +
                     (commandedDose - config.smallCorrectionMaxU).coerceAtLeast(0.0) * rampFrac
@@ -9406,14 +9452,15 @@ class FCLvNext(
                 if (before > commandedDose) {
                     status.append(
                         "POST-HYPO BRAKE GELEIDELIJK: ${"%.2f".format(before)}→${"%.2f".format(commandedDose)}U " +
-                            "(sinds rem ${"%.2f".format(riseSinceBrake)}/${"%.1f".format(POST_HYPO_BRAKE_CATCHUP_RISE)} mmol, " +
+                            "(sinds rem ${"%.2f".format(riseSinceBrake)}/${"%.1f".format(catchupRise)} mmol" +
+                            "${if (postHypoBrakeArmedByRecentLow) " [recent-LOW]" else ""}, " +
                             "rampFrac=${"%.2f".format(rampFrac)}, rampDamp=${"%.2f".format(postHypoBrakeRampDamp)})\n"
                     )
                     logRow.guardPeakLimited = true
                 } else if (rampFrac >= 0.999) {
                     status.append(
                         "POST-HYPO BRAKE GELEIDELIJK VOLLEDIG VRIJ: sinds rem " +
-                            "${"%.2f".format(riseSinceBrake)} mmol gestegen (>=${"%.1f".format(POST_HYPO_BRAKE_CATCHUP_RISE)}), " +
+                            "${"%.2f".format(riseSinceBrake)} mmol gestegen (>=${"%.1f".format(catchupRise)}), " +
                             "geen extra rem meer dit cyclus\n"
                     )
                 }
