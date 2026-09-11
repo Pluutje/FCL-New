@@ -102,6 +102,34 @@ class AutosensDataStoreObject : AutosensDataStore {
         }
     }
 
+    override fun holdsSameData(gv: GV): Boolean {
+        dataLock.withLock {
+            val held = bgReadings.firstOrNull { it.id == gv.id } ?: return false
+            // Compare by copying the three fields every write touches from the incoming row, then using
+            // normal equality. A field list would have to be kept in step with what the calculation
+            // reads; this way a field added to GV later is compared without anyone remembering to, and
+            // the worst a mistake can do is one recalculation too many, never one too few.
+            return held.copy(version = gv.version, dateCreated = gv.dateCreated, ids = gv.ids) == gv
+        }
+    }
+
+    override fun pruneOlderThan(time: Long, aapsLogger: AAPSLogger, dateUtil: DateUtil) {
+        dataLock.withLock {
+            val table = autosensDataTable
+            // Count first, delete afterwards, and delete downwards. removeAt() only marks the slot and
+            // the next size() or keyAt() compacts the array, so removing while walking up would skip
+            // every second entry and copy the tail on every step. This is the same direction
+            // newHistoryData uses at the other end of the table.
+            var doomed = 0
+            while (doomed < table.size() && table.keyAt(doomed) < time) doomed++
+            if (doomed == 0) return
+            for (index in doomed - 1 downTo 0) table.removeAt(index)
+            aapsLogger.debug(LTag.AUTOSENS) {
+                "Pruned $doomed entries older than ${dateUtil.dateAndTimeAndSecondsString(time)} from autosensDataTable. Left: ${table.size()}"
+            }
+        }
+    }
+
     // roundup to whole minute
     override fun roundUpTime(time: Long): Long {
         return if (time % 60000 == 0L) time else (time / 60000 + 1) * 60000
@@ -271,8 +299,16 @@ class AutosensDataStoreObject : AutosensDataStore {
         val newBucketedData = ArrayList<InMemoryGlucoseValue>()
         var currentTime = bgReadings[0].timestamp
         val adjustedTime = adjustToReferenceTime(currentTime)
-        // after adjusting time may be newer. In this case use T-5min
-        currentTime = if (adjustedTime > currentTime) adjustedTime - T.mins(5).msecs() else adjustedTime
+        // Rounding to the 5-minute reference grid can push adjustedTime a little past the real
+        // newest reading (currentTime) - that is normal, harmless rounding, not "no data yet at
+        // this grid point". Only step back a whole bucket when the overshoot is more than rounding
+        // noise (10/09/2026, analyse gebruiker: an overshoot of only 83ms here threw away one full,
+        // really available 5-minute bucket, so the loop kept running on the previous cycle's data -
+        // seen as "loop runs 5 minutes behind, growing to 10" in the field). IRREGULAR_DATA_SEC is
+        // the existing tolerance this file already uses elsewhere for "still the same reading".
+        currentTime =
+            if (adjustedTime - currentTime > T.secs(IRREGULAR_DATA_SEC).msecs()) adjustedTime - T.mins(5).msecs()
+            else adjustedTime
         aapsLogger.debug("Adjusted time " + dateUtil.dateAndTimeAndSecondsString(currentTime))
         while (true) {
             // test if current value is older than current time

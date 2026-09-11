@@ -182,7 +182,7 @@ private enum class BgZone { LOW, IN_RANGE, MID, HIGH, EXTREME }
 private enum class RescueState { IDLE, ARMED, CONFIRMED }
 private enum class PeakPredictionState {IDLE, WATCHING, CONFIRMED }
 private enum class DoseAccessLevel {BLOCKED, MICRO_ONLY, SMALL, NORMAL }
-private enum class ReserveCause {PRE_UNCERTAIN_MEAL, POST_PEAK_TOP, SHORT_TERM_DIP }
+private enum class ReserveCause {PRE_UNCERTAIN_MEAL, POST_PEAK_TOP, SHORT_TERM_DIP, RAW_BG_TURNED_ON_COMMIT }
 
 private data class MealSignal(
     val state: MealState,
@@ -9078,14 +9078,61 @@ class FCLvNext(
                 status.append("POSTPEAK → NO-STASH window\n")
             }
 
+            // C) ✅ NIEUW (10/09/2026, analyse gebruiker n.a.v. 19:39-incident): ruwe
+            // bg al niet meer gestegen, ondanks een commit. AANLEIDING: de bestaande
+            // FALLBACK-OMSLAG-VETO hierboven (ruwe-bg-check) geldt bewust alleen voor
+            // NIET-commit-doses (!commandedDoseIsFromCommit) — een commit is een
+            // grotere, "bevestigde" beslissing, dus die veto raakt hem expres niet.
+            // Maar geen van de bestaande postpeak/reserve-remmen (commitFactor,
+            // tailSuppress, preCommitTop, sensorBlip, peakIobBrake, shortTermDip,
+            // peakTopForming, topForming hierboven) is gebouwd voor een BESCHEIDEN
+            // stijging met lage iobRatio en een nog-niet-WATCHING piekschatter — ze
+            // vereisen allemaal ofwel hoge iobRatio, ofwel een al bevestigde piek,
+            // ofwel een al-negatieve gladgestreken trend.
+            //
+            // Concreet, 19:39 (eigen csv, v112): committedDose=3,44U, door
+            // hypoProtection() teruggebracht naar 1,04U (iobRatio=0,19, peak_state=
+            // IDLE, recentSlope/recentDelta5m nog zwak positief) — maar de RUWE bg
+            // was al gedaald (6,4→6,2). Geen van bovenstaande condities (A/B) ving
+            // dit. Gevolg: bg zakte ~40 min later naar 3,8 mmol met nog 1,48U IOB.
+            //
+            // OPLOSSING: i.p.v. een harde veto (zoals bij de niet-commit-variant)
+            // wordt het bedrag hier — net als bij A/B hierboven — in de reserve
+            // pool gestashed. Mocht dit toch sensorruis blijken en de bg alsnog
+            // fors doorstijgen, dan geeft de bestaande RELEASE-regel (risingAgain-
+            // check, verderop) dit bedrag vanzelf over de eerstvolgende cycli weer
+            // vrij — niets extra's nodig voor dat scenario.
+            //
+            // Bewust beperkt tot commandedDoseIsFromCommit: voor het niet-commit-pad
+            // bestaat de hardere FALLBACK-OMSLAG-VETO al hierboven, dus die gevallen
+            // zijn hier altijd al 0,00 en deze check is daar een no-op.
+            val rawBgAlreadyTurnedOnCommit =
+                if (commandedDoseIsFromCommit) {
+                    val sortedBg = ctx.input.bgHistory.sortedBy { it.first.millis }
+                    if (sortedBg.size >= 2) {
+                        val bgNowRaw = sortedBg[sortedBg.size - 1].second
+                        val bgPrevRaw = sortedBg[sortedBg.size - 2].second
+                        bgNowRaw <= bgPrevRaw + 0.001
+                    } else false
+                } else false
 
-
-            // stash-conditie: dip OF topvorming, maar niet tijdens sterke hernieuwde stijging
+            // stash-conditie: dip OF topvorming, maar niet tijdens sterke hernieuwde
+            // stijging — OF ruwe-omslag-op-commit, die bewust WEL door strongRisingNow
+            // heen mag. Reden: strongRisingNow leunt zelf op recentSlope/recentDelta5m
+            // — exact de gladgestreken signalen die bij het 19:39-incident nog
+            // (zwak) positief waren terwijl de ruwe bg al gedaald was. Zou
+            // rawBgAlreadyTurnedOnCommit ook aan !strongRisingNow gekoppeld worden,
+            // dan ving de nieuwe check precies dit incident alsnog niet — de ruwe
+            // meting is hier het meer directe, autoritaire signaal (zelfde aanname
+            // als bij de bestaande FALLBACK-OMSLAG-VETO hierboven, die om dezelfde
+            // reden ook geen smoothed-trend-vrijwaring heeft).
             val shouldStash =
                 !postPeakNoStash &&
                     mealLikeForReserve &&
-                    (shortTermDip || peakTopForming || topForming) &&
-                    !strongRisingNow
+                    (
+                        (shortTermDip || peakTopForming || topForming) && !strongRisingNow ||
+                            rawBgAlreadyTurnedOnCommit
+                        )
 
 
             if (shouldStash) {
@@ -9097,6 +9144,7 @@ class FCLvNext(
 
                 reserveCause =
                     when {
+                        rawBgAlreadyTurnedOnCommit -> ReserveCause.RAW_BG_TURNED_ON_COMMIT
                         topForming || peakTopForming -> ReserveCause.POST_PEAK_TOP
                         else -> ReserveCause.SHORT_TERM_DIP
                     }
@@ -9231,9 +9279,41 @@ class FCLvNext(
         // AANSCHERPING: naast episodeHypoDebtU>0 nu ook iobRatio>=drempel
         // vereist — zie kdoc bij POST_HYPO_BRAKE_ARM_MIN_IOB_RATIO voor het
         // bewijs dat "elke right-sizing telt mee" te breed was.
-        if (mealSignal.state == MealState.CONFIRMED && episodeHypoDebtU > 0.01 &&
-            ctx.iobRatio >= POST_HYPO_BRAKE_ARM_MIN_IOB_RATIO && !postHypoBrakeActive
-        ) {
+        //
+        // TWEEDE WAPEN-PAD (10/09/2026, analyse gebruiker — 20:59-incident):
+        // episodeHypoDebtU wordt UITSLUITEND opgebouwd als hypoProtection()
+        // een gewenste dosis terugschaalt — maar bij een echte, diepe hypo
+        // (BgZone.LOW) staat dose_access al hard op BLOCKED, dus er is nooit
+        // een voorgestelde dosis om terug te schalen en episodeHypoDebtU
+        // blijft op 0. Gevolg: hoe heftiger de hypo, hoe kleiner de kans dat
+        // deze rem daarna aanslaat — precies andersom dan bedoeld.
+        // Concreet, 20:24 bg=3,4 (BLOCKED, dus episodeHypoDebtU=0), koolhydraten,
+        // 20:59 bg=6,7 meal_state=CONFIRMED: een commit van 3,25U kwam ongeremd
+        // door, want episodeHypoDebtU=0,00 EN iobRatio=0,22 < 0,25.
+        //
+        // recentlyLow (zelfde patroon als de bestaande recente-hypo-vrijstelling
+        // bij CURVE_FIT_MIN_R2 hierboven, IN_RANGE-tak van computeDoseAccessLevel):
+        // was bg in de laatste 9 cycli (~45 min) nog <=4.4? Zo ja, wapen ook
+        // zonder episodeHypoDebtU en ZONDER de iobRatio-eis: iobRatio (IOB/
+        // maxIOB) is bij dit profiel geen betrouwbare maat voor "genoeg IOB om
+        // voorzichtig te zijn" (2,40U IOB gaf hier bijvoorbeeld maar 0,22) —
+        // en de vaste bodem (smallCorrectionMaxU) is sowieso klein genoeg om
+        // nooit schadelijk te zijn, ook als er weinig IOB is.
+        //
+        // Bewust GEEN wijziging aan de toepassing/vrijgave hieronder: de
+        // geleidelijke-vrijgave-ramp (08/09/2026) reageert al op de ECHTE
+        // bg-stijging sinds het aanslaan, dus een doorzettende, echte maaltijd
+        // (bv. na een middagdip net onder de 4, gevolgd door eten i.p.v.
+        // corrigeren) krijgt hierdoor nog steeds tijdig weer volledige toegang
+        // — dit wapen-pad maakt de rem alleen sneller/vaker AAN, nooit langer
+        // dicht dan de bestaande vrijgave-logica al toestaat.
+        val recentlyLow =
+            ctx.input.bgHistory.sortedBy { it.first.millis }.takeLast(9).any { it.second <= 4.4 }
+        val hypoDebtArm =
+            episodeHypoDebtU > 0.01 && ctx.iobRatio >= POST_HYPO_BRAKE_ARM_MIN_IOB_RATIO
+        val recentLowArm = recentlyLow
+
+        if (mealSignal.state == MealState.CONFIRMED && (hypoDebtArm || recentLowArm) && !postHypoBrakeActive) {
             postHypoBrakeActive = true
             postHypoBrakeBg = ctx.input.bgNow
             postHypoBrakeArmedAt = now
@@ -9247,7 +9327,8 @@ class FCLvNext(
                     (POST_HYPO_BRAKE_RECENT_AGGRESSION_HIGH - POST_HYPO_BRAKE_RECENT_AGGRESSION_LOW)
             ) * POST_HYPO_BRAKE_RECENT_AGGRESSION_MAX_DAMP
             status.append(
-                "POST-HYPO BRAKE AAN: episodeHypoDebtU=${"%.2f".format(episodeHypoDebtU)}U, " +
+                "POST-HYPO BRAKE AAN (${if (recentLowArm) "recent-LOW" else "hypo-debt"}): " +
+                    "episodeHypoDebtU=${"%.2f".format(episodeHypoDebtU)}U, " +
                     "iobRatio=${"%.2f".format(ctx.iobRatio)} bij CONFIRMED stijging " +
                     "(bgNow=${"%.1f".format(ctx.input.bgNow)}) — mogelijk correctie-koolhydraten " +
                     "i.p.v. nieuwe maaltijd (recente-agressie-score=${"%.2f".format(recentAggressionScore)}U, " +

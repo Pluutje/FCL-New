@@ -2,6 +2,7 @@ package app.aaps.plugins.main.iob
 
 import androidx.collection.LongSparseArray
 import app.aaps.core.data.model.GV
+import app.aaps.core.data.model.IDs
 import app.aaps.core.data.model.SourceSensor
 import app.aaps.core.data.model.TrendArrow
 import app.aaps.core.data.time.T
@@ -1541,6 +1542,114 @@ class AutosensDataStoreTest : TestBaseWithProfile() {
         // empty table + stale stored fallback → null
         ads.autosensDataTable = LongSparseArray<AutosensData>()
         assertThat(ads.getLastAutosensData("test", aapsLogger, dateUtil)).isNull()
+    }
+
+    // ---- holdsSameData --------------------------------------------------------------------------
+
+    private fun reading(id: Long, timestamp: Long, value: Double = 100.0, isValid: Boolean = true): GV =
+        GV(
+            id = id, timestamp = timestamp, value = value, isValid = isValid,
+            raw = 0.0, noise = 0.0, trendArrow = TrendArrow.FLAT, sourceSensor = SourceSensor.UNKNOWN
+        )
+
+    private fun storeHolding(vararg readings: GV): AutosensDataStoreObject =
+        AutosensDataStoreObject().also { it.bgReadings = readings.toList() }
+
+    @Test
+    fun holdsSameDataIsFalseWhenTheReadingIsNotHeld() {
+        val ads = storeHolding(reading(id = 1, timestamp = now))
+
+        // never seen this id, and the empty store case, must both ask for a recalculation
+        assertThat(ads.holdsSameData(reading(id = 2, timestamp = now + 60000))).isFalse()
+        assertThat(AutosensDataStoreObject().holdsSameData(reading(id = 1, timestamp = now))).isFalse()
+    }
+
+    @Test
+    fun holdsSameDataIsTrueForANightscoutIdOnlyUpdate() {
+        val held = reading(id = 1, timestamp = now)
+        val ads = storeHolding(held)
+        // what UpdateNsIdGlucoseValueTransaction writes back: same data, new id, bumped bookkeeping
+        val afterUpload = held.copy(version = held.version + 1, dateCreated = now + 5000, ids = IDs(nightscoutId = "abc123"))
+
+        assertThat(ads.holdsSameData(afterUpload)).isTrue()
+    }
+
+    @Test
+    fun holdsSameDataIsFalseForEveryChangeTheCalculationReads() {
+        val held = reading(id = 1, timestamp = now)
+        val ads = storeHolding(held)
+
+        // a corrected value
+        assertThat(ads.holdsSameData(held.copy(value = 123.0))).isFalse()
+        // an invalidated reading drops out of the load query (isValid = 1)
+        assertThat(ads.holdsSameData(held.copy(isValid = false))).isFalse()
+        // a soft delete drops out of it too (referenceId IS NULL)
+        assertThat(ads.holdsSameData(held.copy(referenceId = 7L))).isFalse()
+        // a corrected timestamp moves the reading to another bucket
+        assertThat(ads.holdsSameData(held.copy(timestamp = now - 60000))).isFalse()
+    }
+
+    private fun storeWithEntriesEvery5Min(count: Int, oldest: Long): AutosensDataStoreObject =
+        AutosensDataStoreObject().also { ads ->
+            for (i in 0 until count) {
+                val time = oldest + T.mins(5L * i).msecs()
+                ads.autosensDataTable.append(time, AutosensDataObject(aapsLogger, preferences, dateUtil).apply { this.time = time })
+            }
+        }
+
+    @Test
+    fun pruneOlderThanRemovesOnlyEntriesBeforeTheCut() {
+        val oldest = now - T.hours(40).msecs()
+        val ads = storeWithEntriesEvery5Min(count = 10, oldest = oldest)
+
+        // cut sits exactly on the 4th entry, so the first three go
+        ads.pruneOlderThan(oldest + T.mins(15).msecs(), aapsLogger, dateUtil)
+
+        assertThat(ads.autosensDataTable.size()).isEqualTo(7)
+        assertThat(ads.autosensDataTable.keyAt(0)).isEqualTo(oldest + T.mins(15).msecs())
+        assertThat(ads.autosensDataTable.keyAt(6)).isEqualTo(oldest + T.mins(45).msecs())
+    }
+
+    @Test
+    fun pruneOlderThanKeepsEveryRemainingEntry() {
+        // Deleting while walking up a LongSparseArray skips every second entry, because removeAt only
+        // marks the slot and the next size()/keyAt() compacts the array. This pins the whole key set.
+        val oldest = now - T.hours(40).msecs()
+        val ads = storeWithEntriesEvery5Min(count = 8, oldest = oldest)
+
+        ads.pruneOlderThan(oldest + T.mins(20).msecs(), aapsLogger, dateUtil)
+
+        val keys = (0 until ads.autosensDataTable.size()).map { ads.autosensDataTable.keyAt(it) }
+        assertThat(keys).containsExactly(
+            oldest + T.mins(20).msecs(),
+            oldest + T.mins(25).msecs(),
+            oldest + T.mins(30).msecs(),
+            oldest + T.mins(35).msecs()
+        ).inOrder()
+    }
+
+    @Test
+    fun pruneOlderThanIsNoOpWhenNothingIsOldEnough() {
+        val oldest = now - T.hours(2).msecs()
+        val ads = storeWithEntriesEvery5Min(count = 5, oldest = oldest)
+
+        ads.pruneOlderThan(oldest, aapsLogger, dateUtil)
+
+        assertThat(ads.autosensDataTable.size()).isEqualTo(5)
+    }
+
+    @Test
+    fun pruneOlderThanKeepsTheTableUsableAndDoesNotReplaceIt() {
+        val oldest = now - T.hours(40).msecs()
+        val ads = storeWithEntriesEvery5Min(count = 6, oldest = oldest)
+        // The calculation reads the table into a local once and writes new buckets through it, so the
+        // prune has to change this instance and not swap in a new one.
+        val tableBefore = ads.autosensDataTable
+
+        ads.pruneOlderThan(oldest + T.mins(10).msecs(), aapsLogger, dateUtil)
+
+        assertThat(ads.autosensDataTable).isSameInstanceAs(tableBefore)
+        assertThat(tableBefore.size()).isEqualTo(4)
     }
 
     @Test
