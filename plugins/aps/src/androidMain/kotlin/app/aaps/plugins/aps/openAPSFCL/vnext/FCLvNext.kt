@@ -187,7 +187,13 @@ private enum class ReserveCause {PRE_UNCERTAIN_MEAL, POST_PEAK_TOP, SHORT_TERM_D
 private data class MealSignal(
     val state: MealState,
     val confidence: Double,     // 0..1
-    val reason: String
+    val reason: String,
+    // 12/09/2026 -- het slope+acceleratie-deel van confidence, ZONDER de
+    // delta-tot-target-term. Zie kdoc bij MEAL_CONFIRM_MIN_RISE_EVIDENCE:
+    // confidence alleen kan al hoog genoeg zijn puur omdat bg al lang hoog
+    // staat, ook zonder een echte, verse stijging -- riseEvidence isoleert
+    // het deel dat wél een echte stijging/acceleratie vereist.
+    val riseEvidence: Double = 0.0
 )
 
 private data class TrendDecision(
@@ -602,6 +608,18 @@ private var explosiveRiseFracThisCycle: Double = 0.0
 private var explosiveRiseMulThisCycle: Double = 1.0
 private var explosiveRiseActiveThisCycle: Boolean = false
 private var projectedMinNoInsulinThisCycle: Double = -1.0
+
+// ── TEMP OVERRIDE — per-cyclus snapshot voor CSV-logging (11/09/2026) ──
+// Zelfde patroon als explosiveRise*ThisCycle hierboven: elke cyclus
+// gereset, direct na het fallback-omslag-veto-blok gezet (zie kdoc bij
+// FclTempOverrideSettings.kt voor de exacte plek en reden), en aan het
+// eind gelogd via cycleLogRepository.logTempOverride() — eigen, kleine
+// tabel (temp_override_log), NIET als extra velden op FCLCycleLogEntity
+// (167+ velden daar, zie kdoc bij PostHypoBrakeLogEntity voor de reden).
+private var tempOverrideActiveThisCycle: Boolean = false
+private var tempOverrideTargetPctThisCycle: Int = 100
+private var tempOverrideEffectiveMulThisCycle: Double = 1.0
+private var tempOverrideRemainingMinThisCycle: Int = -1
 
 // ─────────────────────────────────────────────
 // ⚡ FAST-CARB micro ramp (earlier IOB without commit)
@@ -1897,7 +1915,50 @@ private fun roundToStep(value: Double, step: Double): Double {
     return (kotlin.math.round(value / step) * step)
 }
 
+// ── Echte-stijging-eis voor het eerste, ongetemperde commit (12/09/2026, de
+// gebruiker) ─────────────────────────────────────────────────────────────
+// AANLEIDING: 12/9 16:49 -- een verse episode (BG al 65-80 min stabiel hoog
+// in de HIGH-zone, zonder dat er insuline werd gegeven) sloeg om 16:49 om
+// naar CONFIRMED met slechts 0,06 mmol stijging in 5 minuten, en kreeg
+// daardoor de volledig ongetemperde eerste-commit-behandeling: 3,55U in een
+// keer, terwijl bg nog geen 2,71 mmol boven target stond. Nodig weer eten om
+// de daaropvolgende val te breken.
+//
+// OORZAAK: de confidence-score in detectMealSignal() hieronder weegt drie
+// termen (slope 45%, acceleratie 35%, delta-tot-target 20%). deltaScore
+// verzadigt al bij een BG die simpelweg al ~1 mmol boven de drempel staat --
+// ONGEACHT of er een echte, verse stijging is. Bij dit incident leverde
+// deltaScore in zijn eentje (0,20 * 1,638 speed-mul = 0,33) al meer op dan
+// de hele mealConfirmConfidence-drempel (0,45), terwijl de echte
+// stijgings/acceleratie-bewijslast (riseEvidence, zie MealSignal.riseEvidence
+// hieronder) maar 0,12 was.
+//
+// BACKTEST (7 dagen, 12/9-CSV, alle 21 "eerste-commit"-momenten met
+// commandedDose>0): riseEvidence van dit incident (0,12) lag ruim onder alle
+// 20 overige, legitieme eerste commits die week (allemaal >=0,29) -- een
+// drempel van 0,20 scheidt de twee groepen schoon, met marge aan beide
+// kanten. Zelfde patroon (riseEvidence zelfs 0,0) gevonden bij een tweede,
+// kleinere episode (9/9 20:34, 0,76U, via het UNCERTAIN-pad in plaats van
+// CONFIRMED) -- ook die wordt door dezelfde vaste drempel geraakt.
+//
+// TOEPASSING (zie detectMealSignal() en baseCommitFraction hieronder):
+// 1) CONFIRMED vereist nu ook riseEvidence >= deze drempel (zakt anders
+//    terug naar UNCERTAIN, als de overige voorwaarden dat nog toestaan) --
+//    houdt de MealState zelf eerlijker, voor alle plekken die op CONFIRMED
+//    vertrouwen (aggressie, peak-onderdrukking, absorptie, etc.).
+// 2) Het eerste echte commit van een episode (!episodeAnyRealDeliveryDone)
+//    wordt gedempt als riseEvidence onder deze drempel blijft -- dit is de
+//    stap die de dosis daadwerkelijk verkleint (zie kdoc bij
+//    MEAL_LOW_EVIDENCE_MIN_DAMP hieronder: lateDecayMul zelf greep hier niet
+//    aan, want die rem is pas actief vanaf commitNr>1).
+private const val MEAL_CONFIRM_MIN_RISE_EVIDENCE = 0.20
 
+// Nooit helemaal naar 0 dempen: bij riseEvidence=0,0 is er nog steeds een
+// niet-nul kans dat dit toch een (traag startende) maaltijd is, en
+// hypoProtection()/de overige guards blijven de echte achtervang. Deze
+// vloer geeft zo'n moment een klein, veilig trickle-doseje i.p.v. helemaal
+// niets, terwijl de volle, ongetemperde dosis wordt voorkomen.
+private const val MEAL_LOW_EVIDENCE_MIN_DAMP = 0.15
 
 private fun detectMealSignal(ctx: FCLvNextContext, config: FCLvNextConfig): MealSignal {
 
@@ -1923,14 +1984,24 @@ private fun detectMealSignal(ctx: FCLvNextContext, config: FCLvNextConfig): Meal
     val accelScore = ((ctx.acceleration - accelMin) / config.mealAccelSpan).coerceIn(0.0, 1.0)
     val deltaScore = ((ctx.deltaToTarget - deltaMin) / config.mealDeltaSpan).coerceIn(0.0, 1.0)
 
+    // 12/09/2026 -- zie kdoc bij MEAL_CONFIRM_MIN_RISE_EVIDENCE hierboven:
+    // het deel van confidence dat een ECHTE stijging/acceleratie vereist,
+    // los van hoe ver bg toevallig al boven target staat (deltaScore).
+    val riseEvidence = 0.45 * slopeScore + 0.35 * accelScore
+
     val confidence =
-        (0.45 * slopeScore + 0.35 * accelScore + 0.20 * deltaScore)
+        (riseEvidence + 0.20 * deltaScore)
             .let { it * config.mealConfidenceSpeedMul }
             .coerceIn(0.0, 1.0)
 
     // state
     val baseState = when {
-        rising && accelerating && aboveTarget && confidence >= config.mealConfirmConfidence ->
+        // 12/09/2026 -- riseEvidence-eis toegevoegd (zie kdoc bij
+        // MEAL_CONFIRM_MIN_RISE_EVIDENCE hierboven): zonder deze eis kon
+        // een bg die simpelweg al lang hoog staat, met bijna geen verse
+        // stijging, toch CONFIRMED worden puur via deltaScore.
+        rising && accelerating && aboveTarget && confidence >= config.mealConfirmConfidence &&
+            riseEvidence >= MEAL_CONFIRM_MIN_RISE_EVIDENCE ->
             MealState.CONFIRMED
 
         (rising || accelerating) && aboveTarget && confidence >= config.mealUncertainConfidence ->
@@ -1974,7 +2045,7 @@ private fun detectMealSignal(ctx: FCLvNextContext, config: FCLvNextConfig): Meal
     val srTag = if (sustainedRiseConfirmed && baseState != MealState.CONFIRMED) " +SR" else ""
 
     val reason = "MealSignal=$state$srTag conf=${"%.2f".format(confidence)}"
-    return MealSignal(state, confidence, reason)
+    return MealSignal(state, confidence, reason, riseEvidence)
 }
 
 
@@ -4575,7 +4646,7 @@ class FCLvNext(
     // "vNN-jjjj-mm-dd-uumm" (aanmaaktijdstip, geen omschrijving; die van
     // eerdere versies raakten toch achter). Alleen als het écht relevant
     // is een korte omschrijving toevoegen.
-    private val FCL_CODE_VERSION = "v114-2026-09-11-1500"
+    private val FCL_CODE_VERSION = "v117-2026-09-13-1400"
 
     // ── Restart-detectie (16/07/2026) ─────────────────────────────────
     // true op precies de EERSTE cyclus na het (her)starten van dit class-
@@ -6001,6 +6072,10 @@ class FCLvNext(
         explosiveRiseMulThisCycle = 1.0
         explosiveRiseActiveThisCycle = false
         projectedMinNoInsulinThisCycle = -1.0
+        tempOverrideActiveThisCycle = false
+        tempOverrideTargetPctThisCycle = 100
+        tempOverrideEffectiveMulThisCycle = 1.0
+        tempOverrideRemainingMinThisCycle = -1
 
         // Snapshot vóór deze cyclus' eigen commit-beslissing: de post-big-
         // commit afterload-laag (zie hieronder) moet reageren op de VORIGE
@@ -7631,7 +7706,31 @@ class FCLvNext(
 
         val baseCommitFraction =
             if (mealSignal.state != MealState.NONE) {
-                computeCommitFraction(signal = mealSignal, config = config)
+                val raw = computeCommitFraction(signal = mealSignal, config = config)
+                // 12/09/2026 -- zie kdoc bij MEAL_CONFIRM_MIN_RISE_EVIDENCE
+                // hierboven (16:49-incident). Dit is de stap die de dosis
+                // daadwerkelijk verkleint: lateDecayMul zelf grijpt bij het
+                // EERSTE echte commit van een episode niet aan (die rem is
+                // pas actief vanaf commitNr>1, zie lateDecayActive verderop),
+                // dus de vrijstelling voor een episode zonder eerdere
+                // levering moet hier, aan de bron, gedempt worden als er
+                // geen echte stijging/acceleratie-bewijslast achter zit --
+                // anders blijft zo'n moment gewoon de volle, ongetemperde
+                // fractie houden. Alleen van toepassing op het eerste echte
+                // commit (!episodeAnyRealDeliveryDone); latere commits in
+                // dezelfde episode worden al door lateDecayMul/de overige
+                // afbouw-mechanismen afgeremd.
+                val riseEvidenceDamp =
+                    if (!episodeAnyRealDeliveryDone && mealSignal.riseEvidence < MEAL_CONFIRM_MIN_RISE_EVIDENCE) {
+                        val damp = (mealSignal.riseEvidence / MEAL_CONFIRM_MIN_RISE_EVIDENCE)
+                            .coerceIn(MEAL_LOW_EVIDENCE_MIN_DAMP, 1.0)
+                        status.append(
+                            "EERSTE-COMMIT RISE-EVIDENCE DEMPING: riseEvidence=${"%.2f".format(mealSignal.riseEvidence)} " +
+                                "< ${"%.2f".format(MEAL_CONFIRM_MIN_RISE_EVIDENCE)} -> fractie x${"%.2f".format(damp)}\n"
+                        )
+                        damp
+                    } else 1.0
+                raw * riseEvidenceDamp
             } else 0.0
         logRow.baseCommitFraction = baseCommitFraction
 
@@ -8945,6 +9044,34 @@ class FCLvNext(
             }
         }
 
+        // ─────────────────────────────────────────────
+        // 🎚️ TEMP OVERRIDE (11/09/2026) — zie kdoc bij FclTempOverrideSettings.kt
+        // Vaste, ENIGE plek waar de gebruikers-ingestelde tijdelijke op-/
+        // afschaling wordt toegepast: precies HIER, na het fallback-omslag-
+        // veto-blok en vóór alle veiligheidscontroles hieronder (reserve-pool,
+        // hypoProtection x2, topGuard, post-hypo-brake, IOB-plafond,
+        // piek-benadering-taper) — die blijven dus onverkort op de
+        // al-geschaalde waarde werken. Eén multiplicatie op commandedDose ->
+        // gegarandeerd proportioneel (bv. 50% geeft ~50% van wat anders
+        // gegeven zou zijn), geen los knopje her en der in de pijplijn.
+        // status() zet zelf de opgeslagen active-vlag terug op false zodra de
+        // volledige duur verstreken is (auto-expire) -- geen aparte
+        // "vergeten uit te zetten"-toestand mogelijk.
+        val tempOverrideStatus = FclTempOverrideSettings.status(context, now.millis)
+        if (tempOverrideStatus.active && commandedDose > 0.0) {
+            val beforeTempOverride = commandedDose
+            commandedDose *= tempOverrideStatus.effectiveMul
+            status.append(
+                "TEMP OVERRIDE: ${"%.2f".format(beforeTempOverride)}→${"%.2f".format(commandedDose)}U " +
+                    "(doel ${tempOverrideStatus.targetPct}%, effectief ${"%.0f".format(tempOverrideStatus.effectiveMul * 100)}%, " +
+                    "nog ${tempOverrideStatus.remainingMinutes} min)\n"
+            )
+        }
+        tempOverrideActiveThisCycle = tempOverrideStatus.active
+        tempOverrideTargetPctThisCycle = tempOverrideStatus.targetPct
+        tempOverrideEffectiveMulThisCycle = tempOverrideStatus.effectiveMul
+        tempOverrideRemainingMinThisCycle = tempOverrideStatus.remainingMinutes
+
 // ─────────────────────────────────────────────
 // 🟧 RESERVE POOL LOGIC
 // 1) Reset / TTL
@@ -9497,6 +9624,17 @@ class FCLvNext(
             mul = explosiveRiseMulThisCycle,
             active = explosiveRiseActiveThisCycle,
             projectedMinNoInsulin = projectedMinNoInsulinThisCycle,
+            timestampMs = now.millis
+        )
+
+        // Diagnostiek (11/09/2026): eindstand van de Temp Override deze
+        // cyclus, zelfde eigen-tabel-patroon als post_hypo_brake_log/
+        // explosive_rise_log hierboven (zie kdoc bij TempOverrideLogEntity).
+        cycleLogRepository.logTempOverride(
+            active = tempOverrideActiveThisCycle,
+            targetPct = tempOverrideTargetPctThisCycle,
+            effectiveMul = tempOverrideEffectiveMulThisCycle,
+            remainingMinutes = tempOverrideRemainingMinThisCycle,
             timestampMs = now.millis
         )
 

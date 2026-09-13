@@ -19,6 +19,7 @@ import app.aaps.core.interfaces.aps.AutosensDataStore
 import app.aaps.core.interfaces.iob.IobCobCalculator
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.nsclient.ProcessedDeviceStatusData
+import app.aaps.core.interfaces.overview.TempOverrideStatusProvider
 import app.aaps.core.interfaces.overview.graph.BgInfoData
 import app.aaps.core.interfaces.overview.graph.BgRange
 import app.aaps.core.interfaces.overview.graph.GraphConfig
@@ -79,6 +80,13 @@ internal class OverviewViewModelFixture(private val screen: AapsScreenFixture) {
     val rh: ResourceHelper = mock()
     val aapsLogger: AAPSLogger = mock()
     val rxBus: RxBus = mock()
+    // 11/09/2026 (de gebruiker) — Temp Override chip-slot op COB, zie kdoc bij TempOverrideStatusProvider.kt.
+    // Altijd inactief hier: geen enkele bestaande ChipsViewModel-test gaat hier specifiek over.
+    val tempOverrideStatusProvider: TempOverrideStatusProvider = mock<TempOverrideStatusProvider>().also {
+        whenever(it.currentStatus()).thenReturn(
+            TempOverrideStatusProvider.Snapshot(active = false, targetPct = 100, effectiveMul = 1.0, remainingMinutes = -1)
+        )
+    }
     val persistenceLayer: PersistenceLayer = mock()
     val activePlugin: ActivePlugin = mock()
     val profileFunction: ProfileFunction = mock()
@@ -173,7 +181,7 @@ internal class OverviewViewModelFixture(private val screen: AapsScreenFixture) {
         ChipsViewModel(
             cache, iobCobCalculator, loop, screen.config, persistenceLayer, constraintChecker, profileFunction,
             processedDeviceStatusData, screen.profileUtil, activePlugin, rh, decimalFormatter, screen.dateUtil,
-            aapsLogger, screen.preferences, rxBus
+            aapsLogger, screen.preferences, rxBus, tempOverrideStatusProvider
         )
     }
 

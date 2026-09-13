@@ -18,7 +18,12 @@ data class IobUiState(
 data class CobUiState(
     val text: String = "",
     val carbsReq: Int = 0,
-    val cobValue: Double = 0.0
+    val cobValue: Double = 0.0,
+    // 11/09/2026 (de gebruiker) — Temp Override deelt dit chip-slot met COB, zie kdoc bij
+    // TempOverrideStatusProvider.kt (core:interfaces) voor de aanleiding. Als beide tegelijk gelden
+    // (zeldzaam) wint de override: zie CobChip.kt.
+    val tempOverrideActive: Boolean = false,
+    val tempOverrideText: String = ""
 )
 
 @Immutable

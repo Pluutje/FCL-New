@@ -22,6 +22,7 @@ internal fun TreatmentBottomSheetPreview() {
             showInsulin = true,
             showCarbs = true,
             showCalculator = true,
+            showTempOverride = true,
             isDexcomSource = false,
             showSettingsIcon = true,
             onSettingsClick = {}

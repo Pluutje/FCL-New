@@ -86,6 +86,7 @@ class TreatmentViewModel(
             preferences.observe(BooleanKey.OverviewShowInsulinButton).drop(1).map {},
             preferences.observe(BooleanKey.OverviewShowCarbsButton).drop(1).map {},
             preferences.observe(BooleanKey.OverviewShowWizardButton).drop(1).map {},
+            preferences.observe(BooleanKey.OverviewShowFclTempOverrideButton).drop(1).map {},
             preferences.observe(BooleanKey.GeneralSimpleMode).drop(1).map {},
             // QuickWizard entries changed (local edit or synced from the main phone).
             quickWizard.changes.drop(1).map {},
@@ -109,6 +110,8 @@ class TreatmentViewModel(
             val showInsulin = preferences.get(BooleanKey.OverviewShowInsulinButton)
             val showCarbs = preferences.get(BooleanKey.OverviewShowCarbsButton)
             val showCalculator = preferences.get(BooleanKey.OverviewShowWizardButton)
+            val showTempOverride = elementAvailability.isAvailable(ElementType.FCL_TEMP_OVERRIDE) &&
+                preferences.get(BooleanKey.OverviewShowFclTempOverrideButton)
 
             val showSettingsIcon = !preferences.simpleMode
 
@@ -120,6 +123,7 @@ class TreatmentViewModel(
                     showInsulin = showInsulin,
                     showCarbs = showCarbs,
                     showCalculator = showCalculator,
+                    showTempOverride = showTempOverride,
                     isDexcomSource = isDexcomSource,
                     quickWizardItems = quickWizardItems,
                     showSettingsIcon = showSettingsIcon

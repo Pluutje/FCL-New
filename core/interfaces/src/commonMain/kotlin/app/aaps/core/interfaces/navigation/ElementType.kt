@@ -29,6 +29,13 @@ enum class ElementType(
     QUICK_WIZARD(protection = ProtectionCheck.Protection.BOLUS, visibility = ElementVisibility.MASTER_OR_PAIRED_CLIENT),
     TREATMENT(category = ElementCategory.TREATMENT, searchable = true, protection = ProtectionCheck.Protection.BOLUS, visibility = ElementVisibility.MASTER_OR_PAIRED_CLIENT),
 
+    // FCLvNext "Tijdelijke aanpassing" (Temp Override) shortcut (13/09/2026, de gebruiker) — opens the
+    // FCLvNext plugin screen with that section expanded. Local plugin setting only (not a Client-Control
+    // write), so plain ALWAYS visibility, not MASTER_OR_PAIRED_CLIENT. Only ever shown when FCLvNext is
+    // the active APS plugin (see ElementAvailability.isAvailable), and protected the same as INSULIN
+    // since it changes dosing behavior.
+    FCL_TEMP_OVERRIDE(category = ElementCategory.TREATMENT, searchable = false, protection = ProtectionCheck.Protection.BOLUS),
+
     // CGM
     CGM_XDRIP(category = ElementCategory.CGM, searchable = true),
     CGM_DEX(category = ElementCategory.CGM),

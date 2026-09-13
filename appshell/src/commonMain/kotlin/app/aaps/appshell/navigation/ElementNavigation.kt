@@ -11,6 +11,7 @@ import app.aaps.core.interfaces.source.DexcomBoyda
 import app.aaps.ui.compose.careDialog.CareportalEventType
 import app.aaps.core.interfaces.navigation.ElementType
 import app.aaps.core.interfaces.notifications.NotificationId
+import app.aaps.core.interfaces.overview.TempOverrideStatusProvider
 import app.aaps.core.keys.StringKey
 import app.aaps.core.ui.search.SearchableItem
 import app.aaps.ui.compose.quickLaunch.QuickLaunchAction
@@ -47,7 +48,8 @@ class ElementNavigator(
     private val onOpenCgmApp: (packageName: String) -> Unit,
     private val onExit: () -> Unit,
     val onRequestDirectoryAccess: () -> Unit,
-    val onOpenUrl: (url: String) -> Unit
+    val onOpenUrl: (url: String) -> Unit,
+    private val tempOverrideStatusProvider: TempOverrideStatusProvider
 ) {
 
     /** Where a tap in the drawer, a search result or a quick launch tile goes. */
@@ -172,6 +174,18 @@ class ElementNavigator(
             }
 
             ElementType.PUMP                    -> openPlugin(activePlugin.activePumpInternal as PluginBase, navController, activePlugin)
+
+            // FCLvNext Temp Override shortcut (13/09/2026, de gebruiker) — only ever navigated to
+            // while ElementAvailability has already confirmed FCLvNext is the active APS plugin, so a
+            // missing plugin here would mean that check regressed; still guarded with `?: return`
+            // rather than `!!`, same defensive style as NavigationRequest.Plugin above. The one-shot
+            // flag has to be set BEFORE opening the plugin screen, so FCLComposeContent.kt can read it
+            // while building the very first composition (see FclTempOverrideStatusProviderImpl.kt).
+            ElementType.FCL_TEMP_OVERRIDE       -> {
+                val plugin = activePlugin.getPluginsList().find { it::class.simpleName == "OpenAPSFCLPlugin" } ?: return
+                tempOverrideStatusProvider.requestOpenSettings()
+                openPlugin(plugin, navController, activePlugin)
+            }
 
             // Non-searchable types - listed explicitly so the compiler catches new enum values
             ElementType.QUICK_WIZARD,

@@ -72,6 +72,7 @@ import app.aaps.core.interfaces.queue.CommandQueue
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.core.interfaces.rx.events.EventShowDialog
+import app.aaps.core.interfaces.overview.TempOverrideStatusProvider
 import app.aaps.core.interfaces.source.DexcomBoyda
 import app.aaps.core.interfaces.sync.NsClient
 import app.aaps.core.interfaces.ui.IconsProvider
@@ -161,6 +162,7 @@ class ComposeMainActivity : MetroAppCompatActivity() {
     @Inject lateinit var profileUtil: ProfileUtil
     @Inject lateinit var visibilityContext: VisibilityContext
     @Inject lateinit var dexcomBoyda: DexcomBoyda
+    @Inject lateinit var tempOverrideStatusProvider: TempOverrideStatusProvider
     @Inject lateinit var persistenceLayer: PersistenceLayer
     @Inject lateinit var prefFileList: FileListProvider
     @Inject lateinit var notificationManager: NotificationManager
@@ -662,7 +664,8 @@ class ComposeMainActivity : MetroAppCompatActivity() {
             } catch (_: Exception) {
             }
         },
-        onOpenUrl = { url -> startActivity(Intent(Intent.ACTION_VIEW, url.toUri())) }
+        onOpenUrl = { url -> startActivity(Intent(Intent.ACTION_VIEW, url.toUri())) },
+        tempOverrideStatusProvider = tempOverrideStatusProvider
     )
 
     private fun handleNavigationRequest(request: NavigationRequest, navController: NavController) {

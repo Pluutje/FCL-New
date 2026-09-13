@@ -10,6 +10,7 @@ import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.FclLearnerBackup
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.toLogRow
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.PostHypoBrakeLogEntity
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.ExplosiveRiseLogEntity
+import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.TempOverrideLogEntity
 import app.aaps.plugins.aps.openAPSFCL.vnext.persist.VLearner
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -35,6 +36,7 @@ class FCLCycleLogRepository @Inject constructor(
     private val episodeDao by lazy { db.episodeDao() }
     private val postHypoBrakeDao by lazy { db.postHypoBrakeLogDao() }
     private val explosiveRiseDao by lazy { db.explosiveRiseLogDao() }
+    private val tempOverrideDao by lazy { db.tempOverrideLogDao() }
     private val scope = CoroutineScope(Dispatchers.IO)
 
     private val persistDb by lazy {
@@ -108,6 +110,27 @@ class FCLCycleLogRepository @Inject constructor(
                 )
             )
             explosiveRiseDao.deleteOlderThan(FCLAnalyzerDatabase.cutoffMs())
+        }
+    }
+
+    /**
+     * Log de eindstand van de Temp Override per cyclus (11/09/2026) in een
+     * eigen, kleine tabel -- zie kdoc bij TempOverrideLogEntity voor de
+     * aanleiding. Zelfde fire-and-forget patroon als logPostHypoBrake()/
+     * logExplosiveRise() hierboven.
+     */
+    fun logTempOverride(active: Boolean, targetPct: Int, effectiveMul: Double, remainingMinutes: Int, timestampMs: Long) {
+        scope.launch {
+            tempOverrideDao.insert(
+                TempOverrideLogEntity(
+                    timestampMs = timestampMs,
+                    active = active,
+                    targetPct = targetPct,
+                    effectiveMul = effectiveMul,
+                    remainingMinutes = remainingMinutes
+                )
+            )
+            tempOverrideDao.deleteOlderThan(FCLAnalyzerDatabase.cutoffMs())
         }
     }
 
@@ -606,6 +629,9 @@ class FCLCycleLogRepository @Inject constructor(
         // 3-4/9/2026 -- zelfde patroon, voor de EXPLOSIVE_RISE-boost-diagnostiek
         // (zie kdoc bij ExplosiveRiseLogEntity).
         val explosiveByTs = explosiveRiseDao.getSince(sevenDaysAgo).associateBy { it.timestampMs }
+        // 11/09/2026 -- zelfde patroon, voor de Temp Override-diagnostiek
+        // (zie kdoc bij TempOverrideLogEntity).
+        val tempOverrideByTs = tempOverrideDao.getSince(sevenDaysAgo).associateBy { it.timestampMs }
 
         val dir = File(
             android.os.Environment.getExternalStorageDirectory(),
@@ -641,7 +667,12 @@ class FCLCycleLogRepository @Inject constructor(
         // boost_active/projected_min_no_insulin, zie csvHeader() hieronder),
         // afkomstig uit de nieuwe, aparte explosive_rise_log-tabel (zelfde
         // samenvoeg-patroon als post_hypo_brake_log hierboven).
-        val file = File(dir, "FCLvNext_Log_v12.csv")
+        // v12->v13 (11/09/2026) -- +4 kolommen (temp_override_active/
+        // temp_override_target_pct/temp_override_effective_mul/
+        // temp_override_remaining_min, zie csvHeader() hieronder), afkomstig
+        // uit de nieuwe, aparte temp_override_log-tabel (zelfde samenvoeg-
+        // patroon als post_hypo_brake_log/explosive_rise_log hierboven).
+        val file = File(dir, "FCLvNext_Log_v13.csv")
 
         val sep = ";"
         // 23/07/2026 — ts_utc blijft de bron van waarheid (ondubbelzinnig,
@@ -657,12 +688,15 @@ class FCLCycleLogRepository @Inject constructor(
             rows.forEach { row ->
                 val brake = brakeByTs[row.timestampMs]
                 val explosive = explosiveByTs[row.timestampMs]
+                val tempOverride = tempOverrideByTs[row.timestampMs]
                 writer.write(
                     row.toCsvLine(
                         sep, fmt, fmtLocal,
                         brake?.active ?: false, brake?.armedMinutes ?: -1,
                         explosive?.frac ?: 0.0, explosive?.mul ?: 1.0,
-                        explosive?.active ?: false, explosive?.projectedMinNoInsulin ?: -1.0
+                        explosive?.active ?: false, explosive?.projectedMinNoInsulin ?: -1.0,
+                        tempOverride?.active ?: false, tempOverride?.targetPct ?: 100,
+                        tempOverride?.effectiveMul ?: 1.0, tempOverride?.remainingMinutes ?: -1
                     )
                 )
                 writer.newLine()
@@ -751,7 +785,10 @@ private fun csvHeader(sep: String): String = listOf(
     // ── ACTIVITEIT (stappen) ──
     "activity_active", "activity_insulin_pct", "activity_target_adjust",
     // ── DOSEERRUIMTE ──
-    "iob_headroom"
+    "iob_headroom",
+    // ── TEMP OVERRIDE (11/09/2026) ──
+    "temp_override_active", "temp_override_target_pct", "temp_override_effective_mul",
+    "temp_override_remaining_min"
 ).joinToString(sep)
 
 // ── CSV regel — delta_target afgeleid als bg - target ────────────────────
@@ -765,7 +802,11 @@ private fun FCLCycleLogEntity.toCsvLine(
     explosiveRiseFrac: Double,
     explosiveRiseMul: Double,
     explosiveRiseBoostActive: Boolean,
-    projectedMinNoInsulin: Double
+    projectedMinNoInsulin: Double,
+    tempOverrideActive: Boolean,
+    tempOverrideTargetPct: Int,
+    tempOverrideEffectiveMul: Double,
+    tempOverrideRemainingMinutes: Int
 ): String {
     val ts = fmt.format(Instant.ofEpochMilli(timestampMs))
     val tsLocal = fmtLocal.format(Instant.ofEpochMilli(timestampMs))
@@ -859,6 +900,9 @@ private fun FCLCycleLogEntity.toCsvLine(
         // ── ACTIVITEIT (stappen) ──
         bool(delivery.activityActive), d2(delivery.activityInsulinPct), d2(delivery.activityTargetAdjust),
         // ── DOSEERRUIMTE ──
-        d2(doseerruimte.iobHeadroom)
+        d2(doseerruimte.iobHeadroom),
+        // ── TEMP OVERRIDE (11/09/2026) ──
+        bool(tempOverrideActive), tempOverrideTargetPct, d2(tempOverrideEffectiveMul),
+        tempOverrideRemainingMinutes
     ).joinToString(sep)
 }

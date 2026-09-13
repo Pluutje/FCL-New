@@ -63,11 +63,17 @@ class FCLComposeContent(
         val navigateToUpdate = remember {
             app.aaps.plugins.aps.openAPSFCL.update.FclUpdateNotificationHelper.consumeNavigateRequest()
         }
+        // 13/09/2026 (de gebruiker) — zelfde one-shot-patroon voor de Treatments-sheet
+        // "Tijdelijke aanpassing"-snelkoppeling: FclTempOverrideStatusProviderImpl.requestOpenSettings()
+        // zet de vlag (via ElementNavigator, commonMain), deze regel leest 'm hier één keer.
+        val navigateToTempOverride = remember {
+            app.aaps.plugins.aps.openAPSFCL.vnext.FclTempOverrideSettings.consumeOpenSettingsRequest()
+        }
         var selectedTab by remember {
             mutableIntStateOf(
                 when {
                     navigateToAiAdvisor || navigateToLearner -> 1
-                    navigateToUpdate                          -> 3
+                    navigateToUpdate || navigateToTempOverride -> 3
                     else                                       -> 0
                 }
             )
@@ -119,7 +125,12 @@ class FCLComposeContent(
                     startOnLearner = navigateToLearner
                 )
                 2 -> FclStatisticsScreen()
-                3 -> FCLSettingsScreen(preferences = preferences, sp = sp, startExpandedOnUpdates = navigateToUpdate)
+                3 -> FCLSettingsScreen(
+                    preferences = preferences,
+                    sp = sp,
+                    startExpandedOnUpdates = navigateToUpdate,
+                    startExpandedOnTempOverride = navigateToTempOverride
+                )
             }
         }
     }

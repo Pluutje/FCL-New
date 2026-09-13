@@ -306,9 +306,21 @@ class AutosensDataStoreObject : AutosensDataStore {
         // really available 5-minute bucket, so the loop kept running on the previous cycle's data -
         // seen as "loop runs 5 minutes behind, growing to 10" in the field). IRREGULAR_DATA_SEC is
         // the existing tolerance this file already uses elsewhere for "still the same reading".
+        //
+        // BUGFIX (13/09/2026, de gebruiker): a small overshoot is only harmless if we also clamp it
+        // back to the real newest reading here. Leaving currentTime at the inflated adjustedTime
+        // looked safe, but findNewer(currentTime) below has NO tolerance at all: as soon as
+        // currentTime is even 1ms past the newest reading in bgReadings, findNewer returns null on
+        // the very FIRST loop iteration, the loop breaks immediately, and bucketedData ends up an
+        // EMPTY (not null) list - which prepareBucketedData() then reports as "No bucketed data.",
+        // even though bgReadings was full (seen in the field: 408 readings loaded, adjustedTime only
+        // 5 seconds ahead of the newest one, and the whole cycle produced zero buckets). Clamping to
+        // `currentTime` (the real newest reading) instead of `adjustedTime` for a small overshoot
+        // fixes that without losing a bucket the way the "step back a whole bucket" branch above
+        // does - it lines the loop's start up exactly on the reading that is actually there.
         currentTime =
             if (adjustedTime - currentTime > T.secs(IRREGULAR_DATA_SEC).msecs()) adjustedTime - T.mins(5).msecs()
-            else adjustedTime
+            else minOf(adjustedTime, currentTime)
         aapsLogger.debug("Adjusted time " + dateUtil.dateAndTimeAndSecondsString(currentTime))
         while (true) {
             // test if current value is older than current time

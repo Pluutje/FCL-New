@@ -27,3 +27,13 @@ internal fun CobChipBlinkingPreview() {
         CobChip(state = CobUiState(text = "12g 45req", carbsReq = 45, cobValue = 12.0))
     }
 }
+
+// 11/09/2026 (de gebruiker) — Temp Override wint dit chip-slot als hij actief is, zelfs met
+// COB=0 (het normale geval voor deze gebruiker) — zie kdoc bij ChipsUiState.CobUiState.
+@Preview(showBackground = true)
+@Composable
+internal fun CobChipTempOverridePreview() {
+    MaterialTheme {
+        CobChip(state = CobUiState(cobValue = 0.0, tempOverrideActive = true, tempOverrideText = "TA 70% · 1u15m"))
+    }
+}

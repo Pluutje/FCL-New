@@ -26,12 +26,21 @@ class ElementAvailability(
 ) {
 
     fun isAvailable(elementType: ElementType): Boolean = when (elementType) {
-        ElementType.CALIBRATION -> xDripSource.isEnabled() || isCalibrationOverrideActive()
-        ElementType.CGM_XDRIP   -> xDripSource.isEnabled()
-        ElementType.CGM_DEX     -> dexcomBoyda.isEnabled()
+        ElementType.CALIBRATION      -> xDripSource.isEnabled() || isCalibrationOverrideActive()
+        ElementType.CGM_XDRIP        -> xDripSource.isEnabled()
+        ElementType.CGM_DEX          -> dexcomBoyda.isEnabled()
+        ElementType.FCL_TEMP_OVERRIDE -> isFclVNextActive()
 
-        else                    -> true
+        else                         -> true
     }
+
+    /**
+     * True only when FCLvNext is the active APS plugin. Same string-based check as
+     * `NavigationRequest.Plugin`/`ElementNavigator` (13/09/2026, de gebruiker) — `ui` has no gradle
+     * dependency on `plugins:aps`, so the FCLvNext class can't be imported here directly.
+     */
+    private fun isFclVNextActive(): Boolean =
+        (activePlugin.activeAPS as? PluginBase)?.let { it::class.simpleName == "OpenAPSFCLPlugin" } ?: false
 
     /**
      * True when the active calibration plugin is a real (non-default) override.

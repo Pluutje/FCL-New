@@ -60,6 +60,7 @@ fun TreatmentBottomSheet(
     showInsulin: Boolean,
     showCarbs: Boolean,
     showCalculator: Boolean,
+    showTempOverride: Boolean,
     isDexcomSource: Boolean,
     showSettingsIcon: Boolean,
     // QuickWizard
@@ -93,6 +94,7 @@ fun TreatmentBottomSheet(
                 showInsulin = showInsulin,
                 showCarbs = showCarbs,
                 showCalculator = showCalculator,
+                showTempOverride = showTempOverride,
                 isDexcomSource = isDexcomSource,
                 showSettingsIcon = showSettingsIcon,
                 onSettingsClick = { showSettings = true }
@@ -115,6 +117,7 @@ internal fun TreatmentSelectionContent(
     showInsulin: Boolean,
     showCarbs: Boolean,
     showCalculator: Boolean,
+    showTempOverride: Boolean,
     isDexcomSource: Boolean,
     showSettingsIcon: Boolean,
     onSettingsClick: () -> Unit
@@ -280,6 +283,18 @@ internal fun TreatmentSelectionContent(
                 disabledAlpha = disabledAlpha,
                 onDismiss = onDismiss,
                 onClick = { onNavigate(NavigationRequest.Element(ElementType.BOLUS_WIZARD)) }
+            )
+        }
+
+        // FCLvNext Temp Override shortcut (13/09/2026, de gebruiker) — only visible when FCLvNext is
+        // the active algorithm (see ElementAvailability) and the user enabled the shortcut.
+        if (showTempOverride) {
+            TreatmentItem(
+                elementType = ElementType.FCL_TEMP_OVERRIDE,
+                enabled = true,
+                disabledAlpha = disabledAlpha,
+                onDismiss = onDismiss,
+                onClick = { onNavigate(NavigationRequest.Element(ElementType.FCL_TEMP_OVERRIDE)) }
             )
         }
     }

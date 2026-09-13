@@ -63,6 +63,7 @@ internal class TreatmentViewModelTest {
         whenever(preferences.observe(BooleanKey.OverviewShowInsulinButton)).thenReturn(MutableStateFlow(false))
         whenever(preferences.observe(BooleanKey.OverviewShowCarbsButton)).thenReturn(MutableStateFlow(false))
         whenever(preferences.observe(BooleanKey.OverviewShowWizardButton)).thenReturn(MutableStateFlow(false))
+        whenever(preferences.observe(BooleanKey.OverviewShowFclTempOverrideButton)).thenReturn(MutableStateFlow(false))
         whenever(preferences.observe(BooleanKey.GeneralSimpleMode)).thenReturn(MutableStateFlow(false))
         whenever(quickWizard.changes).thenReturn(MutableStateFlow(0))
         whenever(rxBus.toFlow(EventRefreshOverview::class)).thenReturn(emptyFlow())

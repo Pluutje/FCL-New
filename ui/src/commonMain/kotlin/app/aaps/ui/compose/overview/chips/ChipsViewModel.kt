@@ -12,6 +12,7 @@ import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.core.interfaces.iob.IobCobCalculator
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.nsclient.ProcessedDeviceStatusData
+import app.aaps.core.interfaces.overview.TempOverrideStatusProvider
 import app.aaps.core.interfaces.overview.graph.OverviewDataCache
 import app.aaps.core.interfaces.plugin.ActivePlugin
 import app.aaps.core.interfaces.profile.ProfileFunction
@@ -57,7 +58,8 @@ class ChipsViewModel(
     private val dateUtil: DateUtil,
     private val aapsLogger: AAPSLogger,
     private val preferences: Preferences,
-    private val rxBus: RxBus
+    private val rxBus: RxBus,
+    private val tempOverrideStatusProvider: TempOverrideStatusProvider
 ) : ViewModel() {
 
     @AssistedFactory
@@ -105,7 +107,25 @@ class ChipsViewModel(
             }
         }
 
-        CobUiState(text = cobText, carbsReq = carbsReq, cobValue = cobInfo.displayCob ?: 0.0)
+        // 11/09/2026 (de gebruiker) — Temp Override deelt dit chip-slot met COB (zie kdoc bij
+        // TempOverrideStatusProvider.kt). Meelift op deze bestaande ~2,5-minuten-ticker in plaats
+        // van een eigen polling-lus: de gebruiker vroeg om hooguit eens per 5 minuten verversen,
+        // dus dit is al vaker dan nodig, maar goedkoop genoeg (kale SharedPreferences-lezing) om
+        // geen aparte ticker te rechtvaardigen.
+        val tempOverride = tempOverrideStatusProvider.currentStatus()
+        val tempOverrideText = if (tempOverride.active) {
+            val uren = tempOverride.remainingMinutes / 60
+            val minuten = tempOverride.remainingMinutes % 60
+            "TA ${tempOverride.targetPct}% · ${uren}u${minuten}m"
+        } else ""
+
+        CobUiState(
+            text = cobText,
+            carbsReq = carbsReq,
+            cobValue = cobInfo.displayCob ?: 0.0,
+            tempOverrideActive = tempOverride.active,
+            tempOverrideText = tempOverrideText
+        )
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),

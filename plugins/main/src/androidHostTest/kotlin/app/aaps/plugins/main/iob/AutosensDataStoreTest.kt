@@ -1323,6 +1323,66 @@ class AutosensDataStoreTest : TestBaseWithProfile() {
     }
 
     @Test
+    fun createBucketedDataRecalculated_smallForwardOvershoot_doesNotLoseAllBuckets() {
+        // Regression test for the production incident of 13/09/2026 (de gebruiker): 408 real
+        // readings loaded ("BG data loaded. Size: 408"), yet bucketedData ended up completely
+        // empty ("No bucketed data.") straight after. Root cause: adjustToReferenceTime() rounded
+        // the loop's starting point 3 seconds PAST the actual newest reading (only a small
+        // overshoot, so the existing ">30s -> step back a whole bucket" correction did not kick
+        // in), and findNewer() has NO tolerance at all for that - it returned null on the very
+        // first iteration, so the while loop broke before adding a single bucket.
+        val bgReadingList: MutableList<GV> = ArrayList()
+        // Newest reading, 3 seconds before a clean 5-minute grid point - the same small,
+        // everyday sensor jitter the field incident had (there: diff 42[s], is5minData: false).
+        bgReadingList.add(
+            GV(
+                raw = 0.0, noise = 0.0, value = 100.0,
+                timestamp = T.mins(19).msecs() + T.secs(57).msecs(),
+                sourceSensor = SourceSensor.UNKNOWN, trendArrow = TrendArrow.FLAT
+            )
+        )
+        bgReadingList.add(
+            GV(
+                raw = 0.0, noise = 0.0, value = 99.0,
+                timestamp = T.mins(14).msecs() + T.secs(57).msecs(),
+                sourceSensor = SourceSensor.UNKNOWN, trendArrow = TrendArrow.FLAT
+            )
+        )
+        // Irregular gap here (37s off grid) so isAbout5minData() is false and createBucketedData()
+        // takes the recalculated path this bug lives in - the newest reading above is unaffected.
+        bgReadingList.add(
+            GV(
+                raw = 0.0, noise = 0.0, value = 98.0,
+                timestamp = T.mins(9).msecs() + T.secs(20).msecs(),
+                sourceSensor = SourceSensor.UNKNOWN, trendArrow = TrendArrow.FLAT
+            )
+        )
+        bgReadingList.add(
+            GV(
+                raw = 0.0, noise = 0.0, value = 97.0,
+                timestamp = T.mins(4).msecs() + T.secs(20).msecs(),
+                sourceSensor = SourceSensor.UNKNOWN, trendArrow = TrendArrow.FLAT
+            )
+        )
+
+        // referenceTime already pinned, as it always is after an app's first cycle - 0 is out of
+        // phase with the newest reading by exactly the 3 seconds that used to trip the bug.
+        autosensDataStore.referenceTime = 0L
+        autosensDataStore.bgReadings = bgReadingList
+
+        assertThat(autosensDataStore.isAbout5minData(aapsLogger)).isFalse()
+        autosensDataStore.createBucketedData(aapsLogger, dateUtil)
+
+        // Before the fix this was an empty (non-null) list - "No bucketed data." despite full,
+        // real history being loaded just before it.
+        assertThat(autosensDataStore.bucketedData).isNotNull()
+        assertThat(autosensDataStore.bucketedData).isNotEmpty()
+        // The first bucket must line up exactly on the real newest reading, not 3 seconds past it.
+        assertThat(autosensDataStore.bucketedData!![0].timestamp).isEqualTo(bgReadingList[0].timestamp)
+        assertThat(autosensDataStore.bucketedData!!).hasSize(bgReadingList.size)
+    }
+
+    @Test
     fun bgReadingsTest() {
         val bgReadingList: List<GV> = ArrayList()
         autosensDataStore.bgReadings = bgReadingList

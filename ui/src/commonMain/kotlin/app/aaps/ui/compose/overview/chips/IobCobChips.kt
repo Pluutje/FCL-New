@@ -17,10 +17,11 @@ fun IobCobChipsRow(
     onIobChipClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // COB chip verborgen als cobValue == 0.0 (geen actieve koolhydraten).
-    // Als COB verborgen is: IOB chip staat gewoon links op eigen breedte,
-    // geen proportionele verdeling over de volle breedte.
-    val showCob = cobUiState.cobValue > 0.0
+    // COB chip verborgen als cobValue == 0.0 (geen actieve koolhydraten) EN geen actieve Temp
+    // Override (11/09/2026, de gebruiker — zie kdoc bij TempOverrideLogEntity/ChipsUiState.kt).
+    // Als beide verborgen zijn: IOB chip staat gewoon links op eigen breedte, geen proportionele
+    // verdeling over de volle breedte.
+    val showCob = cobUiState.cobValue > 0.0 || cobUiState.tempOverrideActive
 
     if (!showCob) {
         IobChip(state = iobUiState, onClick = onIobChipClick, modifier = modifier)

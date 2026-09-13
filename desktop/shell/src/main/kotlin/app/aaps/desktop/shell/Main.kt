@@ -315,7 +315,8 @@ private fun AapsDesktopApp(graph: DesktopAppGraph, appIcon: Painter, appName: St
                 onOpenCgmApp = { pkg -> logger.error(LTag.CORE, "No CGM app to open on desktop: $pkg") },
                 onExit = { logger.debug(LTag.CORE, "Exit requested from the menu") },
                 onRequestDirectoryAccess = { logger.debug(LTag.CORE, "Desktop reads its own folder; nothing to grant") },
-                onOpenUrl = { url -> graph.urlOpener.open(url) }
+                onOpenUrl = { url -> graph.urlOpener.open(url) },
+                tempOverrideStatusProvider = graph.tempOverrideStatusProvider
             )
             val insulinManagement = metroViewModel<InsulinManagementViewModel>()
             val profileManagement = metroViewModel<ProfileManagementViewModel>()

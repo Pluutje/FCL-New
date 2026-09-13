@@ -298,7 +298,8 @@ fun aapsAppViewController(nsSocketFactory: NsSocketFactory): UIViewController {
                     onExit = { reportNotAvailable("exit from the menu") },
                     // Needs a UIDocumentPicker, which nothing on iOS has yet.
                     onRequestDirectoryAccess = { reportNotReady("directory access") },
-                    onOpenUrl = { url -> graph.urlOpener.open(url) }
+                    onOpenUrl = { url -> graph.urlOpener.open(url) },
+                    tempOverrideStatusProvider = graph.tempOverrideStatusProvider
                 )
                 val chips: ChipsViewModel = viewModel(
                     factory = viewModelFactory {
