@@ -1448,6 +1448,68 @@ private var lastSegmentAt: DateTime? = null
 
 private var lastSmallCorrectionAt: DateTime? = null
 
+// ── AGGRESSIE-GEHEUGEN VOOR GRAASMAALTIJDEN (13/09/2026, de gebruiker) ──
+// AANLEIDING: een feestje/buffet met meerdere hapmomenten (gebak, brood,
+// wrap, patat, ...) laat BG in een golfpatroon bewegen -- stijging, dan
+// een korte vlakke periode of lichte dip zodra 1 hap is uitgewerkt, dan
+// een nieuwe stijging zodra de volgende hap aanslaat. computeMealAggression()
+// is bewust stateless (puur op de actuele cyclus gebaseerd) -- dat is
+// correct EN veilig tijdens de vlakke/dippende cyclus zelf, want dan is er
+// geen reden om agressief te blijven doseren. Maar analyse van 13/09/2026
+// (15:00-19:40, meerdere manuele bijboluses nodig) liet zien dat de
+// agressie ("a") bij elke hernieuwde stijging binnen dezelfde langdurige
+// maaltijd telkens weer vanaf een lage waarde (0,3-0,6) moest opbouwen
+// naar 1,0 -- 4x in die sessie -- terwijl het feitelijk gewoon dezelfde,
+// doorlopende maaltijd was. Let op: activeMealEpisodeId zelf bleek in die
+// data NIET te resetten (peakEstimator.active hield de episode al open) --
+// het probleem zat puur in deze memoryless aggressie-formule.
+//
+// FIX: onthoud de laatste keer dat "a" stevig hoog was (>=
+// MEAL_AGGRESSION_FLOOR_MIN_A). Bij een HERNIEUWDE stijging (mealSignal.state
+// != NONE, dus niet tijdens de vlakke/dippende cyclus zelf) binnen
+// MEAL_AGGRESSION_GRACE_MINUTES na dat laatste hoge moment, mag "a" niet
+// lager zijn dan een lineair afbouwende vloer vanaf dat laatste niveau. Na
+// de grace-periode zakt de vloer naar 0 en gedraagt de functie zich weer
+// volledig zoals voorheen. Altijd actief (niet gekoppeld aan de Tijdelijke
+// aanpassing-knop, zie overleg 13/09/2026) -- dit corrigeert een
+// detectie-artefact en maakt het algoritme niet agressiever dan het voor 1
+// aaneengesloten lange maaltijd al zou zijn.
+private const val MEAL_AGGRESSION_GRACE_MINUTES = 30.0
+private const val MEAL_AGGRESSION_FLOOR_MIN_A = 0.55
+
+private var lastHighMealAggressionA: Double = 0.0
+private var lastHighMealAggressionAt: DateTime? = null
+
+// ── IOB-REM VERSOEPELING BIJ LANGDURIG HOGE BG (13/09/2026, de gebruiker) ──
+// AANLEIDING: zelfde 13/09-sessie als bij het aggressie-geheugen hierboven.
+// commitIobFactor (via iobDampingFactor()) kan niet onderscheiden "IOB is
+// hoog omdat we al genoeg gegeven hebben, BG komt zo terug" van "IOB is
+// hoog maar er komt gewoon steeds meer eten bij" -- bij een uren durende
+// graasmaaltijd bleef BG desondanks in de EXTREME-zone hangen (19,2 mmol na
+// 5,5 uur), terwijl commitIobFactor de dosis per cyclus juist afremde
+// naarmate IOB (mede door eigen bijboluses) opliep.
+//
+// FIX: houdt bij hoe lang BG ONONDERBROKEN in HIGH/EXTREME zone blijft met
+// duidelijke afstand tot target, mét al noemenswaardige IOB aan boord, en
+// zonder dat BG duidelijk aan het dalen is (recentDelta5m niet negatief).
+// Zodra die situatie langer aanhoudt dan SUSTAINED_HIGH_RELIEF_START_MIN,
+// wordt commitIobFactor geleidelijk (nooit meer dan
+// SUSTAINED_HIGH_RELIEF_MAX_FRAC van de resterende afstand tot 1,0) minder
+// streng, tot een plateau bij SUSTAINED_HIGH_RELIEF_FULL_MIN. Zodra BG weer
+// duidelijk daalt of terug in een lagere zone komt, reset de teller meteen
+// -- dit is dus geen permanente versoepeling, alleen een geleidelijke,
+// begrensde verlichting tijdens een aantoonbaar aanhoudende situatie. Raakt
+// bewust alleen commitIobFactor (de maaltijd-commit-rem), niet de bredere
+// iobFactor die finalDose in het algemeen begrenst. Altijd actief (niet
+// gekoppeld aan de Tijdelijke aanpassing-knop, zie overleg 13/09/2026).
+private const val SUSTAINED_HIGH_MIN_DELTA_TO_TARGET = 2.0   // mmol, alleen echt duidelijk boven target
+private const val SUSTAINED_HIGH_MIN_IOB_RATIO = 0.25         // alleen relevant als er al wat IOB is
+private const val SUSTAINED_HIGH_RELIEF_START_MIN = 45.0      // pas na 45 min aaneengesloten beginnen
+private const val SUSTAINED_HIGH_RELIEF_FULL_MIN = 150.0      // volledig (begrensd) plateau na 2,5 uur
+private const val SUSTAINED_HIGH_RELIEF_MAX_FRAC = 0.35       // nooit meer dan 35% van de rem wegnemen
+
+private var sustainedHighDespiteIobSinceAt: DateTime? = null
+
 private var earlyConfirmDone: Boolean = false
 private var lastEpisodeExitAt: org.joda.time.DateTime? = null  // voor grace-period herstart
 
@@ -3117,7 +3179,8 @@ private fun computeMealAggression(
     mealSignal: MealSignal,
     config: FCLvNextConfig,
     earlyPeakBiasMmol: Double = 0.0,
-    minutesSinceMealStart: Int = 999
+    minutesSinceMealStart: Int = 999,
+    now: DateTime
 ): MealAggression {
 
     // Fast-lane (dominant voor timing)
@@ -3171,9 +3234,32 @@ private fun computeMealAggression(
     // Hard clamps
     a = a.coerceIn(0.0, 1.0)
 
+    // ── Aggressie-geheugen voor graasmaaltijden -- zie kdoc bij
+    // MEAL_AGGRESSION_GRACE_MINUTES hierboven. Grijpt bewust NIET in tijdens
+    // een vlakke/dippende cyclus (mealSignal.state == NONE) -- alleen bij een
+    // hernieuwde stijging die kort na een eerdere stevige stijging optreedt.
+    var aFloored = a
+    val lastHighAt = lastHighMealAggressionAt
+    if (mealSignal.state != MealState.NONE && lastHighAt != null) {
+        val minutesSinceHigh = minutesSince(lastHighAt, now).toDouble()
+        if (minutesSinceHigh in 0.0..MEAL_AGGRESSION_GRACE_MINUTES) {
+            val decayFrac = 1.0 - (minutesSinceHigh / MEAL_AGGRESSION_GRACE_MINUTES)
+            val floorValue = lastHighMealAggressionA * decayFrac
+            aFloored = maxOf(a, floorValue)
+        }
+    }
+    aFloored = aFloored.coerceIn(0.0, 1.0)
+
+    if (aFloored >= MEAL_AGGRESSION_FLOOR_MIN_A) {
+        lastHighMealAggressionA = aFloored
+        lastHighMealAggressionAt = now
+    }
+
+    val floorTag = if (aFloored > a) " floor=${"%.2f".format(aFloored)}(instant=${"%.2f".format(a)})" else ""
+
     return MealAggression(
-        a = a,
-        reason = "AGGR a=${"%.2f".format(a)} (v5=${"%.2f".format(v5)} accel=${"%.2f".format(ctx.acceleration)} delta=${"%.2f".format(ctx.deltaToTarget)} cons=${"%.2f".format(ctx.consistency)} peakBias=${"%.2f".format(biasEffectief)})"
+        a = aFloored,
+        reason = "AGGR a=${"%.2f".format(aFloored)} (v5=${"%.2f".format(v5)} accel=${"%.2f".format(ctx.acceleration)} delta=${"%.2f".format(ctx.deltaToTarget)} cons=${"%.2f".format(ctx.consistency)} peakBias=${"%.2f".format(biasEffectief)})$floorTag"
     )
 }
 
@@ -4646,7 +4732,7 @@ class FCLvNext(
     // "vNN-jjjj-mm-dd-uumm" (aanmaaktijdstip, geen omschrijving; die van
     // eerdere versies raakten toch achter). Alleen als het écht relevant
     // is een korte omschrijving toevoegen.
-    private val FCL_CODE_VERSION = "v117-2026-09-13-1400"
+    private val FCL_CODE_VERSION = "v118-2026-09-13-2100"
 
     // ── Restart-detectie (16/07/2026) ─────────────────────────────────
     // true op precies de EERSTE cyclus na het (her)starten van dit class-
@@ -6499,6 +6585,13 @@ class FCLvNext(
             activeMealEpisodeId = -1
             mealEpisodeStartTime = null
             mealEpisodeStartBg = null
+            // Aggressie-geheugen (zie kdoc bij MEAL_AGGRESSION_GRACE_MINUTES)
+            // hoort niet te overleven na een ECHT einde van de episode --
+            // in de praktijk is dit meestal toch al verlopen (de grace-window
+            // is korter dan de meeste episode-einde-gaten), maar expliciet
+            // opruimen hier maakt het makkelijker te auditen.
+            lastHighMealAggressionA = 0.0
+            lastHighMealAggressionAt = null
             episodeCommitCount = 0
             episodeBoostBudgetU = 0.0
             // 16/08/2026: episodeAigfBPct/Result/WakeOverlapFrac NIET meer
@@ -6683,11 +6776,44 @@ class FCLvNext(
             power = iobPower
         )
 
-        val commitIobFactor = iobDampingFactor(
+        val commitIobFactorRaw = iobDampingFactor(
             iobRatio = ctx.iobRatio,
             config = config,
             power = config.commitIobPower   // NIEUW, milder
         )
+
+        // ── IOB-rem versoepeling bij langdurig hoge BG -- zie kdoc bij
+        // SUSTAINED_HIGH_RELIEF_START_MIN hierboven.
+        val isSustainedHighDespiteIob =
+            (zoneEnum == BgZone.HIGH || zoneEnum == BgZone.EXTREME) &&
+                ctx.deltaToTarget >= SUSTAINED_HIGH_MIN_DELTA_TO_TARGET &&
+                ctx.iobRatio >= SUSTAINED_HIGH_MIN_IOB_RATIO &&
+                ctx.recentDelta5m > -0.05   // niet gebruiken terwijl bg al duidelijk daalt
+
+        if (isSustainedHighDespiteIob) {
+            if (sustainedHighDespiteIobSinceAt == null) sustainedHighDespiteIobSinceAt = now
+        } else {
+            sustainedHighDespiteIobSinceAt = null
+        }
+        val sustainedHighMinutes = minutesSince(sustainedHighDespiteIobSinceAt, now)
+            .let { if (it == Int.MAX_VALUE) 0.0 else it.toDouble() }
+
+        val sustainedHighReliefFrac = SUSTAINED_HIGH_RELIEF_MAX_FRAC * smooth01(
+            (sustainedHighMinutes - SUSTAINED_HIGH_RELIEF_START_MIN) /
+                (SUSTAINED_HIGH_RELIEF_FULL_MIN - SUSTAINED_HIGH_RELIEF_START_MIN)
+        )
+        val commitIobFactor =
+            (commitIobFactorRaw + (1.0 - commitIobFactorRaw) * sustainedHighReliefFrac)
+                .coerceIn(config.iobMinFactor, 1.0)
+
+        if (sustainedHighReliefFrac > 0.0) {
+            status.append(
+                "IOB-REM VERSOEPELD: sustainedHighMin=${"%.0f".format(sustainedHighMinutes)} " +
+                    "relief=${"%.2f".format(sustainedHighReliefFrac)} " +
+                    "commitIobFactor ${"%.2f".format(commitIobFactorRaw)} -> ${"%.2f".format(commitIobFactor)}\n"
+            )
+        }
+
         logRow.commitIobFactor = commitIobFactor
 
 
@@ -7737,7 +7863,8 @@ class FCLvNext(
         val aggr = computeMealAggression(
             ctx, peak, mealSignal, config,
             earlyPeakBiasMmol = config.earlyPeakBiasMmol,
-            minutesSinceMealStart = episodeMinutesForCommit
+            minutesSinceMealStart = episodeMinutesForCommit,
+            now = now
         )
         status.append(aggr.reason + "\n")
 
