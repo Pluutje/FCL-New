@@ -72,6 +72,7 @@ fun ElementType.color(): Color = when (this) {
 
     ElementType.CGM_XDRIP               -> AapsTheme.elementColors.cgmXdrip
     ElementType.CGM_DEX                 -> AapsTheme.elementColors.cgmDex
+    ElementType.CGM_OPEN_SCREEN          -> AapsTheme.elementColors.cgmXdrip
     ElementType.CALIBRATION             -> AapsTheme.elementColors.calibration
     ElementType.INSULIN_MANAGEMENT      -> AapsTheme.elementColors.insulin
 
@@ -79,6 +80,8 @@ fun ElementType.color(): Color = when (this) {
 
     ElementType.TEMP_TARGET_MANAGEMENT,
     ElementType.FCL_TEMP_OVERRIDE       -> AapsTheme.elementColors.tempTarget
+
+    ElementType.FCL_OPEN_SCREEN         -> AapsTheme.elementColors.aaps
 
     ElementType.BG_CHECK                -> AapsTheme.elementColors.bgCheck
     ElementType.NOTE                    -> AapsTheme.elementColors.note
@@ -139,6 +142,7 @@ fun ElementType.icon(): ImageVector = when (this) {
     ElementType.TREATMENT               -> Icons.Default.Add
     ElementType.CGM_XDRIP               -> IcXDrip
     ElementType.CGM_DEX                 -> IcByoda
+    ElementType.CGM_OPEN_SCREEN          -> IcXDrip
     ElementType.CALIBRATION             -> IcCalibration
     ElementType.INSULIN_MANAGEMENT      -> IcPluginInsulin
 
@@ -146,6 +150,8 @@ fun ElementType.icon(): ImageVector = when (this) {
 
     ElementType.TEMP_TARGET_MANAGEMENT,
     ElementType.FCL_TEMP_OVERRIDE       -> IcTtHigh
+
+    ElementType.FCL_OPEN_SCREEN         -> IcSmb
 
     ElementType.BG_CHECK                -> IcBgCheck
     ElementType.NOTE                    -> IcNote
@@ -211,11 +217,13 @@ fun ElementType.label(): TextRef? = when (this) {
     ElementType.TREATMENT               -> CoreUiStrings.overview_treatment_label
     ElementType.CGM_XDRIP               -> CoreUiStrings.cgm
     ElementType.CGM_DEX                 -> CoreUiStrings.cgm
+    ElementType.CGM_OPEN_SCREEN          -> null // internal shortcut, never shown in a label context
     ElementType.CALIBRATION             -> CoreUiStrings.calibration
     ElementType.INSULIN_MANAGEMENT      -> CoreUiStrings.insulin_management
     ElementType.PROFILE_MANAGEMENT      -> CoreUiStrings.profile_management
     ElementType.TEMP_TARGET_MANAGEMENT  -> CoreUiStrings.temp_target_management
     ElementType.FCL_TEMP_OVERRIDE       -> CoreUiStrings.fcl_temp_override
+    ElementType.FCL_OPEN_SCREEN         -> null // internal shortcut, never shown in a label context
     ElementType.BG_CHECK                -> CoreUiStrings.careportal_bgcheck
     ElementType.NOTE                    -> CoreUiStrings.careportal_note
     ElementType.EXERCISE                -> CoreUiStrings.careportal_exercise
@@ -308,5 +316,7 @@ fun ElementType.description(): TextRef? = when (this) {
     ElementType.USER_ENTRY,
     ElementType.LOOP,
     ElementType.AAPS,
+    ElementType.FCL_OPEN_SCREEN,
+    ElementType.CGM_OPEN_SCREEN,
     ElementType.EXIT                    -> null
 }

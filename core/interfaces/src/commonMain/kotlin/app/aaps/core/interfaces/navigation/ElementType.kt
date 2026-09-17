@@ -36,9 +36,25 @@ enum class ElementType(
     // since it changes dosing behavior.
     FCL_TEMP_OVERRIDE(category = ElementCategory.TREATMENT, searchable = false, protection = ProtectionCheck.Protection.BOLUS),
 
+    // FCLvNext "open plugin screen" shortcut (15/09/2026, de gebruiker) — plain navigation to the
+    // FCLvNext plugin screen, no section pre-expanded (unlike FCL_TEMP_OVERRIDE above). Used by the
+    // FCLvNext alternate overview screen's own "FCLvNext" button once that screen replaces the
+    // standard home screen (see APS.overviewOverride). Not searchable (it is only ever reached from
+    // inside the FCLvNext screen itself, not from search or a settings list), so it stays a bare,
+    // default-INTERNAL-category entry like USER_ENTRY/LOOP/AAPS below, instead of NAVIGATION (which
+    // requires searchable = true, see ElementTypeTest.navigationCategory_entries_areAllSearchable).
+    FCL_OPEN_SCREEN,
+
     // CGM
     CGM_XDRIP(category = ElementCategory.CGM, searchable = true),
     CGM_DEX(category = ElementCategory.CGM),
+
+    // FCLvNext alternate overview screen's "Sensor" shortcut (17/09/2026, de gebruiker) — opens
+    // the active BG source plugin's OWN screen (e.g. its received-values table), unlike CGM_XDRIP
+    // above which launches the separate, external xDrip Android app. Bare/internal entry, same
+    // reasoning as FCL_OPEN_SCREEN above: only ever reached from inside the FCLvNext screen, not
+    // from search or a settings list.
+    CGM_OPEN_SCREEN,
 
     // CALIBRATION is intentionally NOT migrated/gated: it's a CGM-plugin command (activeCalibration.addEntry), not a
     // DB write, and a client has no CGM source to calibrate — so it stays local/master-only (see Track B calibration notes).

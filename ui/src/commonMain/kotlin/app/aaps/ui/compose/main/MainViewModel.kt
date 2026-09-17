@@ -63,6 +63,8 @@ import app.aaps.core.objects.wizard.QuickWizardEntry
 import app.aaps.core.objects.wizard.QuickWizardMode
 import app.aaps.core.ui.CoreUiStrings
 import app.aaps.core.ui.clientcontrol.failText
+import app.aaps.core.interfaces.rx.events.EventRefreshOverview
+import app.aaps.core.ui.compose.OverviewOverrideContent
 import app.aaps.core.ui.compose.icons.IcAction
 import app.aaps.core.ui.compose.icons.IcAutomation
 import app.aaps.core.ui.compose.icons.IcBolus
@@ -245,7 +247,13 @@ class MainViewModel(
             runningModeRecordId = chip.runningModeRecordId,
             tbrState = chip.tbrState,
             smbEnabled = ev.smbEnabled,
-            quickWizardItems = chip.quickWizardItems
+            quickWizardItems = chip.quickWizardItems,
+            // 15/09/2026 (de gebruiker) — re-read every time this combine block re-runs (the
+            // 30s progressTicker inside chipStateFlow guarantees that), so flipping the
+            // "alternatief hoofdscherm" toggle takes effect without an app restart (up to ~30s
+            // delay). Any? -> OverviewOverrideContent? cast is safe: overviewOverride's kdoc on
+            // APS documents this as its one intended real type on this platform.
+            overviewOverride = activePlugin.activeAPS?.overviewOverride as? OverviewOverrideContent
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), MainUiState())
 
@@ -255,6 +263,12 @@ class MainViewModel(
             .launchIn(viewModelScope)
         preferences.observe(BooleanKey.ApsUseSmb)
             .onEach { smb -> _eventState.update { it.copy(smbEnabled = smb) } }
+            .launchIn(viewModelScope)
+        // 17/09/2026 (de gebruiker) — laat FCLSettingsScreen's "alternatief hoofdscherm"-toggle
+        // meteen doorwerken i.p.v. tot 30s te wachten op de eerstvolgende progressTicker-tick (zie
+        // overviewOverride hierboven en refreshTick's kdoc op EventState).
+        rxBus.toFlow(EventRefreshOverview::class)
+            .onEach { _eventState.update { it.copy(refreshTick = it.refreshTick + 1) } }
             .launchIn(viewModelScope)
         observeQuickLaunch()
     }
@@ -900,7 +914,13 @@ private data class EventState(
     val smbEnabled: Boolean = false,
     val showAboutDialog: Boolean = false,
     val showMaintenanceSheet: Boolean = false,
-    val showAuthFailedDialog: Boolean = false
+    val showAuthFailedDialog: Boolean = false,
+    // 17/09/2026 (de gebruiker) — bewust een oplopende teller, geen boolean: elke waarde moet
+    // ANDERS zijn dan de vorige, anders slaat StateFlow de emissie over (structurele gelijkheid)
+    // en zou de uiState-combine hieronder niet opnieuw draaien. Zie EventRefreshOverview-observer
+    // in init{} — forceert overviewOverride meteen opnieuw te lezen i.p.v. te wachten op de
+    // eerstvolgende 30s-tick van chipStateFlow's progressTicker.
+    val refreshTick: Int = 0
 )
 
 /**

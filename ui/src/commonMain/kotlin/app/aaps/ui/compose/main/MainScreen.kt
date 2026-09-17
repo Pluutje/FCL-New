@@ -221,12 +221,21 @@ fun MainScreen(
             Scaffold { scaffoldPadding ->
                 val hasToolbar = quickLaunchItems.isNotEmpty()
 
+                // 17/09/2026 (de gebruiker) — het "alternatief hoofdscherm" heeft zijn eigen 4
+                // snelkoppelingsknoppen (Insuline/Tijdelijke aanpassing/FCLvNext/Manage), dus de
+                // onderste MainNavigationBar (Treatments/Manage) en de QuickLaunchToolbar zijn daar
+                // overbodig — ze worden hieronder helemaal verborgen, niet alleen visueel maar ook
+                // qua gereserveerde ruimte (anders blijft het scherm net zo hoog omhoog geduwd als
+                // met de balken zichtbaar).
+                val overviewOverrideActive = uiState.overviewOverride != null
+
                 // Content padding: in preview mode use only system bars;
-                // in normal mode add measured bar heights
+                // in normal mode add measured bar heights (except the bottom chrome bars, which
+                // are hidden entirely for the full-screen override — see overviewOverrideActive).
                 val contentPadding = if (previewMode) scaffoldPadding
                 else {
                     val topBarHeight = with(density) { topBarHeightPx.toDp() }
-                    val bottomBarHeight = with(density) { bottomBarHeightPx.toDp() }
+                    val bottomBarHeight = if (overviewOverrideActive) 0.dp else with(density) { bottomBarHeightPx.toDp() }
                     PaddingValues(
                         top = scaffoldPadding.calculateTopPadding() + topBarHeight,
                         bottom = scaffoldPadding.calculateBottomPadding() + bottomBarHeight
@@ -287,7 +296,8 @@ fun MainScreen(
                         pumpStatusText = pumpStatusText,
                         queueStatusText = queueStatusText,
                         isPumpCommunicating = isPumpCommunicating,
-                        onStopBolus = onStopBolus
+                        onStopBolus = onStopBolus,
+                        overviewOverride = uiState.overviewOverride
                     )
 
                     // Search results overlay
@@ -386,9 +396,10 @@ fun MainScreen(
                         )
                     }
 
-                    // Bottom bar overlay
+                    // Bottom bar overlay — hidden entirely on the full-screen override (it has its
+                    // own shortcut buttons, see overviewOverrideActive above).
                     AnimatedVisibility(
-                        visible = showChrome,
+                        visible = showChrome && !overviewOverrideActive,
                         enter = slideInVertically { it },
                         exit = slideOutVertically { it },
                         modifier = Modifier
@@ -432,9 +443,10 @@ fun MainScreen(
                         )
                     }
 
-                    // Quick launch toolbar overlay
+                    // Quick launch toolbar overlay — hidden on the full-screen override, same reason
+                    // as the bottom bar above.
                     AnimatedVisibility(
-                        visible = hasToolbar && showChrome,
+                        visible = hasToolbar && showChrome && !overviewOverrideActive,
                         enter = slideInVertically { it },
                         exit = slideOutVertically { it },
                         modifier = Modifier

@@ -16,12 +16,15 @@ class ElementTypeStyleTest {
 
     /**
      * ElementTypes that intentionally return `0` from [labelResId] because the label is computed
-     * at runtime (e.g. user-named QuickWizard / Scene, plugin-named Automation).
+     * at runtime (e.g. user-named QuickWizard / Scene, plugin-named Automation), or because the
+     * type is an internal-only shortcut never shown in a label context (FCL_OPEN_SCREEN).
      */
     private val typesWithDynamicLabel = setOf(
         ElementType.QUICK_WIZARD,
         ElementType.AUTOMATION,
-        ElementType.SCENE
+        ElementType.SCENE,
+        ElementType.FCL_OPEN_SCREEN,
+        ElementType.CGM_OPEN_SCREEN
     )
 
     /**
@@ -39,6 +42,8 @@ class ElementTypeStyleTest {
         ElementType.USER_ENTRY,
         ElementType.LOOP,
         ElementType.AAPS,
+        ElementType.FCL_OPEN_SCREEN,
+        ElementType.CGM_OPEN_SCREEN,
         ElementType.EXIT
     )
 

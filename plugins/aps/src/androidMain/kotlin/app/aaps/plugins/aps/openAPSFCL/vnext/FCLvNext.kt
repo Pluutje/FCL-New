@@ -1608,6 +1608,17 @@ private var recentCurveFitR2HistorySkipNext: Boolean = true
 // peakIobBrake/watchingSlopeOk/peakApproachFactor naar één gedeelde rem).
 private var prevRecentSlopeForBrake: Double? = null
 
+// ── Peak-brake korte-termijn-delta-tracking (17/09/2026, de gebruiker) ──
+// recentDelta5m (ruwe, korte-termijn 5-minuten-stijging) van de vórige
+// cyclus, voor computePeakBrake()'s delta5mDecelerating hieronder. Aanleiding:
+// analyse van de 16/9 15:59- en 17/9 07:19-maaltijden liet zien dat bij een
+// SCHERPE piek-en-terugval recentDelta5m al 1 cyclus eerder duidelijk afvlakt
+// dan curveAcceleration (dat trager/gladder is) — zie kdoc bij
+// delta5mDecelerating in computePeakBrake() voor de volledige toelichting en
+// backtest. Zelfde patroon als prevRecentSlopeForBrake hierboven, apart
+// bijgehouden omdat recentDelta5m een ander (ruwer, korte-termijn) signaal is.
+private var prevRecentDelta5mForBrake: Double? = null
+
 // ── Peak-brake persistentie-tracking (01/08/2026) ──────────────────
 // Incident 31/07 19:00 maaltijd: het ruwe deceleratiesignaal in
 // computePeakBrake() (curveFit-bevestigde recentSlope-knik) sloeg meerdere
@@ -2408,6 +2419,18 @@ private data class HypoProtection(
     val maxSafeDoseU: Double = 0.0
 )
 
+// ── Geleidelijke maaltijd-compensatie (14/09/2026, de gebruiker) — zie kdoc
+// bij de toepassing in hypoProtection() (mealCompensationFactor). Onder
+// MEAL_COMPENSATION_SLOPE_MIN: geen compensatie (1,0, ongewijzigd gedrag).
+// Van MEAL_COMPENSATION_SLOPE_MIN tot MEAL_COMPENSATION_SLOPE_FULL: lineair
+// van MEAL_COMPENSATION_FACTOR_AT_MIN naar MEAL_COMPENSATION_FACTOR_FULL.
+// Vanaf MEAL_COMPENSATION_SLOPE_FULL: exact de oude, vaste 0,55 -- bestaand
+// gedrag bij een duidelijke stijging blijft onveranderd.
+private const val MEAL_COMPENSATION_SLOPE_MIN = 1.0
+private const val MEAL_COMPENSATION_SLOPE_FULL = 2.0
+private const val MEAL_COMPENSATION_FACTOR_AT_MIN = 0.80
+private const val MEAL_COMPENSATION_FACTOR_FULL = 0.55
+
 private fun hypoProtection(
     ctx: FCLvNextContext,
     plannedDoseU: Double,
@@ -2486,11 +2509,48 @@ private fun hypoProtection(
     // bgNow>=7.0 — laat de bestaande bgBlockThreshold-marge (4.70) verder
     // volledig intact, verandert alleen HOEVEEL absorptie-compensatie wordt
     // toegekend, niet de ondergrens zelf.
+    // ── Geleidelijke compensatie bij matige stijgsnelheid (14/09/2026, de
+    // gebruiker) ────────────────────────────────────────────────────────────
+    // AANLEIDING: ontbijt 14/9. Om 06:49 en 07:04 stond recentSlope op 1,48
+    // resp. 0,64 mmol/u -- allebei onder de vaste 2,0-drempel die hierboven
+    // altijd al gold -- terwijl de maaltijd al CONFIRMED was. Zonder
+    // compensatie behandelde de projectie hieronder de volledige geplande
+    // vroege-dosis (die cyclus 5,08U) alsof er geen koolhydraten meer werden
+    // opgenomen, en de hypo-projectie sloeg ver door (-5,3 mmol) -- de
+    // daadwerkelijk gegeven dosis werd teruggeknepen naar 0,15U. Om 07:09
+    // (recentSlope 3,36, wel boven de drempel) kwam er wel meteen meer door
+    // (0,64U), maar toen was de stijging al verder op weg. De grote, echt
+    // remmende doses kwamen daardoor pas om 07:34-07:44, met bg toen al op
+    // 10,3-10,9 -- ruim voorbij het punt waarop ze de piek nog hadden kunnen
+    // beperken.
+    //
+    // FIX: vervang de harde aan/uit-knip bij 2,0 door een geleidelijke
+    // oplopende compensatie vanaf MEAL_COMPENSATION_SLOPE_MIN. Bij
+    // recentSlope >= MEAL_COMPENSATION_SLOPE_FULL (2,0) blijft het resultaat
+    // exact hetzelfde als voorheen (0,55) -- dit verandert niets aan reeds
+    // bestaand, getest gedrag bij een duidelijke stijging. Onder die drempel
+    // loopt de compensatie lineair op van MEAL_COMPENSATION_FACTOR_AT_MIN
+    // (bij recentSlope == MEAL_COMPENSATION_SLOPE_MIN) naar 0,55 (bij
+    // recentSlope == MEAL_COMPENSATION_SLOPE_FULL) -- dus bij bijvoorbeeld
+    // 1,9 komt er meer vrij dan bij 1,2, zoals gevraagd.
+    // MEAL_COMPENSATION_FACTOR_AT_MIN staat bewust niet dicht bij 1,0: ook
+    // bij een nog bescheiden slope moet een al bevestigde maaltijd een
+    // merkbare vrijlating krijgen ("voldoende extra om de BG eerder te
+    // remmen", de gebruiker), geen symbolisch klein beetje. Onder
+    // MEAL_COMPENSATION_SLOPE_MIN (dus ook het 07:04-moment hierboven, met
+    // recentSlope 0,64) blijft de compensatie op 1,0 (ongewijzigd, geen
+    // compensatie) -- daar is simpelweg nog te weinig stijgingsbewijs om
+    // zelfs een gedeeltelijke vrijlating op te baseren.
     val mealCompensationFactor = if (
         mealSignal?.state == MealState.CONFIRMED &&
-        ctx.recentSlope >= 2.0 &&
+        ctx.recentSlope >= MEAL_COMPENSATION_SLOPE_MIN &&
         (ctx.input.bgNow >= 7.0 || ctx.iobRatio < 0.10)
-    ) 0.55 else 1.0
+    ) {
+        val slopeFrac = ((ctx.recentSlope - MEAL_COMPENSATION_SLOPE_MIN) /
+            (MEAL_COMPENSATION_SLOPE_FULL - MEAL_COMPENSATION_SLOPE_MIN)).coerceIn(0.0, 1.0)
+        MEAL_COMPENSATION_FACTOR_AT_MIN +
+            slopeFrac * (MEAL_COMPENSATION_FACTOR_FULL - MEAL_COMPENSATION_FACTOR_AT_MIN)
+    } else 1.0
 
     fun insulinActionFrac(min: Int): Double = when {
         min <= 30 -> config.hypoInsulinFrac30 * mealCompensationFactor
@@ -3953,7 +4013,10 @@ private fun computePeakBrake(
     // 01/08/2026 (na analyse incident 31/07 19:00 maaltijd — zie
     // decelTriggered hieronder): of het RUWE deceleratiesignaal (vóór de
     // 2-cyclus-bevestiging) ook al in de VORIGE cyclus aanwezig was.
-    prevRawDecel: Boolean = false
+    prevRawDecel: Boolean = false,
+    // 17/09/2026 (de gebruiker — analyse 16/9 15:59- en 17/9 07:19-maaltijden):
+    // recentDelta5m van de vorige cyclus, voor delta5mDecelerating hieronder.
+    prevRecentDelta5m: Double? = null
 ): PeakBrakeResult {
 
     val suppressThreshold = config.peakIobBrakeSuppressThreshold   // nu actief 0.30
@@ -3976,8 +4039,47 @@ private fun computePeakBrake(
     // dezelfde oplossing als bij bgStijgtNogFors: alleen als de curve-fit
     // (betrouwbaarder, minder ruizig) de omslag BEVESTIGT, telt de knik mee.
     val curveConfirmtOmslag = ctx.curveFitR2 >= CURVE_FIT_MIN_R2 && ctx.curveAcceleration <= 0.0
+
+    // NIEUW (17/09/2026, de gebruiker — analyse 16/9 15:59- en 17/9 07:19-
+    // maaltijden): curveConfirmtOmslag hierboven vereist een VOLLEDIG
+    // bevestigde omslag via de (trage, gladde) curve-fit. Bij een SCHERPE
+    // piek-en-terugval (16/9-voorbeeld: BG 8,9→9,7→9,8→9,4 mmol) blijkt de
+    // ruwe, korte-termijn recentDelta5m al 1 cyclus eerder duidelijk af te
+    // vlakken dan curveAcceleration: op de piek zelf (16/9 16:04) zakte
+    // recentDelta5m al 40% t.o.v. de vorige cyclus (1,06→0,64), terwijl
+    // curveAcceleration toen nog ruim positief was (19,64, pas 2 cycli later
+    // negatief). Zelfde gradueel-omslag-aanpak als curveAccelDecelerating
+    // verderop in de cyclus (13/07/2026) — nu ook hier, met dezelfde
+    // sign-restrictie (nog positief, geen 0/negatief-signalen) en zonder een
+    // curve-fit-r²-eis (recentDelta5m is geen curve-fit-signaal).
+    //
+    // Bewust GEEN losse/zwakkere gate: dit signaal loopt mee in dezelfde
+    // recentSlopeDrop/suppressThreshold/iobRatio-context hieronder en blijft,
+    // net als curveConfirmtOmslag, onderhevig aan de bestaande
+    // 2-cycli-persistentie-eis (decelTriggered) — dus nog steeds geen
+    // enkele-cyclus-ruis-trigger.
+    //
+    // Backtest (17/09/2026, volledige logweek, ~1950 cycli, iobRatio>=0,30,
+    // MET de 2-cycli-persistentie-eis): 0,60-drempel geeft 10 triggers, 6
+    // daarvan bevestigd terecht (BG steeg binnen 15 min niet/nauwelijks meer
+    // door), 4 mogelijk voortijdig (BG steeg toch nog >0,3 mmol door) — de
+    // extra recentSlopeDrop-eis hieronder filtert in de praktijk nog meer van
+    // die 4 uit, dus dit is een conservatieve (te lage) schatting van de
+    // precisie. ⚠️ Eerste inschatting van de 0,60-drempel — expliciet
+    // besproken met de gebruiker dat dit een BEPERKTE verbetering is (bij
+    // 16/9 zou dit alleen de laatste 1,16E-dosis met max. ~45% dempen, niet de
+    // twee doses ervoor; bij een geleidelijk plateau zoals 17/9 helpt geen
+    // enkel signaal eerder dan het plateau zelf zichtbaar wordt) — bewust toch
+    // doorgevoerd omdat elke bevestigde vermindering van dit patroon de moeite
+    // waard is, evt. bijstellen bij een volgende update als er meer logdata is.
+    val delta5mDecelerating = prevRecentDelta5m?.let { prev ->
+        ctx.recentDelta5m > 0.0 &&
+            prev > 0.0 &&
+            ctx.recentDelta5m <= prev * 0.60
+    } ?: false
+
     val rawDecelSignal = recentSlopeDrop >= dropMin && ctx.iobRatio >= suppressThreshold &&
-        curveConfirmtOmslag
+        (curveConfirmtOmslag || delta5mDecelerating)
 
     // PERSISTENTIE-EIS (01/08/2026): incident 31/07 19:00 maaltijd —
     // curveConfirmtOmslag hierboven filtert al ÉÉN soort ruis (een enkele
@@ -4081,7 +4183,8 @@ private fun evaluatePostPeak(
     bgRising3Cycles: Boolean = false,    // waren de laatste 3 BG-delta's alle positief?
     prevRecentSlope: Double? = null,     // voor computePeakBrake() deceleratie-signaal
     prevBrakeActive: Boolean = false,    // voor computePeakBrake() hysterese (17/07/2026)
-    prevRawDecel: Boolean = false        // voor computePeakBrake() persistentie-eis (01/08/2026)
+    prevRawDecel: Boolean = false,       // voor computePeakBrake() persistentie-eis (01/08/2026)
+    prevRecentDelta5m: Double? = null    // voor computePeakBrake() delta5mDecelerating (17/09/2026)
 ): PostPeakSummary {
 
     val inAbsorption = isInAbsorptionWindow(now, config)
@@ -4197,7 +4300,7 @@ private fun evaluatePostPeak(
 
     // ✅ GECONSOLIDEERD (30/06/2026): predictieve IOB-rem via computePeakBrake().
     // Vervangt de oude losse peakIobBrake-conditie (ctx.slope <= 0.50 vaste grens).
-    val peakBrake = computePeakBrake(ctx, peak, config, prevRecentSlope, prevBrakeActive, prevRawDecel)
+    val peakBrake = computePeakBrake(ctx, peak, config, prevRecentSlope, prevBrakeActive, prevRawDecel, prevRecentDelta5m)
     val peakIobBrake = peakBrake.reason != "NONE"   // soft of hard → telt als brake-signaal
 
 
@@ -7080,14 +7183,17 @@ class FCLvNext(
             bgRising3Cycles  = bgRising3Cycles || explosiveRise,
             prevRecentSlope  = prevRecentSlopeForBrake,
             prevBrakeActive  = peakBrakeWasActiveLastCycle,
-            prevRawDecel     = prevRawDecelForBrake
+            prevRawDecel     = prevRawDecelForBrake,
+            prevRecentDelta5m = prevRecentDelta5mForBrake
         )
         status.append(postPeak.reason + "\n")
         // bijwerken voor de volgende cyclus (computePeakBrake deceleratie-signaal +
-        // hysterese-status, 17/07/2026 + persistentie-status, 01/08/2026)
+        // hysterese-status, 17/07/2026 + persistentie-status, 01/08/2026 +
+        // delta5mDecelerating, 17/09/2026)
         prevRecentSlopeForBrake = ctx.recentSlope
         peakBrakeWasActiveLastCycle = postPeak.peakBrake.reason != "NONE"
         prevRawDecelForBrake = postPeak.peakBrake.rawDecelSignal
+        prevRecentDelta5mForBrake = ctx.recentDelta5m
 
         // ✅ NIEUW: early reset zodra afremmen/omkeer start
         val earlyResetThisCycle = maybeResetEarlyOnDecel(ctx, peak, now, status)

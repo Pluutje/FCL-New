@@ -233,8 +233,13 @@ class ElementNavigatorTest {
             ElementType.LOOP,
             ElementType.AAPS
         )
-        // PUMP goes through the active pump plugin, which needs a plugin list rather than a bare mock.
-        val exercisedElsewhere = setOf(ElementType.PUMP)
+        // PUMP goes through the active pump plugin, which needs a plugin list rather than a bare
+        // mock. FCL_OPEN_SCREEN (looks up "OpenAPSFCLPlugin" in getPluginsList()) and
+        // CGM_OPEN_SCREEN (casts activePlugin.activeBgSource to PluginBase) have the same problem:
+        // a bare, unstubbed mock makes them either silently do nothing (empty plugin list) or throw
+        // a ClassCastException (a bare BgSource mock isn't also a PluginBase), neither of which this
+        // generic loop can set up correctly — same reasoning as PUMP.
+        val exercisedElsewhere = setOf(ElementType.PUMP, ElementType.FCL_OPEN_SCREEN, ElementType.CGM_OPEN_SCREEN)
 
         val inert = mutableListOf<ElementType>()
         for (type in ElementType.entries) {

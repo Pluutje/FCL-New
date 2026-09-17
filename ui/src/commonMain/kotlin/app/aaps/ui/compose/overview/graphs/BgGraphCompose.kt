@@ -118,6 +118,12 @@ fun BgGraphCompose(
     derivedTimeRange: Pair<Long, Long>?,
     nowTimestamp: Long,
     visibleTimeRange: Pair<Long, Long>? = null,
+    // 14/09/2026 (de gebruiker) — optionele override voor de Y-as schaal, gebruikt door het
+    // alternatieve FCLvNext-overzichtsscherm (FclOverviewScreen.kt) dat een eigen, vaste
+    // schaalregel wil (2-12 mmol/l, uitbreidbaar) i.p.v. de automatische niceScale hieronder.
+    // Null (standaard) laat het standaard AAPS-hoofdscherm exact ongewijzigd. Ontvangt de RUWE,
+    // ongeclampte zichtbare data-min/max (niet geclampt tegen chartConfig.lowMark/highMark).
+    yRangeOverride: ((dataMin: Double, dataMax: Double) -> NiceScale)? = null,
     modifier: Modifier = Modifier
 ) {
     val dateUtil = LocalDateUtil.current
@@ -176,7 +182,7 @@ fun BgGraphCompose(
     // Stable range-provider instance for the start (BG) axis — created once, mutated in place by
     // the LaunchedEffect below rather than recreated (see MutableYRangeProvider).
     val startAxisRangeProvider = remember {
-        val initialScale = niceScale(chartConfig.lowMark, chartConfig.highMark)
+        val initialScale = yRangeOverride?.invoke(chartConfig.lowMark, chartConfig.highMark) ?: niceScale(chartConfig.lowMark, chartConfig.highMark)
         MutableYRangeProvider(maxX = maxX, minY = initialScale.min, maxY = initialScale.max, yStep = initialScale.step)
     }
 
@@ -345,7 +351,7 @@ fun BgGraphCompose(
     }
 
     // Single LaunchedEffect for all data - ensures atomic updates
-    LaunchedEffect(bgReadings, bucketedData, predictionsByType, basalData, targetData, epsPoints, activityData, showActivity, chartConfig, stableTimeRange, visibleTimeRange) {
+    LaunchedEffect(bgReadings, bucketedData, predictionsByType, basalData, targetData, epsPoints, activityData, showActivity, chartConfig, stableTimeRange, visibleTimeRange, yRangeOverride) {
         seriesRegistry[SERIES_REGULAR] = bgReadings
         seriesRegistry[SERIES_BUCKETED] = bucketedData
         for ((key, points) in predictionsByType) {
@@ -375,9 +381,17 @@ fun BgGraphCompose(
         val allBgAndPredictionValues = (bgReadings + bucketedData + predictions).map { it.value }
         val windowedValues = (bgReadings + bucketedData + predictions).filter { inWindow(it.timestamp) }.map { it.value }
         val windowedOrFull = windowedValues.ifEmpty { allBgAndPredictionValues }
-        val dataMax = maxOf(windowedOrFull.maxOrNull() ?: chartConfig.highMark, chartConfig.highMark)
-        val dataMin = minOf(windowedOrFull.minOrNull() ?: chartConfig.lowMark, chartConfig.lowMark)
-        val niceBgScale = niceScale(dataMin, dataMax)
+        // yRangeOverride (when given) gets the RAW visible min/max, not clamped against
+        // chartConfig.lowMark/highMark — the override decides its own floor/ceiling rule.
+        val niceBgScale = if (yRangeOverride != null) {
+            val rawDataMax = windowedOrFull.maxOrNull() ?: chartConfig.highMark
+            val rawDataMin = windowedOrFull.minOrNull() ?: chartConfig.lowMark
+            yRangeOverride(rawDataMin, rawDataMax)
+        } else {
+            val dataMax = maxOf(windowedOrFull.maxOrNull() ?: chartConfig.highMark, chartConfig.highMark)
+            val dataMin = minOf(windowedOrFull.minOrNull() ?: chartConfig.lowMark, chartConfig.lowMark)
+            niceScale(dataMin, dataMax)
+        }
         startAxisRangeProvider.maxX = maxX
         startAxisRangeProvider.minY = niceBgScale.min
         startAxisRangeProvider.maxY = niceBgScale.max

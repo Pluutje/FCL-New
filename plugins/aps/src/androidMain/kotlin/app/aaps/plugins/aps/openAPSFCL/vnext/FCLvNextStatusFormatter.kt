@@ -103,7 +103,7 @@ data class FclUiSnapshot(
  * FCLvNext.kt, zoals voorheen. Versions.versionCode in buildSrc NIET meer
  * aanraken.
  */
-const val FCL_STATUS_VERSION = 118
+const val FCL_STATUS_VERSION = 119
 
 class FCLvNextStatusFormatter(
     private val prefs: Preferences,
@@ -266,7 +266,7 @@ class FCLvNextStatusFormatter(
     ): String = buildString {
         val str = FclStrings.get(context)
         appendLine("════════════════════════")
-        appendLine(" 🧠 FCL V8 v-$FCL_STATUS_VERSION")
+        appendLine(" 🧠 FCL V9 v-$FCL_STATUS_VERSION")
         appendLine("════════════════════════")
         appendLine()
 

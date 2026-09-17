@@ -31,7 +31,9 @@ import app.aaps.core.interfaces.iob.GlucoseStatusProvider
 import app.aaps.core.interfaces.iob.IobCobCalculator
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
+import app.aaps.core.interfaces.navigation.ElementType
 import app.aaps.core.interfaces.notifications.NotificationManager
+import app.aaps.core.interfaces.overview.graph.OverviewDataCache
 import app.aaps.core.interfaces.plugin.ActivePlugin
 import app.aaps.core.interfaces.plugin.PluginBase
 import app.aaps.core.interfaces.plugin.PluginBaseWithPreferences
@@ -61,6 +63,9 @@ import app.aaps.core.objects.extensions.plannedRemainingMinutes
 import app.aaps.core.objects.extensions.put
 import app.aaps.core.objects.extensions.store
 import app.aaps.core.objects.extensions.target
+import app.aaps.core.ui.compose.OverviewOverrideContent
+import app.aaps.core.ui.compose.navigation.LocalPluginNavigationRequest
+import app.aaps.core.ui.compose.navigation.NavigationRequest
 import app.aaps.core.ui.compose.preference.PreferenceSubScreenDef
 import app.aaps.core.utils.MidnightUtils
 import app.aaps.plugins.aps.R
@@ -71,9 +76,13 @@ import app.aaps.core.ui.compose.icons.IcPluginOpenAPS
 import app.aaps.core.interfaces.aps.oapsProfileFCL
 import app.aaps.core.interfaces.sharedPreferences.SP
 
+import app.aaps.plugins.aps.openAPSFCL.compose.FclOverviewScreen
+import app.aaps.plugins.aps.openAPSFCL.compose.PREFS_NAME
+import app.aaps.plugins.aps.openAPSFCL.compose.PREF_OVERVIEW_SCREEN_ENABLED
 import app.aaps.plugins.aps.openAPSFCL.vnext.deliveryHistory
 import app.aaps.plugins.aps.openAPSFCL.vnext.MAX_DELIVERY_HISTORY
 import app.aaps.plugins.aps.openAPSFCL.vnext.lastCycleFclDelivered
+import app.aaps.ui.compose.overview.graphs.GraphViewModel
 import org.joda.time.DateTime
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.ContributesIntoMap
@@ -122,7 +131,19 @@ open class OpenAPSFCLPlugin @Inject constructor(
     // Was javax.inject.Provider<APSResult> (.get()) - Metro's voorkeursvorm is een kale
     // () -> T-functie i.p.v. het legacy Provider<T>-type (zie ook pumpEnactResultProvider in
     // LoopPlugin.kt, hetzelfde patroon), aanroeppunten hieronder gebruiken nu "()" i.p.v. ".get()".
-    private val apsResultProvider: () -> APSResult
+    private val apsResultProvider: () -> APSResult,
+    // 14/09/2026 (de gebruiker) — alleen nodig voor het nieuwe, optionele alternatieve
+    // overzichtsscherm (zie FclOverviewScreen.kt). Beide zijn al bestaande, app-brede
+    // AppScope-singletons (zie UiBindings.kt in de ui-module) — geen nieuwe berekeningspijplijn,
+    // dit scherm toont gewoon dezelfde live data als het standaard hoofdscherm.
+    private val graphViewModelFactory: GraphViewModel.Factory,
+    private val overviewDataCache: OverviewDataCache,
+    // 15/09/2026 (de gebruiker) — alleen nodig om de "alternatief hoofdscherm"-toggle te lezen in
+    // overviewOverride hieronder (zelfde SharedPreferences-bestand als FCLComposeContent.kt/
+    // FCLSettingsScreen.kt, niet via Compose's LocalContext.current bereikbaar omdat
+    // overviewOverride een gewone property is, geen @Composable). Metro injecteert de
+    // Application-context hier rechtstreeks — zelfde patroon als DetermineBasalFCL.kt.
+    private val context: Context
 ) : PluginBaseWithPreferences(
     PluginDescription()
         .mainType(PluginType.APS)
@@ -186,6 +207,41 @@ open class OpenAPSFCLPlugin @Inject constructor(
 
     override fun getGlucoseStatusData(allowOldData: Boolean): GlucoseStatus? =
         glucoseStatusCalculatorFCL.getGlucoseStatusData(allowOldData)
+
+    // 15/09/2026 (de gebruiker) — "alternatief hoofdscherm": laat FclOverviewScreen het echte
+    // AAPS-hoofdscherm vervangen, direct bij het openen van de app, als de toggle in
+    // FCLSettingsScreen aan staat (zelfde SharedPreferences-bestand/sleutel als
+    // FCLComposeContent.kt's fase-1 tabblad hierboven — zie PREFS_NAME/PREF_OVERVIEW_SCREEN_ENABLED
+    // in FclOverviewScreen.kt). Geretourneerd als `Any?` — zie de kdoc bij
+    // [app.aaps.core.interfaces.aps.APS.overviewOverride] voor waarom.
+    //
+    // De "FCLvNext"-knop navigeert hier via een echte NavigationRequest (ElementType.FCL_OPEN_SCREEN)
+    // — anders dan het fase-1-tabblad hierboven (dat lokaal een tab-index omschakelt) — er is geen
+    // tab-scherm meer omheen als dit scherm zelf het hoofdscherm is. De "Override"-knop toont sinds
+    // 17/09/2026 (de gebruiker) zijn eigen kaart rechtstreeks in een lokale bottom sheet binnen
+    // FclOverviewScreen zelf, dus die heeft hier geen navigatie-callback meer nodig — zie kdoc bij
+    // `showOverrideSheet` in FclOverviewScreen.kt.
+    override val overviewOverride: Any?
+        get() {
+            val enabled = context
+                .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getBoolean(PREF_OVERVIEW_SCREEN_ENABLED, false)
+            if (!enabled) return null
+            val content: OverviewOverrideContent = {
+                val navigationRequest = LocalPluginNavigationRequest.current
+                FclOverviewScreen(
+                    overviewDataCache = overviewDataCache,
+                    graphViewModelFactory = graphViewModelFactory,
+                    persistenceLayer = persistenceLayer,
+                    activePlugin = activePlugin,
+                    profileFunction = profileFunction,
+                    iobCobCalculator = iobCobCalculator,
+                    dateUtil = dateUtil,
+                    onOpenFclSettings = { navigationRequest(NavigationRequest.Element(ElementType.FCL_OPEN_SCREEN)) }
+                )
+            }
+            return content
+        }
 
     override fun specialEnableCondition(): Boolean {
         return try {

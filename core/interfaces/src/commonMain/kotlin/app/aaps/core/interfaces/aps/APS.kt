@@ -99,4 +99,18 @@ interface APS {
      * @return [GlucoseStatus]
      */
     fun getGlucoseStatusData(allowOldData: Boolean): GlucoseStatus?
+
+    /**
+     * Optional replacement for the standard overview screen content, chosen by the active APS
+     * plugin (15/09/2026, de gebruiker — "alternatief hoofdscherm" toggle for FCLvNext).
+     *
+     * Typed `Any?` instead of a real UI type on purpose: `core:interfaces` cannot depend on
+     * `core:ui` (where the actual content-wrapper type lives), the same module-boundary reason
+     * `PluginBase.getComposeContent()` also returns `Any?`. The `ui` module reads this property,
+     * casts it back to its own wrapper type, and renders it (inside a crash-safe boundary) instead
+     * of the standard overview content when it is non-null.
+     *
+     * Default `null` means every other APS plugin, on every platform, is completely unaffected.
+     */
+    val overviewOverride: Any? get() = null
 }

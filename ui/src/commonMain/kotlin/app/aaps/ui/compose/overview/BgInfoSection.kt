@@ -19,6 +19,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -43,6 +44,9 @@ import kotlin.math.sin
  *   [LocalAapsScale] so the circle grows on tablets to match scaled typography. Pass an explicit
  *   value only if you want to override the tablet-aware default.
  * @param showTimeAgo Whether to render the small "time ago" line below the BG value.
+ * @param timeAgoStyle Optional override for the "time ago" text style. Defaults to `null`, which
+ *   keeps using [AapsTheme.typography.bgTimeAgo] (the standard home screen's size) — pass a
+ *   smaller style for callers with less room around the circle (e.g. a compact card).
  *
  * @see BgInfoSectionInRangePreview
  * @see BgInfoSectionHighPreview
@@ -55,7 +59,8 @@ fun BgInfoSection(
     timeAgoText: String,
     modifier: Modifier = Modifier,
     size: Dp = AapsSpacing.bgCircleSize * LocalAapsScale.current,
-    showTimeAgo: Boolean = true
+    showTimeAgo: Boolean = true,
+    timeAgoStyle: TextStyle? = null
 ) {
     if (bgInfo == null) {
         // Show placeholder when no data
@@ -187,7 +192,7 @@ fun BgInfoSection(
             if (showTimeAgo) {
                 Text(
                     text = timeAgoText,
-                    style = AapsTheme.typography.bgTimeAgo,
+                    style = timeAgoStyle ?: AapsTheme.typography.bgTimeAgo,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }

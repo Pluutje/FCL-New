@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -28,9 +29,12 @@ import app.aaps.core.data.model.TT
 import app.aaps.core.interfaces.notifications.AapsNotification
 import app.aaps.core.interfaces.overview.graph.TbrState
 import app.aaps.core.interfaces.pump.BolusProgressState
+import app.aaps.core.ui.compose.CrashSafeContent
+import app.aaps.core.ui.compose.OverviewOverrideContent
 import app.aaps.core.ui.compose.isLandscape
 import app.aaps.core.ui.compose.smallestScreenWidthDp
 import app.aaps.core.ui.compose.TABLET_MIN_SW_DP
+import app.aaps.core.ui.compose.navigation.LocalPluginNavigationRequest
 import app.aaps.core.ui.compose.navigation.NavigationRequest
 import app.aaps.core.ui.compose.preference.PreferenceSubScreenDef
 import app.aaps.core.ui.compose.pump.PumpActivityDialog
@@ -85,6 +89,189 @@ fun OverviewScreen(
     onDismissScene: () -> Unit = {},
     endSceneEnabled: Boolean = true,
     // Disables the command chips' click (running mode / profile / temp target) on an unpaired client — same gate as nav/Manage.
+    commandsAllowed: Boolean = true,
+    formatDuration: (Long) -> String = { ms -> "${(ms / 60000L).toInt()}m" },
+    paddingValues: PaddingValues,
+    fabBottomOffset: Dp = 0.dp,
+    bolusState: BolusProgressState? = null,
+    pumpStatusText: String = "",
+    queueStatusText: AnnotatedString? = null,
+    isPumpCommunicating: Boolean = false,
+    onStopBolus: () -> Unit = {},
+    modifier: Modifier = Modifier,
+    // 15/09/2026 (de gebruiker) — optional home-screen replacement contributed by the active APS
+    // plugin (APS.overviewOverride, "alternatief hoofdscherm" toggle for FCLvNext). Typed `Any?`
+    // for the same module-boundary reason as `PluginBase.getComposeContent()`: `core:interfaces`
+    // (where APS lives) cannot depend on `core:ui` (where OverviewOverrideContent lives). Rendered
+    // through CrashSafeContent so a bug in the override screen falls back to the standard content
+    // below instead of crashing the app — see CrashSafeContent's kdoc for what that does and does
+    // not guarantee.
+    overviewOverride: Any? = null
+) {
+    val override = overviewOverride as? OverviewOverrideContent
+    if (override != null) {
+        CrashSafeContent(
+            modifier = modifier.fillMaxSize(),
+            // Same top/bottom insets the standard screen's own branches apply internally (see
+            // OverviewScreenStacked/Tablet/Split) — without this, the override screen's content
+            // renders from y=0 and gets covered by the floating top search bar. Applied only to
+            // this slot (not to CrashSafeContent's own modifier above), so the fallback slot below
+            // keeps applying paddingValues exactly the way it already does when there's no override
+            // at all — it would otherwise get padded twice.
+            //
+            // 17/09/2026 (de gebruiker) — none of the override screen's buttons worked once it
+            // became the real home screen: LocalPluginNavigationRequest.current defaults to a no-op
+            // lambda everywhere except inside AppNavGraph's plugin-content route (see its kdoc),
+            // which this home-screen path never goes through. `onNavigate` below IS the same real,
+            // working navigation dispatcher the rest of this screen already uses (chip clicks,
+            // settings gear, ...), so provide it as the CompositionLocal's value here too.
+            content = {
+                CompositionLocalProvider(LocalPluginNavigationRequest provides onNavigate) {
+                    Box(Modifier.fillMaxSize().padding(paddingValues)) { override() }
+                }
+            },
+            fallback = {
+                StandardOverviewScreenContent(
+                    profileName = profileName,
+                    profilePsId = profilePsId,
+                    isProfileModified = isProfileModified,
+                    profileProgress = profileProgress,
+                    tempTargetText = tempTargetText,
+                    tempTargetState = tempTargetState,
+                    tempTargetProgress = tempTargetProgress,
+                    tempTargetReason = tempTargetReason,
+                    tempTargetRecordId = tempTargetRecordId,
+                    runningMode = runningMode,
+                    runningModeText = runningModeText,
+                    runningModeRemaining = runningModeRemaining,
+                    runningModeProgress = runningModeProgress,
+                    runningModeRecordId = runningModeRecordId,
+                    tbrState = tbrState,
+                    smbEnabled = smbEnabled,
+                    isSimpleMode = isSimpleMode,
+                    calcProgress = calcProgress,
+                    graphViewModel = graphViewModel,
+                    chipsViewModel = chipsViewModel,
+                    manageViewModel = manageViewModel,
+                    statusViewModel = statusViewModel,
+                    statusLightsDef = statusLightsDef,
+                    onNavigate = onNavigate,
+                    onTbrChipClick = onTbrChipClick,
+                    onIobChipClick = onIobChipClick,
+                    notifications = notifications,
+                    onDismissNotification = onDismissNotification,
+                    onNotificationActionClick = onNotificationActionClick,
+                    autoShowNotificationSheet = autoShowNotificationSheet,
+                    onAutoShowConsumed = onAutoShowConsumed,
+                    activeSceneState = activeSceneState,
+                    sceneExpired = sceneExpired,
+                    onEndScene = onEndScene,
+                    onDismissScene = onDismissScene,
+                    endSceneEnabled = endSceneEnabled,
+                    commandsAllowed = commandsAllowed,
+                    formatDuration = formatDuration,
+                    paddingValues = paddingValues,
+                    fabBottomOffset = fabBottomOffset,
+                    bolusState = bolusState,
+                    pumpStatusText = pumpStatusText,
+                    queueStatusText = queueStatusText,
+                    isPumpCommunicating = isPumpCommunicating,
+                    onStopBolus = onStopBolus,
+                    modifier = modifier
+                )
+            }
+        )
+    } else {
+        StandardOverviewScreenContent(
+            profileName = profileName,
+            profilePsId = profilePsId,
+            isProfileModified = isProfileModified,
+            profileProgress = profileProgress,
+            tempTargetText = tempTargetText,
+            tempTargetState = tempTargetState,
+            tempTargetProgress = tempTargetProgress,
+            tempTargetReason = tempTargetReason,
+            tempTargetRecordId = tempTargetRecordId,
+            runningMode = runningMode,
+            runningModeText = runningModeText,
+            runningModeRemaining = runningModeRemaining,
+            runningModeProgress = runningModeProgress,
+            runningModeRecordId = runningModeRecordId,
+            tbrState = tbrState,
+            smbEnabled = smbEnabled,
+            isSimpleMode = isSimpleMode,
+            calcProgress = calcProgress,
+            graphViewModel = graphViewModel,
+            chipsViewModel = chipsViewModel,
+            manageViewModel = manageViewModel,
+            statusViewModel = statusViewModel,
+            statusLightsDef = statusLightsDef,
+            onNavigate = onNavigate,
+            onTbrChipClick = onTbrChipClick,
+            onIobChipClick = onIobChipClick,
+            notifications = notifications,
+            onDismissNotification = onDismissNotification,
+            onNotificationActionClick = onNotificationActionClick,
+            autoShowNotificationSheet = autoShowNotificationSheet,
+            onAutoShowConsumed = onAutoShowConsumed,
+            activeSceneState = activeSceneState,
+            sceneExpired = sceneExpired,
+            onEndScene = onEndScene,
+            onDismissScene = onDismissScene,
+            endSceneEnabled = endSceneEnabled,
+            commandsAllowed = commandsAllowed,
+            formatDuration = formatDuration,
+            paddingValues = paddingValues,
+            fabBottomOffset = fabBottomOffset,
+            bolusState = bolusState,
+            pumpStatusText = pumpStatusText,
+            queueStatusText = queueStatusText,
+            isPumpCommunicating = isPumpCommunicating,
+            onStopBolus = onStopBolus,
+            modifier = modifier
+        )
+    }
+}
+
+/** The standard overview (home) screen content — unchanged, just factored out of [OverviewScreen] so it can also serve as [CrashSafeContent]'s fallback slot. */
+@Composable
+private fun StandardOverviewScreenContent(
+    profileName: String,
+    profilePsId: Long = 0,
+    isProfileModified: Boolean,
+    profileProgress: Float,
+    tempTargetText: String,
+    tempTargetState: TempTargetChipState,
+    tempTargetProgress: Float,
+    tempTargetReason: TT.Reason?,
+    tempTargetRecordId: Long = 0,
+    runningMode: RM.Mode,
+    runningModeText: String,
+    runningModeRemaining: String,
+    runningModeProgress: Float,
+    runningModeRecordId: Long = 0,
+    tbrState: TbrState,
+    smbEnabled: Boolean,
+    isSimpleMode: Boolean,
+    calcProgress: Int,
+    graphViewModel: GraphViewModel,
+    chipsViewModel: ChipsViewModel,
+    manageViewModel: ManageViewModel,
+    statusViewModel: StatusViewModel,
+    statusLightsDef: PreferenceSubScreenDef,
+    onNavigate: (NavigationRequest) -> Unit,
+    onTbrChipClick: () -> Unit,
+    onIobChipClick: () -> Unit,
+    notifications: List<AapsNotification>,
+    onDismissNotification: (AapsNotification) -> Unit,
+    onNotificationActionClick: (AapsNotification) -> Unit,
+    autoShowNotificationSheet: Boolean,
+    onAutoShowConsumed: () -> Unit,
+    activeSceneState: ActiveSceneState? = null,
+    sceneExpired: Boolean = false,
+    onEndScene: () -> Unit = {},
+    onDismissScene: () -> Unit = {},
+    endSceneEnabled: Boolean = true,
     commandsAllowed: Boolean = true,
     formatDuration: (Long) -> String = { ms -> "${(ms / 60000L).toInt()}m" },
     paddingValues: PaddingValues,

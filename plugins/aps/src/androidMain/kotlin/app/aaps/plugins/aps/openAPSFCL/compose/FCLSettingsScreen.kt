@@ -23,6 +23,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.PermissionController
+import app.aaps.core.interfaces.rx.bus.RxBus
+import app.aaps.core.interfaces.rx.events.EventRefreshOverview
 import app.aaps.core.interfaces.sharedPreferences.SP
 import app.aaps.core.keys.DoubleKey
 import app.aaps.core.keys.StringKey
@@ -30,7 +32,6 @@ import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.ui.compose.pickers.TimeWheelPicker
 import app.aaps.core.ui.compose.pickers.WeekDaySelector
 import app.aaps.plugins.aps.openAPSFCL.vnext.FCL_STATUS_VERSION
-import app.aaps.plugins.aps.openAPSFCL.vnext.FclTempOverrideSettings
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.DFLearner
 import app.aaps.plugins.aps.openAPSFCL.vnext.database.FCLCycleLogRepository
 import app.aaps.plugins.aps.openAPSFCL.vnext.healthconnect.FclHealthConnectPermissions
@@ -43,7 +44,6 @@ import app.aaps.plugins.aps.openAPSFCL.update.FclUpdatePrefs
 import app.aaps.plugins.aps.openAPSFCL.update.FclUpdateScheduler
 import app.aaps.plugins.aps.openAPSFCL.update.FclWhatsNewChecker
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -59,7 +59,19 @@ fun FCLSettingsScreen(
     // 13/09/2026 (de gebruiker) — true als dit scherm net geopend is via de Treatments-sheet
     // "Tijdelijke aanpassing"-snelkoppeling (zie FclTempOverrideStatusProviderImpl.kt); klapt
     // de sectie hieronder direct open, zelfde patroon als startExpandedOnUpdates hierboven.
-    startExpandedOnTempOverride: Boolean = false
+    startExpandedOnTempOverride: Boolean = false,
+    // 14/09/2026 (de gebruiker) — huidige stand van de preview-toggle voor het alternatieve
+    // overzichtsscherm hieronder, en een callback om de buitenste FCLComposeContent (die het
+    // 5e tabblad toont/verbergt) meteen te laten weten wanneer de toggle omgezet wordt, zonder
+    // het scherm opnieuw te hoeven openen. De SharedPreferences-waarde zelf blijft de bron van
+    // waarheid bij een nieuwe schermopening (zie hierboven, mutableStateOf leest 'm opnieuw).
+    overviewScreenEnabled: Boolean = false,
+    onOverviewScreenEnabledChange: (Boolean) -> Unit = {},
+    // 17/09/2026 (de gebruiker) — nodig om na het omzetten van de toggle hierboven meteen een
+    // EventRefreshOverview te sturen (zie onCheckedChange hieronder): zonder dit duurt het tot de
+    // volgende 30s-tick van MainViewModel's eigen ticker voordat het echte hoofdscherm de nieuwe
+    // stand van APS.overviewOverride oppikt.
+    rxBus: RxBus
 ) {
 
     // Link naar het externe FCLvNext-handboek (Google Doc) — los bestand,
@@ -215,6 +227,57 @@ fun FCLSettingsScreen(
             }
         }
 
+        // ── Alternatief overzicht (preview) (14/09/2026, de gebruiker) ──
+        // Vervangt, als deze toggle aan staat, het ECHTE AAPS-hoofdscherm (direct bij het
+        // openen van de app) door een overzicht met een moderner, ronder uiterlijk — geen
+        // apart tabblad meer (zie APS.overviewOverride/OpenAPSFCLPlugin.kt; het 5e tabblad
+        // hier is per 15/09/2026 verwijderd). Eigen, niet-expert SharedPreferences-bestand
+        // (zelfde aanpak als aigfActive/expertModeActive hierboven/hieronder) — deze
+        // plugin heeft geen toegang om nieuwe entries aan de AAPS-core keys-lijst toe
+        // te voegen.
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        ) {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "🖼️ Alternatief overzicht (preview)",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Switch(
+                        checked = overviewScreenEnabled,
+                        onCheckedChange = { active ->
+                            ctx.getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
+                                .edit().putBoolean(PREF_OVERVIEW_SCREEN_ENABLED, active).apply()
+                            onOverviewScreenEnabledChange(active)
+                            // 17/09/2026 (de gebruiker) — dwingt een directe refresh af i.p.v. te
+                            // wachten op MainViewModel's eigen 30s-ticker.
+                            rxBus.send(EventRefreshOverview("FCLvNext: alternatief hoofdscherm toggle", now = true))
+                        }
+                    )
+                }
+                Text(
+                    "Vervangt het standaard AAPS-hoofdscherm direct bij het openen van de app " +
+                        "door een alternatief overzichtsscherm met een moderner uiterlijk. Dit is " +
+                        "een eerste, nog groeiende opzet.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
         // ── Temp Override — "Tijdelijke aanpassing" (11/09/2026, de gebruiker) ──
         // Zie kdoc bij FclTempOverrideSettings.kt voor de volledige aanleiding en
         // werking (vlak op het ingestelde percentage tot 75% van de duur, daarna
@@ -223,186 +286,12 @@ fun FCLSettingsScreen(
         // Verandert NOOIT de vaste instellingen hieronder (max bolus/IOB/
         // agressiviteit) — die blijven ongemoeid; dit is een losse, tijdelijke
         // multiplier die op precies één plek in FCLvNext.kt wordt toegepast.
-        run {
-            var tempOverridePct by remember { mutableStateOf(FclTempOverrideSettings.getPercentage(ctx)) }
-            var tempOverrideDurationMin by remember { mutableStateOf(FclTempOverrideSettings.getDurationMinutes(ctx)) }
-            var tempOverrideStatus by remember {
-                mutableStateOf(FclTempOverrideSettings.status(ctx, System.currentTimeMillis()))
-            }
-            // Standaard dicht (11/09/2026, de gebruiker) — titel + livestatus
-            // hieronder blijven ook dicht zichtbaar, zodat in één oogopslag
-            // duidelijk is of er iets actief is, zonder open te hoeven klappen.
-            // Tenzij het scherm net via de Treatments-sheet-snelkoppeling is
-            // geopend (13/09/2026, de gebruiker) — dan direct open.
-            var expandedTempOverride by remember { mutableStateOf(startExpandedOnTempOverride) }
-
-            // Ververst de live "nog X min"-status elke 30 seconden zolang dit
-            // kaartje in compositie is — zelfde eenvoudige polling-aanpak als
-            // elders in dit scherm (bijv. de Health Connect-statuscontrole
-            // verderop), geen aparte Flow/observer nodig voor zo'n lichte,
-            // lokale klok-tik.
-            LaunchedEffect(Unit) {
-                while (true) {
-                    tempOverrideStatus = FclTempOverrideSettings.status(ctx, System.currentTimeMillis())
-                    delay(30_000L)
-                }
-            }
-
-            val sliderColor = when {
-                tempOverridePct < 100 -> MaterialTheme.colorScheme.error
-                tempOverridePct > 100 -> MaterialTheme.colorScheme.primary
-                else -> MaterialTheme.colorScheme.onSurfaceVariant
-            }
-
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = if (tempOverrideStatus.active)
-                        MaterialTheme.colorScheme.tertiaryContainer
-                    else
-                        MaterialTheme.colorScheme.surfaceVariant
-                )
-            ) {
-                Column {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable(onClick = { expandedTempOverride = !expandedTempOverride })
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("🎚️", style = MaterialTheme.typography.titleMedium)
-                            Column {
-                                Text(
-                                    "Tijdelijke aanpassing",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
-                                )
-                                if (tempOverrideStatus.active) {
-                                    val uren = tempOverrideStatus.remainingMinutes / 60
-                                    val minuten = tempOverrideStatus.remainingMinutes % 60
-                                    Text(
-                                        "Actief: ${"%.0f".format(tempOverrideStatus.effectiveMul * 100)}% · nog ${uren}u ${minuten}m",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                } else {
-                                    Text(
-                                        "Niet actief",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        }
-                        Icon(
-                            imageVector = if (expandedTempOverride) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                            contentDescription = null
-                        )
-                    }
-                    AnimatedVisibility(
-                        visible = expandedTempOverride,
-                        enter = expandVertically(),
-                        exit = shrinkVertically()
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Text(
-                                "Schaalt elke dosis tijdelijk op of af — bijvoorbeeld voorzichtiger " +
-                                    "als je een hypo ziet aankomen en die gaat wegeten, of juist iets " +
-                                    "sterker bij een uitgebreide maaltijd. Blijft de hele duur op het " +
-                                    "ingestelde percentage en loopt in het laatste kwart vloeiend terug " +
-                                    "naar normaal (100%). Laat je vaste instellingen hieronder ongemoeid.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-
-                            if (tempOverrideStatus.active) {
-                                val eindTijd = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
-                                    .format(java.util.Date(System.currentTimeMillis() + tempOverrideStatus.remainingMinutes * 60_000L))
-                                Text(
-                                    "Actief tot $eindTijd",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            }
-
-                            Text(
-                                "Percentage: $tempOverridePct%",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
-                                color = sliderColor
-                            )
-                            Slider(
-                                value = tempOverridePct.toFloat(),
-                                onValueChange = { v ->
-                                    val stepped = (v / FclTempOverrideSettings.STEP_PCT).toInt() * FclTempOverrideSettings.STEP_PCT
-                                    tempOverridePct = stepped.coerceIn(FclTempOverrideSettings.MIN_PCT, FclTempOverrideSettings.MAX_PCT)
-                                },
-                                valueRange = FclTempOverrideSettings.MIN_PCT.toFloat()..FclTempOverrideSettings.MAX_PCT.toFloat(),
-                                steps = (FclTempOverrideSettings.MAX_PCT - FclTempOverrideSettings.MIN_PCT) / FclTempOverrideSettings.STEP_PCT - 1,
-                                colors = SliderDefaults.colors(
-                                    thumbColor = sliderColor,
-                                    activeTrackColor = sliderColor
-                                )
-                            )
-
-                            val durationUur = tempOverrideDurationMin / 60.0
-                            Text(
-                                "Duur: %.1f uur".format(durationUur),
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
-                            )
-                            Slider(
-                                value = tempOverrideDurationMin.toFloat(),
-                                onValueChange = { v ->
-                                    val stepped = (v / 30).toInt() * 30
-                                    tempOverrideDurationMin = stepped.coerceIn(
-                                        FclTempOverrideSettings.MIN_DURATION_MIN,
-                                        FclTempOverrideSettings.MAX_DURATION_MIN
-                                    )
-                                },
-                                valueRange = FclTempOverrideSettings.MIN_DURATION_MIN.toFloat()..FclTempOverrideSettings.MAX_DURATION_MIN.toFloat(),
-                                steps = (FclTempOverrideSettings.MAX_DURATION_MIN - FclTempOverrideSettings.MIN_DURATION_MIN) / 30 - 1
-                            )
-
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Button(
-                                    onClick = {
-                                        FclTempOverrideSettings.start(ctx, tempOverridePct, tempOverrideDurationMin)
-                                        tempOverrideStatus = FclTempOverrideSettings.status(ctx, System.currentTimeMillis())
-                                    },
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text(if (tempOverrideStatus.active) "Herstart" else "Start")
-                                }
-                                if (tempOverrideStatus.active) {
-                                    OutlinedButton(
-                                        onClick = {
-                                            FclTempOverrideSettings.stop(ctx)
-                                            tempOverrideStatus = FclTempOverrideSettings.status(ctx, System.currentTimeMillis())
-                                        },
-                                        modifier = Modifier.weight(1f)
-                                    ) {
-                                        Text("Stop")
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        //
+        // 17/09/2026 (de gebruiker) — de kaart-UI zelf staat nu in het eigen,
+        // herbruikbare TempOverrideCard.kt, zodat het alternatieve overzichtsscherm
+        // (FclOverviewScreen.kt) 'm ook rechtstreeks in een eigen bottom sheet kan
+        // tonen zonder via dit volledige instellingenscherm te hoeven navigeren.
+        TempOverrideCard(startExpanded = startExpandedOnTempOverride)
 
         FCLSection(
             title = s.settingsDosisBehavior,

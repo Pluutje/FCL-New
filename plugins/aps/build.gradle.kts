@@ -104,6 +104,13 @@ kotlin {
                 implementation(project(":core:objects"))
                 implementation(project(":core:utils"))
                 implementation(project(":core:ui"))
+                // 14/09/2026 (de gebruiker) — nodig voor het nieuwe, optionele alternatieve
+                // FCLvNext-overzichtsscherm: hergebruikt de bestaande, beproefde grafiek-
+                // componenten (GraphsSection/BgGraphCompose/GraphViewModel, met predictie,
+                // zoom en swipe al ingebouwd) i.p.v. dit allemaal opnieuw te bouwen. Nieuwe
+                // richting (plugins:aps -> ui) maar geen cirkel: de ui-module heeft zelf geen
+                // dependency terug naar plugins:aps of enige andere plugins:*-module.
+                implementation(project(":ui"))
 
                 implementation(libs.androidx.collection)
                 implementation(libs.kotlinx.coroutines.core)

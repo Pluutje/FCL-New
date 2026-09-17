@@ -152,6 +152,10 @@ class ElementNavigator(
             ElementType.CGM_XDRIP               -> onOpenCgmApp("com.eveningoutpost.dexdrip")
             ElementType.CGM_DEX                 -> dexcomBoyda.dexcomPackages().forEach { onOpenCgmApp(it) }
 
+            // FCLvNext alternate overview screen's "Sensor" shortcut (17/09/2026, de gebruiker) —
+            // opens the active BG source plugin's own screen, same lookup style as PUMP below.
+            ElementType.CGM_OPEN_SCREEN          -> openPlugin(activePlugin.activeBgSource as PluginBase, navController, activePlugin)
+
             ElementType.CALIBRATION             -> navController.navigate(AppRoute.CalibrationDialog.route)
 
             // Careportal
@@ -184,6 +188,13 @@ class ElementNavigator(
             ElementType.FCL_TEMP_OVERRIDE       -> {
                 val plugin = activePlugin.getPluginsList().find { it::class.simpleName == "OpenAPSFCLPlugin" } ?: return
                 tempOverrideStatusProvider.requestOpenSettings()
+                openPlugin(plugin, navController, activePlugin)
+            }
+
+            // FCLvNext plain "open plugin screen" shortcut (15/09/2026, de gebruiker) — same plugin
+            // lookup as FCL_TEMP_OVERRIDE above, but without the one-shot expand-section side effect.
+            ElementType.FCL_OPEN_SCREEN         -> {
+                val plugin = activePlugin.getPluginsList().find { it::class.simpleName == "OpenAPSFCLPlugin" } ?: return
                 openPlugin(plugin, navController, activePlugin)
             }
 

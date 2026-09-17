@@ -5,6 +5,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import app.aaps.core.data.model.RM
 import app.aaps.core.data.model.TT
 import app.aaps.core.interfaces.overview.graph.TbrState
+import app.aaps.core.ui.compose.OverviewOverrideContent
 
 /**
  * State of the TempTarget chip in Overview
@@ -52,7 +53,13 @@ data class MainUiState(
     // QuickWizard entries for treatment bottom sheet
     val quickWizardItems: List<QuickWizardItem> = emptyList(),
     // Navigation-triggered dialogs
-    val showAuthFailedDialog: Boolean = false
+    val showAuthFailedDialog: Boolean = false,
+    // 15/09/2026 (de gebruiker) — optional home-screen replacement contributed by the active APS
+    // plugin (APS.overviewOverride, "alternatief hoofdscherm" toggle for FCLvNext). Read here (in
+    // the `ui` module, which can depend on `core:ui`) and cast back from APS's `Any?` escape
+    // hatch immediately, so the rest of the `ui` module — including OverviewScreen, which reads
+    // this from MainScreen — works with the real type, not `Any?`.
+    val overviewOverride: OverviewOverrideContent? = null
 )
 
 @Immutable
