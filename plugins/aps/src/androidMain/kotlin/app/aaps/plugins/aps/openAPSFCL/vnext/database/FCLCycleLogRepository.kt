@@ -11,6 +11,7 @@ import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.toLogRow
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.PostHypoBrakeLogEntity
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.ExplosiveRiseLogEntity
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.TempOverrideLogEntity
+import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.VroegeStijgingLogEntity
 import app.aaps.plugins.aps.openAPSFCL.vnext.persist.VLearner
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -37,6 +38,7 @@ class FCLCycleLogRepository @Inject constructor(
     private val postHypoBrakeDao by lazy { db.postHypoBrakeLogDao() }
     private val explosiveRiseDao by lazy { db.explosiveRiseLogDao() }
     private val tempOverrideDao by lazy { db.tempOverrideLogDao() }
+    private val vroegeStijgingDao by lazy { db.vroegeStijgingLogDao() }
     private val scope = CoroutineScope(Dispatchers.IO)
 
     private val persistDb by lazy {
@@ -131,6 +133,39 @@ class FCLCycleLogRepository @Inject constructor(
                 )
             )
             tempOverrideDao.deleteOlderThan(FCLAnalyzerDatabase.cutoffMs())
+        }
+    }
+
+    /**
+     * Log de 6 losse voorwaarden van vroegeStijgingBevestigd plus 2 gerelateerde
+     * signalen per cyclus (18/09/2026) in een eigen, kleine tabel — zie kdoc bij
+     * VroegeStijgingLogEntity voor de aanleiding. Zelfde fire-and-forget patroon
+     * als logPostHypoBrake()/logExplosiveRise()/logTempOverride() hierboven.
+     */
+    fun logVroegeStijging(
+        bevestigd: Boolean,
+        usedThisEpisode: Boolean,
+        rampFrac: Double,
+        reentryActive: Boolean,
+        recentSensorNoise: Boolean,
+        accelDecliningFromRisePeak: Boolean,
+        curveConfirmtOmslag: Boolean,
+        timestampMs: Long
+    ) {
+        scope.launch {
+            vroegeStijgingDao.insert(
+                VroegeStijgingLogEntity(
+                    timestampMs = timestampMs,
+                    bevestigd = bevestigd,
+                    usedThisEpisode = usedThisEpisode,
+                    rampFrac = rampFrac,
+                    reentryActive = reentryActive,
+                    recentSensorNoise = recentSensorNoise,
+                    accelDecliningFromRisePeak = accelDecliningFromRisePeak,
+                    curveConfirmtOmslag = curveConfirmtOmslag
+                )
+            )
+            vroegeStijgingDao.deleteOlderThan(FCLAnalyzerDatabase.cutoffMs())
         }
     }
 
@@ -632,6 +667,13 @@ class FCLCycleLogRepository @Inject constructor(
         // 11/09/2026 -- zelfde patroon, voor de Temp Override-diagnostiek
         // (zie kdoc bij TempOverrideLogEntity).
         val tempOverrideByTs = tempOverrideDao.getSince(sevenDaysAgo).associateBy { it.timestampMs }
+        // 18/09/2026 -- zelfde patroon, voor de vroegeStijgingBevestigd-
+        // diagnostiek (zie kdoc bij VroegeStijgingLogEntity). Deze tabel wordt
+        // NIET elke cyclus gevuld (alleen als het commit-blok draait, zie
+        // vroegeStijgingBevestigdThisCycle in FCLvNext.kt) -- ontbrekende
+        // matches vallen terug op de neutrale defaults hieronder, wat correct
+        // is: op zo'n cyclus is dit mechanisme simpelweg niet geëvalueerd.
+        val vroegeStijgingByTs = vroegeStijgingDao.getSince(sevenDaysAgo).associateBy { it.timestampMs }
 
         val dir = File(
             android.os.Environment.getExternalStorageDirectory(),
@@ -672,7 +714,18 @@ class FCLCycleLogRepository @Inject constructor(
         // temp_override_remaining_min, zie csvHeader() hieronder), afkomstig
         // uit de nieuwe, aparte temp_override_log-tabel (zelfde samenvoeg-
         // patroon als post_hypo_brake_log/explosive_rise_log hierboven).
-        val file = File(dir, "FCLvNext_Log_v13.csv")
+        // v13->v14 (18/09/2026) -- +7 kolommen (vroege_stijging_bevestigd/
+        // vroege_stijging_used_this_episode/vroege_stijging_ramp_frac/
+        // reentry_active/recent_sensor_noise/accel_declining_from_rise_peak/
+        // curve_confirmt_omslag, zie csvHeader() hieronder), afkomstig uit de
+        // nieuwe, aparte vroege_stijging_log-tabel (zelfde samenvoeg-patroon
+        // als post_hypo_brake_log/explosive_rise_log/temp_override_log
+        // hierboven). LET OP (12/07/2026-incident, zie hierboven): bewust
+        // WEL hernoemd naar v14, want de laatste 3 schema-uitbreidingen
+        // (v10->v11, v11->v12, v12->v13) zijn zonder problemen doorgevoerd —
+        // controleer na deze levering alsnog dat het toestel echt op v14
+        // schrijft en niet op v13 is blijven hangen.
+        val file = File(dir, "FCLvNext_Log_v14.csv")
 
         val sep = ";"
         // 23/07/2026 — ts_utc blijft de bron van waarheid (ondubbelzinnig,
@@ -689,6 +742,7 @@ class FCLCycleLogRepository @Inject constructor(
                 val brake = brakeByTs[row.timestampMs]
                 val explosive = explosiveByTs[row.timestampMs]
                 val tempOverride = tempOverrideByTs[row.timestampMs]
+                val vroegeStijging = vroegeStijgingByTs[row.timestampMs]
                 writer.write(
                     row.toCsvLine(
                         sep, fmt, fmtLocal,
@@ -696,7 +750,12 @@ class FCLCycleLogRepository @Inject constructor(
                         explosive?.frac ?: 0.0, explosive?.mul ?: 1.0,
                         explosive?.active ?: false, explosive?.projectedMinNoInsulin ?: -1.0,
                         tempOverride?.active ?: false, tempOverride?.targetPct ?: 100,
-                        tempOverride?.effectiveMul ?: 1.0, tempOverride?.remainingMinutes ?: -1
+                        tempOverride?.effectiveMul ?: 1.0, tempOverride?.remainingMinutes ?: -1,
+                        vroegeStijging?.bevestigd ?: false, vroegeStijging?.usedThisEpisode ?: false,
+                        vroegeStijging?.rampFrac ?: 0.0, vroegeStijging?.reentryActive ?: false,
+                        vroegeStijging?.recentSensorNoise ?: false,
+                        vroegeStijging?.accelDecliningFromRisePeak ?: false,
+                        vroegeStijging?.curveConfirmtOmslag ?: false
                     )
                 )
                 writer.newLine()
@@ -788,7 +847,10 @@ private fun csvHeader(sep: String): String = listOf(
     "iob_headroom",
     // ── TEMP OVERRIDE (11/09/2026) ──
     "temp_override_active", "temp_override_target_pct", "temp_override_effective_mul",
-    "temp_override_remaining_min"
+    "temp_override_remaining_min",
+    // ── VROEGE STIJGING DIAGNOSTIEK (18/09/2026) ──
+    "vroege_stijging_bevestigd", "vroege_stijging_used_this_episode", "vroege_stijging_ramp_frac",
+    "reentry_active", "recent_sensor_noise", "accel_declining_from_rise_peak", "curve_confirmt_omslag"
 ).joinToString(sep)
 
 // ── CSV regel — delta_target afgeleid als bg - target ────────────────────
@@ -806,7 +868,14 @@ private fun FCLCycleLogEntity.toCsvLine(
     tempOverrideActive: Boolean,
     tempOverrideTargetPct: Int,
     tempOverrideEffectiveMul: Double,
-    tempOverrideRemainingMinutes: Int
+    tempOverrideRemainingMinutes: Int,
+    vroegeStijgingBevestigd: Boolean,
+    vroegeStijgingUsedThisEpisode: Boolean,
+    vroegeStijgingRampFrac: Double,
+    reentryActive: Boolean,
+    recentSensorNoise: Boolean,
+    accelDecliningFromRisePeak: Boolean,
+    curveConfirmtOmslag: Boolean
 ): String {
     val ts = fmt.format(Instant.ofEpochMilli(timestampMs))
     val tsLocal = fmtLocal.format(Instant.ofEpochMilli(timestampMs))
@@ -903,6 +972,10 @@ private fun FCLCycleLogEntity.toCsvLine(
         d2(doseerruimte.iobHeadroom),
         // ── TEMP OVERRIDE (11/09/2026) ──
         bool(tempOverrideActive), tempOverrideTargetPct, d2(tempOverrideEffectiveMul),
-        tempOverrideRemainingMinutes
+        tempOverrideRemainingMinutes,
+        // ── VROEGE STIJGING DIAGNOSTIEK (18/09/2026) ──
+        bool(vroegeStijgingBevestigd), bool(vroegeStijgingUsedThisEpisode), d2(vroegeStijgingRampFrac),
+        bool(reentryActive), bool(recentSensorNoise), bool(accelDecliningFromRisePeak),
+        bool(curveConfirmtOmslag)
     ).joinToString(sep)
 }

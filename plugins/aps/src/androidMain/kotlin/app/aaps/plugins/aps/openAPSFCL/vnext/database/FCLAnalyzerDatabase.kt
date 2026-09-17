@@ -14,6 +14,7 @@ import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.IsfAutoAdjustLogE
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.PostHypoBrakeLogEntity
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.ExplosiveRiseLogEntity
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.TempOverrideLogEntity
+import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.VroegeStijgingLogEntity
 
 // ── MIGRATION_16_17 (16/07/2026) ─────────────────────────────────────
 // Zuiver additief: 6 nieuwe kolommen op de bestaande fcl_cycle_log-tabel.
@@ -189,6 +190,33 @@ val MIGRATION_23_24 = object : Migration(23, 24) {
     }
 }
 
+// ── MIGRATION_24_25 (18/09/2026) ─────────────────────────────────────
+// Nieuwe, lege tabel voor de vroegeStijgingBevestigd-diagnostiek (bevestigd/
+// usedThisEpisode/rampFrac/reentryActive/recentSensorNoise/
+// accelDecliningFromRisePeak/curveConfirmtOmslag) — zelfde bewezen patroon
+// als MIGRATION_23_24 hierboven (temp_override_log): een gewone CREATE
+// TABLE, geen wijziging aan fcl_cycle_log zelf, dus geen risico op de
+// VerifyError die MIGRATION_21_22's aanleiding was. Zie kdoc bij
+// VroegeStijgingLogEntity.
+val MIGRATION_24_25 = object : Migration(24, 25) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `vroege_stijging_log` (" +
+                "`id` INTEGER NOT NULL, " +
+                "`timestampMs` INTEGER NOT NULL, " +
+                "`bevestigd` INTEGER NOT NULL, " +
+                "`usedThisEpisode` INTEGER NOT NULL, " +
+                "`rampFrac` REAL NOT NULL, " +
+                "`reentryActive` INTEGER NOT NULL, " +
+                "`recentSensorNoise` INTEGER NOT NULL, " +
+                "`accelDecliningFromRisePeak` INTEGER NOT NULL, " +
+                "`curveConfirmtOmslag` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`id`))"
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_vroege_stijging_log_timestampMs` ON `vroege_stijging_log` (`timestampMs`)")
+    }
+}
+
 @Database(
     entities = [
         FCLCycleLogEntity::class,
@@ -199,7 +227,8 @@ val MIGRATION_23_24 = object : Migration(23, 24) {
         IsfAutoAdjustLogEntity::class,
         PostHypoBrakeLogEntity::class,
         ExplosiveRiseLogEntity::class,
-        TempOverrideLogEntity::class
+        TempOverrideLogEntity::class,
+        VroegeStijgingLogEntity::class
     ],
     // v13→v15 (05/07/2026): +curveFitR2/+curveAcceleration/+toppingOutBoost
     // (in TrendsFields), en FCLCycleLogEntity herstructureerd in @Embedded-
@@ -283,7 +312,13 @@ val MIGRATION_23_24 = object : Migration(23, 24) {
     // wijziging aan bestaande tabellen, dus ook fcl_cycle_log blijft exact
     // zoals in v23) — MIGRATION_23_24 hierboven, zelfde bewezen patroon als
     // v22->v23. Zie kdoc bij TempOverrideLogEntity voor de aanleiding.
-    version = 24,
+    // v24->v25 (18/09/2026): +vroege_stijging_log (nieuwe, lege tabel voor de
+    // vroegeStijgingBevestigd-diagnostiek). Zuiver additief (nieuwe tabel,
+    // geen wijziging aan bestaande tabellen, dus ook fcl_cycle_log blijft
+    // exact zoals in v24) — MIGRATION_24_25 hierboven, zelfde bewezen
+    // patroon als v23->v24. Zie kdoc bij VroegeStijgingLogEntity voor de
+    // aanleiding (Rick's csv 17/9 19:13, Ecko's csv 17/9 18:29).
+    version = 25,
     exportSchema = false
 )
 abstract class FCLAnalyzerDatabase : RoomDatabase() {
@@ -297,6 +332,7 @@ abstract class FCLAnalyzerDatabase : RoomDatabase() {
     abstract fun postHypoBrakeLogDao(): app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.PostHypoBrakeLogDao
     abstract fun explosiveRiseLogDao(): app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.ExplosiveRiseLogDao
     abstract fun tempOverrideLogDao(): app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.TempOverrideLogDao
+    abstract fun vroegeStijgingLogDao(): app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.VroegeStijgingLogDao
 
     companion object {
         private const val DB_NAME = "fcl_analyzer.db"
@@ -311,7 +347,7 @@ abstract class FCLAnalyzerDatabase : RoomDatabase() {
                     FCLAnalyzerDatabase::class.java,
                     DB_NAME
                 )
-                    .addMigrations(MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24)
+                    .addMigrations(MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25)
                     .fallbackToDestructiveMigration(dropAllTables = true)
                     .build()
                     .also { INSTANCE = it }

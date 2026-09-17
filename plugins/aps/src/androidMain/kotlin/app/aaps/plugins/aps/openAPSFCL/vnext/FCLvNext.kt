@@ -1050,6 +1050,33 @@ private const val TOTAL_NEED_MAX_EXTRA_DECAY = 0.12    // max. extra effectiveDe
 // stijging allang overtuigend bevestigd was. Zie overdracht 14/07/2026 voor
 // de volledige analyse (maaltijd 05:12-05:52, vervroegde commit ~13-19 min).
 private const val VROEGE_STIJGING_SUSTAIN_MIN = 15.0      // min. aanhoudend hoge slope vereist (sustainedHighSlopeMinutes)
+// v120 (17/09/2026, de gebruiker) -- over hoeveel minuten de vroegeStijging-
+// afbouw-reset nu geleidelijk oploopt (was: instant in 1 cyclus). Zie kdoc bij
+// vroegeStijgingBevestigdSinds/vroegeStijgingRampFrac in de hoofdklasse.
+//
+// v120b (17/09/2026, de gebruiker, n.a.v. Rick's csv 17/9 19:13) -- VASTE
+// OPBOUWTIJD VERVANGEN DOOR EEN OP recentSlope GESCHAALDE (18/09/2026) --
+// AANLEIDING: Rick's maaltijd 17/9 18:33-19:18 (recentSlope 13-14 mmol/u,
+// zeer duidelijke, snelle stijging) kreeg met de vaste 10 minuten pas 50% van
+// de reset-sterkte na 1 cyclus -- bij zo'n onmiskenbaar signaal onnodig
+// voorzichtig, met als reëel risico een hogere/langere piek omdat er relatief
+// te weinig vroeg gegeven wordt. Tegelijk was de trage, 10-minuten-opbouw
+// bewust zo gekozen voor het oorspronkelijke geval (Ecko 17/9 18:29,
+// recentSlope ~7,5 -- een veel minder eenduidig signaal) waar snel volledig
+// loslaten juist het probleem was.
+// OPLOSSING: de opbouwtijd zelf schaalt nu met recentSlope -- hoe sneller/
+// onmiskenbaarder de stijging, hoe korter de opbouw. Bij recentSlope<=
+// VROEGE_STIJGING_RAMP_SLOPE_LOW blijft de volledige, voorzichtige
+// VROEGE_STIJGING_RAMP_MIN_SLOW-opbouw gelden (Ecko's geval blijft vrijwel
+// ongewijzigd: ~8,7 min i.p.v. 10); bij recentSlope>=
+// VROEGE_STIJGING_RAMP_SLOPE_HIGH krimpt de opbouw tot
+// VROEGE_STIJGING_RAMP_MIN_FAST (Rick's geval: ~2,6 min, dus al binnen 1
+// cyclus vrijwel volledig op kracht). Nooit sneller dan dit floor, dus nooit
+// een instante 1-cyclus-sprong zoals de oude code.
+private const val VROEGE_STIJGING_RAMP_MIN_SLOW = 10.0
+private const val VROEGE_STIJGING_RAMP_MIN_FAST = 2.0
+private const val VROEGE_STIJGING_RAMP_SLOPE_LOW = 5.0    // mmol/u -- onder dit punt blijft de volledige, trage opbouw gelden
+private const val VROEGE_STIJGING_RAMP_SLOPE_HIGH = 15.0  // mmol/u -- vanaf dit punt geldt de snelste opbouw
 private const val VROEGE_STIJGING_PLATEAU_SLOPE = 1.0     // mmol/u — onder deze ctx.slope geldt de stijging als afgevlakt; opent de deur weer voor een eventuele 2e gang
 
 // ── Nieuwe-maaltijd trog-detectie (RONDE 33, 03/08/2026, de gebruiker) ──────────────
@@ -2214,14 +2241,28 @@ private fun accelFirstCommitTrigger(
     )
 }
 
-private fun commitFractionZoneFactor(bgZone: BgZone, mealActive: Boolean = false): Double {
-    return when (bgZone) {
-        BgZone.LOW      -> 0.0
-        BgZone.IN_RANGE -> if (mealActive) 0.75 else 0.55
-        BgZone.MID      -> 0.75
-        BgZone.HIGH     -> 1.00
-        BgZone.EXTREME  -> 1.10
-    }
+// v120 -- HARDE TRAPFUNCTIE VERVANGEN DOOR VLOEIENDE OVERGANG (17/09/2026, de
+// gebruiker) --------------------------------------------------------------
+// AANLEIDING: gebruiker vroeg of alle rem-loslaat/rem-aanzet-mechanismen wel
+// dynamisch genoeg zijn (deltaTarget/iobRatio/acceleratie), of dat er nog
+// keiharde aan/uit-schakelaars zitten. Deze functie was zo'n schakelaar: bij
+// het oversteken van een BG-zonegrens sprong de commit-grootte in 1 cyclus
+// met tot 33% (0,75->1,00) of 10% (1,00->1,10), ongeacht hoe dicht bij de
+// grens BG zat.
+// OPLOSSING: lineaire overgang tussen dezelfde ankerwaarden (via
+// interpLinear, zie declaratie), verschoven zodat elke oude waarde precies
+// bereikt wordt op de bijbehorende oude grens -- de nieuwe functie is
+// daardoor op geen enkel punt hoger dan de oude (geverifieerd door
+// terugrekenen op 3 weken data/2 gebruikers, 5766 cycli: max verschil 0,00,
+// dus uitsluitend gladgestreken, nooit agressiever).
+// De absolute hypo-vloer (bgNow<=4.4 -> 0.0) blijft een harde knip: dat is
+// een veiligheidsgrens, geen geleidelijkheids-kandidaat.
+private fun commitFractionZoneFactor(delta: Double, bgNow: Double, mealActive: Boolean = false): Double {
+    if (bgNow <= 4.4) return 0.0
+    val inRangeVal = if (mealActive) 0.75 else 0.55
+    val xs = doubleArrayOf(-2.0, 0.6, 2.0, 4.5, 7.0)
+    val ys = doubleArrayOf(inRangeVal, inRangeVal, 0.75, 1.00, 1.10)
+    return interpLinear(delta, xs, ys)
 }
 
 private data class PreReserveDecision(
@@ -3211,6 +3252,24 @@ private fun smooth01(x: Double): Double {
 
 private fun lerp(a: Double, b: Double, t: Double): Double =
     a + (b - a) * t.coerceIn(0.0, 1.0)
+
+// v120 -- piecewise-lineaire interpolatie-helper (17/09/2026, de gebruiker) --
+// Gebruikt om voorheen harde trapfuncties (commitFractionZoneFactor,
+// peakIobBoost) om te zetten in vloeiende overgangen tussen dezelfde
+// ankerpunten, zonder de bestaande waarden op de grenzen zelf te wijzigen.
+// xs moet oplopend gesorteerd zijn. Buiten het bereik van xs wordt de
+// dichtstbijzijnde eindwaarde aangehouden (geen extrapolatie).
+private fun interpLinear(x: Double, xs: DoubleArray, ys: DoubleArray): Double {
+    if (x <= xs.first()) return ys.first()
+    if (x >= xs.last()) return ys.last()
+    for (i in 0 until xs.size - 1) {
+        if (x <= xs[i + 1]) {
+            val t = (x - xs[i]) / (xs[i + 1] - xs[i])
+            return ys[i] + (ys[i + 1] - ys[i]) * t
+        }
+    }
+    return ys.last()
+}
 
 // ── AIGF component B: wakker-aandeel van een terugkijkvenster (28/07/2026,
 // de gebruiker) ──────────────────────────────────────────────────────────────────
@@ -4835,7 +4894,7 @@ class FCLvNext(
     // "vNN-jjjj-mm-dd-uumm" (aanmaaktijdstip, geen omschrijving; die van
     // eerdere versies raakten toch achter). Alleen als het écht relevant
     // is een korte omschrijving toevoegen.
-    private val FCL_CODE_VERSION = "v119-2026-09-17-1248"
+    private val FCL_CODE_VERSION = "v120c-2026-09-17-2232"
 
     // ── Restart-detectie (16/07/2026) ─────────────────────────────────
     // true op precies de EERSTE cyclus na het (her)starten van dit class-
@@ -5480,7 +5539,43 @@ class FCLvNext(
     // stijging als de al-vervroegde commit).
     private var vroegeStijgingBevestigdUsedThisEpisode: Boolean = false
 
-    // ── Eerste-echte-aflevering vrijstelling van late-decay (14/08/2026) ──
+    // v120 -- GELEIDELIJKE OPBOUW I.P.V. INSTANTE RESET (17/09/2026, de gebruiker) --
+    // AANLEIDING: backtest op 3 weken data/2 gebruikers liet 225 momenten zien
+    // waarop lateDecayMul in 1 cyclus met >=0,30 omhoog sprong (gem. sprong
+    // 0,71-0,80) terwijl iobRatio al >=0,15 was -- dus niet bij een lege episode,
+    // maar MIDDEN in een al lopende, met IOB opgebouwde episode. Concreet
+    // voorval 17/9 18:29: lateDecayMul 0,25->1,00 in 1 stap (commitNr=5, dus na
+    // 4 eerdere commits), gevolgd door een even harde terugval naar 0,07 de
+    // cyclus erna -- precies het "zaagtand"-patroon waar vroegeStijgingBevestigd
+    // (hieronder) de oorzaak van is: een 6-voudige AND-poort die bij het
+    // vervullen van de LAATSTE voorwaarde in 1 klap volledig opent.
+    // OPLOSSING: houdt bij sinds wanneer vroegeStijgingBevestigd ononderbroken
+    // waar staat (zelfde patroon als doseRatioElevatedSinceAt hierboven), zodat
+    // de reset over VROEGE_STIJGING_RAMP_MIN minuten kan oplopen i.p.v. in 1
+    // cyclus. Gereset op dezelfde 4 episode-grensmomenten als
+    // vroegeStijgingBevestigdUsedThisEpisode hieronder.
+    private var vroegeStijgingBevestigdSinds: DateTime? = null
+
+    // 18/09/2026 -- diagnostische "ThisCycle"-bridge-vars voor vroege_stijging_log
+    // (zie kdoc bij VroegeStijgingLogEntity). Puur diagnostisch, geen invloed op
+    // dosering -- alleen kopieën van waarden die verderop toch al berekend worden,
+    // nu ook zichtbaar in de CSV. Zelfde patroon als explosiveRiseFracThisCycle/
+    // tempOverrideActiveThisCycle elders in dit bestand: gezet op de plek waar de
+    // waarde echt berekend wordt (soms diep binnen het effectiveCommitAllowed-blok,
+    // dat niet elke cyclus draait), gelezen bij de epiloog-call naar
+    // cycleLogRepository.logVroegeStijging(...). De 6 die binnen dat blok
+    // liggen worden VOOR het blok naar hun neutrale default teruggezet, zodat een
+    // cyclus waarin het blok wordt overgeslagen (commit-cooldown) geen verouderde
+    // waarde van een vorige cyclus meestuurt -- dat wordt in de CSV dan zichtbaar
+    // als "niet geëvalueerd" (false/0.0), precies zoals bij de andere 3 losse
+    // diagnostiek-tabellen (post_hypo_brake_log/explosive_rise_log/temp_override_log).
+    private var vroegeStijgingBevestigdThisCycle: Boolean = false
+    private var vroegeStijgingUsedThisEpisodeThisCycle: Boolean = false
+    private var vroegeStijgingRampFracThisCycle: Double = 0.0
+    private var reentryActiveThisCycle: Boolean = false
+    private var recentSensorNoiseThisCycle: Boolean = false
+    private var accelDecliningFromRisePeakThisCycle: Boolean = false
+    private var curveConfirmtOmslagThisCycle: Boolean = false
     // AANLEIDING (maaltijd 14/8 13:00): "de maaltijd begon veel te rustig,
     // precies op de top kwamen de 2 grootste doses van de episode overheen"
     // (de gebruiker). Natrekken van FCLvNext_Log_v9 14-8 16.10.csv liet zien dat het
@@ -5880,6 +5975,7 @@ class FCLvNext(
             rapidDecelLocked = false
             rapidDecelConfirm = 0
             vroegeStijgingBevestigdUsedThisEpisode = false
+            vroegeStijgingBevestigdSinds = null
             episodeAnyRealDeliveryDone = false
             episodeAnyRealDeliverySinceReentry = true
             plateauSinceVroegeStijging = false
@@ -6651,6 +6747,7 @@ class FCLvNext(
             rapidDecelLocked = false
             rapidDecelConfirm = 0
             vroegeStijgingBevestigdUsedThisEpisode = false
+            vroegeStijgingBevestigdSinds = null
             episodeAnyRealDeliveryDone = false
             episodeAnyRealDeliverySinceReentry = true
             plateauSinceVroegeStijging = false
@@ -6713,6 +6810,7 @@ class FCLvNext(
             rapidDecelLocked = false
             rapidDecelConfirm = 0
             vroegeStijgingBevestigdUsedThisEpisode = false
+            vroegeStijgingBevestigdSinds = null
             episodeAnyRealDeliveryDone = false
             episodeAnyRealDeliverySinceReentry = true
             plateauSinceVroegeStijging = false
@@ -6859,13 +6957,25 @@ class FCLvNext(
 
         status.append("PrePeakCommitWindow=${if (prePeakCommitWindow) "YES" else "NO"}\n")
 
-        val peakIobBoost = when (peakCategory) {
-            PeakCategory.EXTREME -> 1.55
-            PeakCategory.HIGH    -> 1.40
-            PeakCategory.MEAL    -> 1.25
-            PeakCategory.MILD    -> 1.10
-            PeakCategory.NONE    -> 1.00
-        }
+        // v120 -- VLOEIENDE OVERGANG I.P.V. CATEGORIE-STAFFEL (17/09/2026, de
+        // gebruiker) -- was een trapfunctie op basis van peakCategory (NONE/MILD/
+        // MEAL/HIGH/EXTREME), met een instant sprong bij elke categorie-grens
+        // (9,8/11,8/14,5/17,5 mmol), ongeacht hoe dicht bij de grens de
+        // voorspelde piek zat. peakCategory zelf blijft bestaan (elders nog
+        // gebruikt voor andere, categorische beslissingen) -- alleen deze
+        // boost-waarde wordt nu direct continu op predictedPeak berekend.
+        // De ankers zijn een categorie verschoven: de oude waarde van een
+        // categorie wordt nu pas bereikt op de grens van de VOLGENDE categorie
+        // (bv. de oude MILD-waarde 1,10 wordt nu pas bij 11,8 bereikt, niet meer
+        // al bij 9,8) -- daardoor ligt de nieuwe functie op geen enkel punt
+        // hoger dan de oude (geverifieerd door terugrekenen op 3 weken data/2
+        // gebruikers: max verschil 0,00, min -0,15 -- dus uitsluitend
+        // voorzichtiger tijdens de overgang, nooit agressiever).
+        val peakIobBoost = interpLinear(
+            predictedPeak,
+            doubleArrayOf(8.8, 9.8, 11.8, 14.5, 17.5, 18.5),
+            doubleArrayOf(1.00, 1.00, 1.10, 1.25, 1.40, 1.55)
+        )
 
         val boostedIobRatio =
             (ctx.iobRatio / peakIobBoost).coerceAtLeast(0.0)
@@ -8033,6 +8143,10 @@ class FCLvNext(
 
 // 9b) Re-entry: tweede gang (mag suppression overrulen als het écht weer stijgt)
         val reentry = isReentrySignal(ctx, now, config)
+        // 18/09/2026 -- diagnostiek, zie kdoc bij vroegeStijgingBevestigdThisCycle
+        // hierboven. Deze loopt elke cyclus (niet binnen effectiveCommitAllowed),
+        // dus hier direct gezet, niet vooraf gereset.
+        reentryActiveThisCycle = reentry
         if (reentry) {
             // nieuw segment binnen episode
             // Bewaar boostCommitCount — re-entry is een nieuw segment binnen
@@ -8131,8 +8245,19 @@ class FCLvNext(
 
             if (effectiveCommitAllowed) {
 
+                // 18/09/2026 -- reset naar neutraal VOORDAT dit blok verder rekent,
+                // zie kdoc bij vroegeStijgingBevestigdThisCycle hierboven. Zo blijft
+                // een cyclus die dit blok wél draait maar (nog) niet tot aan
+                // vroegeStijgingBevestigd komt (bijv. vroege return elders) niet met
+                // een verouderde waarde van een vorige cyclus in de CSV staan.
+                vroegeStijgingBevestigdThisCycle = false
+                vroegeStijgingUsedThisEpisodeThisCycle = false
+                vroegeStijgingRampFracThisCycle = 0.0
+                recentSensorNoiseThisCycle = false
+                accelDecliningFromRisePeakThisCycle = false
+                curveConfirmtOmslagThisCycle = false
 
-                val zoneFactor = commitFractionZoneFactor(zoneEnum, mealActive = mealForCommit)
+                val zoneFactor = commitFractionZoneFactor(ctx.deltaToTarget, ctx.input.bgNow, mealActive = mealForCommit)
                 logRow.commitZoneFactor = zoneFactor
                 val fraction =
                     (commitFraction * zoneFactor * config.maxCommitFractionMul)
@@ -8148,7 +8273,26 @@ class FCLvNext(
                 }
 
 // ✅ blijft bestaan: pre-peak commit window geeft iets minder agressief committen
-                val prePeakMul = if (prePeakCommitWindow) 0.85 else 1.0
+                //
+                // v120 -- VLOEIENDE KORTING I.P.V. VASTE 0,85 (17/09/2026, de gebruiker) --
+                // Was: zodra prePeakCommitWindow (een 6-voudige AND-poort, ongewijzigd
+                // gelaten als eligibility-vraag -- peak.state is categorisch, geen
+                // continuum) waar werd, meteen een vaste 15% korting, ongeacht hoe
+                // dicht bij echt gevaar het moment zat. Nu: de korting zelf schaalt
+                // continu met dezelfde twee grootheden die elders (commitAggressionMul)
+                // ook al de "hoe dichtbij is de piek/hoe hoog is IOB"-vraag beantwoorden
+                // -- iobRatio t.o.v. de eigen 0,60-grens van dit venster, en bg/piek.
+                // Bij het net openen van het venster (lage iobRatio, BG nog ver van de
+                // piek) is de korting nu klein (dichter bij 1,0 dan de oude vaste 0,85);
+                // naarmate iobRatio of bg/piek verder oploopt, groeit de korting naar
+                // dezelfde 0,85 als voorheen. Kleinste van de 5 aangepaste mechanismen
+                // (max 15%) -- nog niet apart teruggerekend op historische data zoals de
+                // andere 4, backtest volgt op de eerstvolgende CSV.
+                val prePeakMul = if (prePeakCommitWindow) {
+                    val iobFrac = smooth01(ctx.iobRatio / 0.60)
+                    val proxFrac = if (peak.predictedPeak > 0) smooth01(ctx.input.bgNow / peak.predictedPeak) else 0.0
+                    1.0 - 0.15 * maxOf(iobFrac, proxFrac)
+                } else 1.0
 
 // Plateau/top penalty om te voorkomen dat commit nog doorduwt als fast-lane al afvlakt
                 val nearPeak =
@@ -8198,10 +8342,22 @@ class FCLvNext(
                 // De 15% korting bij nearPeakWithHighIob vervangt de ×1.0-cap die
                 // er eerder zat (capping at 1.0 = cap aggressiviteit; nu ook van
                 // 1.0→0.85 als het systeem al te gretig wil doseren nabij de piek).
-                val nearPeakWithHighIob = ctx.iobRatio >= 0.35 &&
-                    peak.predictedPeak > 0 &&
-                    ctx.input.bgNow / peak.predictedPeak >= 0.92
-                val commitAggressionMul = if (nearPeakWithHighIob) 0.85 else 1.0
+                //
+                // v120 -- VLOEIENDE OVERGANG I.P.V. HARDE KNIP (17/09/2026, de
+                // gebruiker) -- was een keiharde 1,00->0,85 knip zodra iobRatio>=0,35
+                // EN bg/voorspeldePiek>=0,92 TEGELIJK waar waren -- vlak onder een
+                // van beide drempels: geen enkele korting, ook al was de andere
+                // voorwaarde al ruim vervuld. Nu: twee smooth01-overgangen (iobRatio
+                // 0,25-0,35, bg/piek 0,85-0,92) vermenigvuldigd, zodat beide
+                // voorwaarden nog steeds nodig zijn (net als voorheen de AND) maar
+                // zonder cliff. Bij iobRatio<0,25 of bg/piek<0,85 blijft het exact
+                // 1,00, bij iobRatio>=0,35 EN bg/piek>=0,92 exact 0,85 -- alleen het
+                // tussengebied is nu geleidelijk i.p.v. instant.
+                val iobDangerFrac = smooth01((ctx.iobRatio - 0.25) / (0.35 - 0.25))
+                val proxDangerFrac = if (peak.predictedPeak > 0)
+                    smooth01((ctx.input.bgNow / peak.predictedPeak - 0.85) / (0.92 - 0.85))
+                else 0.0
+                val commitAggressionMul = 1.0 - 0.15 * (iobDangerFrac * proxDangerFrac)
                 logRow.commitAggressionMul = commitAggressionMul
 
                 logRow.commitPostPeakFactor = postPeak.commitFactor
@@ -8271,6 +8427,7 @@ class FCLvNext(
                     episodeAigfBFrozen = false
                     lastKnownLateDecayMul = 1.0
                     vroegeStijgingBevestigdUsedThisEpisode = false
+                    vroegeStijgingBevestigdSinds = null
                     episodeAnyRealDeliveryDone = false
                     episodeAnyRealDeliverySinceReentry = true
                     plateauSinceVroegeStijging = false
@@ -8489,6 +8646,39 @@ class FCLvNext(
                     !recentSensorNoise &&
                     !accelDecliningFromRisePeak
                 val vroegeStijgingNuVoorHetEerst = vroegeStijgingBevestigd && !vroegeStijgingBevestigdUsedThisEpisode
+
+                // v120 -- geleidelijke ramp i.p.v. instante reset (17/09/2026, de
+                // gebruiker) -- zie kdoc bij vroegeStijgingBevestigdSinds (declaratie
+                // hierboven). Houdt bij sinds wanneer vroegeStijgingNuVoorHetEerst
+                // ononderbroken waar staat, en zet dat om in een 0->1-fractie over
+                // VROEGE_STIJGING_RAMP_MIN minuten i.p.v. in 1 cyclus. Wordt pas als
+                // "gebruikt" gemarkeerd zodra de ramp volledig voltooid is (fractie
+                // 1,0) -- dus nog steeds maximaal één keer per episode, alleen nu
+                // gespreid over een paar cycli i.p.v. in 1 klap.
+                if (vroegeStijgingNuVoorHetEerst) {
+                    if (vroegeStijgingBevestigdSinds == null) vroegeStijgingBevestigdSinds = now
+                } else if (!vroegeStijgingBevestigd) {
+                    vroegeStijgingBevestigdSinds = null
+                }
+                // v120b -- opbouwtijd zelf schaalt met recentSlope (zie kdoc bij
+                // VROEGE_STIJGING_RAMP_MIN_SLOW/FAST hierboven): een snelle, onmiskenbare
+                // stijging krijgt een korte opbouw, een trage/onzekere stijging blijft de
+                // volledige, voorzichtige opbouw houden.
+                val vroegeStijgingRampSeverity = smooth01(
+                    (ctx.recentSlope - VROEGE_STIJGING_RAMP_SLOPE_LOW) /
+                        (VROEGE_STIJGING_RAMP_SLOPE_HIGH - VROEGE_STIJGING_RAMP_SLOPE_LOW)
+                )
+                val vroegeStijgingRampMin = lerp(
+                    VROEGE_STIJGING_RAMP_MIN_SLOW,
+                    VROEGE_STIJGING_RAMP_MIN_FAST,
+                    vroegeStijgingRampSeverity
+                )
+                val vroegeStijgingRampFrac = if (vroegeStijgingNuVoorHetEerst) {
+                    vroegeStijgingBevestigdSinds?.let {
+                        smooth01(minutesSince(it, now).toDouble() / vroegeStijgingRampMin)
+                    } ?: 0.0
+                } else 0.0
+
                 if (sustainedHighSlopeMinutes >= VROEGE_STIJGING_SUSTAIN_MIN &&
                     ctx.consistency >= config.episodeMinConsistency &&
                     ctx.acceleration > 0.0 &&
@@ -8517,12 +8707,29 @@ class FCLvNext(
                     )
                 }
                 if (vroegeStijgingNuVoorHetEerst) {
-                    vroegeStijgingBevestigdUsedThisEpisode = true
+                    // v120: pas "gebruikt" zodra de ramp echt voltooid is (fractie
+                    // 1,0) -- daarvoor blijft dit blok elke cyclus opnieuw draaien
+                    // zodat vroegeStijgingRampFrac verder kan oplopen.
+                    if (vroegeStijgingRampFrac >= 1.0) {
+                        vroegeStijgingBevestigdUsedThisEpisode = true
+                    }
                     status.append(
-                        "VROEGE STIJGING BEVESTIGD: afbouw gereset (sustained=${sustainedHighSlopeMinutes.toInt()}m " +
+                        "VROEGE STIJGING BEVESTIGD: afbouw geleidelijk gereset " +
+                            "(${"%.0f".format(vroegeStijgingRampFrac * 100)}%, sustained=${sustainedHighSlopeMinutes.toInt()}m " +
                             "consistency=${"%.2f".format(ctx.consistency)} accel=${"%.2f".format(ctx.acceleration)})\n"
                     )
                 }
+
+                // 18/09/2026 -- diagnostiek, zie kdoc bij vroegeStijgingBevestigdThisCycle
+                // hierboven. Bewust HIER gezet (na de eventuele
+                // vroegeStijgingBevestigdUsedThisEpisode=true-update hierboven), zodat
+                // usedThisEpisode de eind-van-cyclus-toestand weerspiegelt.
+                vroegeStijgingBevestigdThisCycle = vroegeStijgingBevestigd
+                vroegeStijgingUsedThisEpisodeThisCycle = vroegeStijgingBevestigdUsedThisEpisode
+                vroegeStijgingRampFracThisCycle = vroegeStijgingRampFrac
+                recentSensorNoiseThisCycle = recentSensorNoise
+                accelDecliningFromRisePeakThisCycle = accelDecliningFromRisePeak
+                curveConfirmtOmslagThisCycle = curveConfirmtOmslag
 
                 // Plateau-detectie: pas relevant ná een vervroegde commit. Zodra de
                 // stijging écht afvlakt (ctx.slope onder VROEGE_STIJGING_PLATEAU_SLOPE),
@@ -8662,55 +8869,63 @@ class FCLvNext(
                     doseRatioElevatedSinceAt = null
                 }
                 val doseRatioSustainedMin = doseRatioElevatedSinceAt?.let { minutesSince(it, now).toDouble() } ?: 0.0
-                val doseRatioDampingActive = doseRatioSustainedMin >= DOSE_RATIO_SUSTAIN_MIN
-                if (doseRatioDampingActive) {
+                // v120 -- VLOEIENDE OVERGANG I.P.V. HARDE KNIP BIJ DOSE_RATIO_SUSTAIN_MIN
+                // (17/09/2026, de gebruiker) -- was: pas bij precies
+                // DOSE_RATIO_SUSTAIN_MIN minuten in 1 klap van geen demping naar
+                // DOSE_RATIO_DAMPING. Nu: smooth01-ramp over dat hele venster, dus
+                // AL vanaf het moment dat de verhouding verhoogd raakt geleidelijk
+                // voorzichtiger, en pas exact op hetzelfde moment als voorheen (bij
+                // DOSE_RATIO_SUSTAIN_MIN minuten) volledig op DOSE_RATIO_DAMPING --
+                // nooit later of minder gedempt dan de oude knip, wel eerder een
+                // beetje voorzichtiger.
+                val doseRatioDampingFrac = smooth01(doseRatioSustainedMin / DOSE_RATIO_SUSTAIN_MIN)
+                if (doseRatioDampingFrac > 0.0) {
                     status.append(
                         "DOSIS/STIJGING-VERHOUDING VERHOOGD (${"%.2f".format(doseToRiseRatio)}, " +
-                            "${doseRatioSustainedMin.toInt()}m aanhoudend): volgende volledige reset gedempt naar " +
-                            "${DOSE_RATIO_DAMPING}x\n"
+                            "${doseRatioSustainedMin.toInt()}m aanhoudend, ${"%.0f".format(doseRatioDampingFrac * 100)}% gedempt " +
+                            "richting ${DOSE_RATIO_DAMPING}x)\n"
                     )
                 }
-                lateDecayMul = if (vroegeStijgingNuVoorHetEerst ||
-                    (!episodeAnyRealDeliveryDone && !recentSensorNoise) ||
+                // v120 -- resetCeiling vervangt de vaste "1.0 of DOSE_RATIO_DAMPING"-
+                // keuze door dezelfde vloeiende doseRatioDampingFrac te gebruiken als
+                // plafond voor ALLE onderstaande reset-takken (vroege stijging,
+                // eerste-aflevering, reentry) -- consistent, en nooit soepeler dan
+                // voorheen op het moment dat de oude knip zelf al actief was.
+                val resetCeiling = lerp(1.0, DOSE_RATIO_DAMPING, doseRatioDampingFrac)
+                val normalDecayValue = if (lateDecayActive) {
+                    (1.0 - effectiveDecay * (commitNr - 1).toDouble())
+                        .coerceIn(decayFloor, 1.0)
+                } else 1.0
+                lateDecayMul = if (vroegeStijgingRampFrac > 0.0) {
+                    // v120 -- GELEIDELIJKE OPBOUW I.P.V. INSTANTE RESET (17/09/2026, de
+                    // gebruiker) -- zie uitgebreide kdoc bij vroegeStijgingBevestigdSinds
+                    // (declaratie) en vroegeStijgingRampFrac (berekening hierboven).
+                    // AANLEIDING: 225 sawtooth-sprongen (>=0,30 in 1 cyclus, iobRatio
+                    // al >=0,15) over 3 weken/2 gebruikers, o.a. 17/9 18:29: 0,25->1,00
+                    // in 1 stap, MIDDEN in een episode met al 4 eerdere commits en
+                    // opgebouwde IOB -- dit was géén "eerste commit" meer, maar de
+                    // instante reset deed alsof wel. Nu: blend geleidelijk van de
+                    // normale, teller-gebaseerde afbouwwaarde naar het (ook al
+                    // vloeiende) resetCeiling, over VROEGE_STIJGING_RAMP_MIN minuten
+                    // i.p.v. in 1 cyclus.
+                    lerp(normalDecayValue, resetCeiling, vroegeStijgingRampFrac)
+                } else if ((!episodeAnyRealDeliveryDone && !recentSensorNoise) ||
                     (reentry && !episodeAnyRealDeliverySinceReentry && !recentSensorNoise &&
                         (lastHypoActiveAt == null ||
                             minutesSince(lastHypoActiveAt, now) >= POST_HYPO_REENTRY_GUARD_MINUTES))
                 ) {
-                    // Eenmalige afbouw-reset: laat de commit-branch-formule (fraction,
-                    // commitIobFactor, prePeakMul, ...) ongehinderd door de
-                    // commit-teller-gebaseerde afbouw uitrekenen, precies zoals bij
-                    // de allereerste commit van de episode.
-                    //
-                    // 14/08/2026 — !episodeAnyRealDeliveryDone toegevoegd:
-                    // zie kdoc bij de declaratie hierboven. commitNr kan door
-                    // ongeleverde early-floor-pogingen al opgehoogd zijn vóórdat
-                    // er ooit 1 eenheid daadwerkelijk is afgeleverd deze episode
-                    // — in dat geval mag de teller-gebaseerde afbouw net zomin
-                    // gelden als bij vroegeStijgingNuVoorHetEerst, om dezelfde
-                    // reden: dit IS in de praktijk de eerste echte commit, ook
-                    // al zegt commitNr iets anders. Alleen ZONDER recente
-                    // sensor-ruis (recentSensorNoise) — zie kdoc hierboven.
-                    //
-                    // 15/08/2026 — reentry-tak toegevoegd: zie kdoc bij
-                    // episodeAnyRealDeliverySinceReentry hierboven (pizza-episode,
-                    // golf 2). isReentrySignal() is zelf al streng gecorroboreerd
-                    // (reliable/aboveTarget/rising/accelerating) — dit voorkomt
-                    // alleen dat een net zo'n bevestigde nieuwe golf alsnog wordt
-                    // platgeslagen door decay die aan de VORIGE golf toebehoort.
-                    // computePeakBrake()/hypoProtection() blijven ongewijzigd — als
-                    // de actuele IOB/curve een reële hypo-projectie geeft, knipt
+                    // Deze twee blijven WEL instant: dit is per definitie de eerste
+                    // levering van de episode resp. van een nieuwe, streng
+                    // gecorroboreerde golf (isReentrySignal) -- er is op dat moment nog
+                    // geen eigen IOB-opbouw uit DEZE golf om tegen te beschermen, dus
+                    // geen zaagtand-risico zoals bij vroegeStijgingBevestigd hierboven.
+                    // computePeakBrake()/hypoProtection() blijven ongewijzigd — als de
+                    // actuele IOB/curve een reële hypo-projectie geeft, knipt
                     // hypoProtection() de dosis alsnog terug, ongeacht deze tak.
-                    //
-                    // 15/08/2026 — doseRatioDampingActive toegevoegd: zie kdoc
-                    // bij DOSE_RATIO_THRESHOLD hierboven (koekje-episode). Alleen als
-                    // de dosis/stijging-verhouding al minstens DOSE_RATIO_SUSTAIN_MIN
-                    // minuten ononderbroken verhoogd stond, wordt deze reset gedempt
-                    // i.p.v. volledig vrijgesteld.
-                    if (doseRatioDampingActive) DOSE_RATIO_DAMPING else 1.0
-                } else if (lateDecayActive) {
-                    (1.0 - effectiveDecay * (commitNr - 1).toDouble())
-                        .coerceIn(decayFloor, 1.0)
-                } else 1.0
+                    resetCeiling
+                } else {
+                    normalDecayValue
+                }
 
                 // Zie kdoc bij POST_OMSLAG_DIRECT_CUT_FRACTIE hierboven (GAT 2). Grijpt
                 // ALTIJD aan, ongeacht of de vloer hierboven al bindend was — dus ook
@@ -9868,6 +10083,24 @@ class FCLvNext(
             targetPct = tempOverrideTargetPctThisCycle,
             effectiveMul = tempOverrideEffectiveMulThisCycle,
             remainingMinutes = tempOverrideRemainingMinThisCycle,
+            timestampMs = now.millis
+        )
+
+        // Diagnostiek (18/09/2026): eindstand van vroegeStijgingBevestigd/de
+        // v120-ramp deze cyclus, zelfde eigen-tabel-patroon als post_hypo_brake_log/
+        // explosive_rise_log/temp_override_log hierboven (zie kdoc bij
+        // VroegeStijgingLogEntity). reentryActiveThisCycle wordt elke cyclus gezet
+        // (buiten effectiveCommitAllowed om); de andere 6 alleen als het
+        // commit-blok daadwerkelijk draaide, anders staan ze op hun neutrale
+        // default (zie reset bovenaan het effectiveCommitAllowed-blok).
+        cycleLogRepository.logVroegeStijging(
+            bevestigd = vroegeStijgingBevestigdThisCycle,
+            usedThisEpisode = vroegeStijgingUsedThisEpisodeThisCycle,
+            rampFrac = vroegeStijgingRampFracThisCycle,
+            reentryActive = reentryActiveThisCycle,
+            recentSensorNoise = recentSensorNoiseThisCycle,
+            accelDecliningFromRisePeak = accelDecliningFromRisePeakThisCycle,
+            curveConfirmtOmslag = curveConfirmtOmslagThisCycle,
             timestampMs = now.millis
         )
 
