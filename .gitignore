@@ -9,8 +9,9 @@
 /java_pid*
 *.apk
 build/
-!.idea/dictionaries/project-dictionary.xml
 .idea/*
+!.idea/dictionaries/
+!.idea/dictionaries/project_dictionary.xml
 !.idea/codeStyles/
 full/
 app/com.crashlytics.settings.json
