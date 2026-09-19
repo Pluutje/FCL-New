@@ -1079,6 +1079,20 @@ private const val VROEGE_STIJGING_RAMP_SLOPE_LOW = 5.0    // mmol/u -- onder dit
 private const val VROEGE_STIJGING_RAMP_SLOPE_HIGH = 15.0  // mmol/u -- vanaf dit punt geldt de snelste opbouw
 private const val VROEGE_STIJGING_PLATEAU_SLOPE = 1.0     // mmol/u — onder deze ctx.slope geldt de stijging als afgevlakt; opent de deur weer voor een eventuele 2e gang
 
+// 19/09/2026 (de gebruiker — analyse maaltijd 18/9 18:04-18:29): vroegeStijgingBevestigdSinds
+// (declaratie verderop) werd tot nu toe al bij ÉÉN cyclus waarin vroegeStijgingBevestigd
+// false was, direct teruggezet naar null — dus de opbouw moest daarna weer helemaal
+// opnieuw beginnen. Concreet incident: curveConfirmtOmslag (onderdeel van
+// vroegeStijgingBevestigd, zie daar) stond 18:14-18:29 vier cycli ACHTER ELKAAR op
+// true, puur door een kortstondige knik in de nog jonge curve-fit (weinig
+// datapunten) — terwijl de BG intussen gewoon doorsteeg (6,5->6,4->6,7->7,4 mmol)
+// en curve_fit_r2 hoog en betrouwbaar bleef (0,95-0,997). Dezelfde soort
+// ruis-gevoeligheid als bij decelTriggered (computePeakBrake(), 01/08/2026), en
+// dezelfde oplossing: pas na VROEGE_STIJGING_RESET_CONFIRM_CYCLES achtereenvolgende
+// cycli met vroegeStijgingBevestigd=false telt dat als een echte, bevestigde
+// afvlakking i.p.v. na de eerste losse cyclus.
+private const val VROEGE_STIJGING_RESET_CONFIRM_CYCLES = 2
+
 // ── Nieuwe-maaltijd trog-detectie (RONDE 33, 03/08/2026, de gebruiker) ──────────────
 // Zie de uitgebreide kdoc bij declineStreakMinutes/nieuweMaaltijdTrogBevestigd
 // hieronder voor de volledige aanleiding (3/8 12:18-15:28-incident) en de
@@ -1262,6 +1276,76 @@ private const val POST_HYPO_BRAKE_CATCHUP_SLOPE = 2.0  // recentSlope, zelfde dr
 // het scenario af dat de gebruiker signaleerde.
 private const val POST_HYPO_BRAKE_CATCHUP_MIN_BG = 7.0 // mmol/L, ondergrens voor het vangnet
 
+// ── Dynamische ondergrens bij overtuigend bewijs van een échte maaltijd
+// (19/09/2026, de gebruiker) ──────────────────────────────────────────────
+// AANLEIDING: maaltijd 18/9 18:04-18:24, direct na een echte hypo (BG tot
+// 2,5 mmol, 16:34-17:49). De post-hypo-brake wapende terecht (recentLowArm),
+// maar POST_HYPO_BRAKE_CATCHUP_MIN_BG hierboven is een VASTE grens: zolang
+// bgNow onder de 7,0 mmol bleef (5,8->6,7 mmol, 18:04-18:24), bleef de
+// geleidelijke-vrijgave-ramp verderop volledig op slot -- ongeacht hoe
+// overtuigend het bewijs al was dat dit een oprechte, aanhoudende maaltijd
+// was en geen rebound-overshoot: sustainedHighSlopeMinutes liep in dat
+// venster al op van 22 naar 40 minuten (ruim voorbij VROEGE_STIJGING_SUSTAIN_MIN,
+// hetzelfde, elders al beproefde signaal) en curve_fit_r2 bleef 0,95-0,997.
+// Pas om 18:29, toen bgNow toevallig de vaste 7,0-grens passeerde, mocht de
+// ramp uberhaupt beginnen -- 25 minuten nadat het bewijs al overtuigend was.
+//
+// OPLOSSING: laat de ondergrens continu meezakken naarmate
+// sustainedHighSlopeMinutes verder oploopt (dezelfde 15-minuten-startdrempel
+// als VROEGE_STIJGING_SUSTAIN_MIN, volledig ingezakt naar
+// POST_HYPO_BRAKE_CATCHUP_MIN_BG_CONFIDENT bij 30 minuten aanhoudend bewijs).
+// slopeOk (nog steeds vereist: recentSlope>=2,0) en de riseSinceBrake/
+// catchupRise-ramp zelf blijven ONGEWIJZIGD -- dit versnelt alleen WANNEER de
+// ramp in aanmerking komt, niet hoeveel hij per cyclus vrijgeeft. Bij een
+// kortstondige, onzekere stijging (sustainedHighSlopeMinutes<15, zoals bij elke
+// nieuwe episode) blijft de volledige, voorzichtige 7,0-grens gelden -- exact
+// hetzelfde gedrag als voorheen.
+// ⚠️ Eerste inschatting van 5,5 mmol als ondergrens-bij-volledig-vertrouwen —
+// nog altijd ruim boven een hypo-drempel (3,9-4,4), evt. bijstellen bij een
+// volgende update als er meer logdata is.
+private const val POST_HYPO_BRAKE_CATCHUP_MIN_BG_CONFIDENT = 5.5 // mmol/L, ondergrens bij volledig vertrouwen dat dit een echte maaltijd is
+private const val POST_HYPO_BRAKE_MEAL_CONFIDENCE_SUSTAIN_MAX = 30.0 // minuten -- vanaf hier volledig vertrouwen (start bij VROEGE_STIJGING_SUSTAIN_MIN=15)
+
+// ── Sneller vertrouwen specifiek bij recentLowArm, en ook slope-eis/catchup-
+// rise laten meebewegen (19/09/2026, de gebruiker — vervolg op de vloer-fix
+// hierboven) ─────────────────────────────────────────────────────────────
+// AANLEIDING: ook mét de vloer-fix hierboven bleef 18:04-18:24 vrijwel op
+// slot. Oorzaak: genuineMealConfidence (15-30 min opbouw, gedeeld met
+// VROEGE_STIJGING_SUSTAIN_MIN, dat voor een ANDER doel getuned is — een
+// nieuwe stijging vanaf een stabiele bodem herkennen) kwam pas op gang
+// (18:19: 0,53) net op het moment dat de VASTE slope-eis
+// (POST_HYPO_BRAKE_CATCHUP_SLOPE=2,0) door de natuurlijke afvlakking van de
+// curve zelf al bijna wegviel (recentSlope 2,28→1,81) — de twee bewogen
+// elkaar net mis. En zelfs met beide poorten open blijft de kwadratische
+// ramp log zolang catchupRise op de volle 3,5 mmol (recentLowArm) blijft
+// staan: bij een rijzing van pas 0,6-0,9 mmol sinds wapenen levert dat nog
+// nauwelijks iets op.
+//
+// OPLOSSING: bij recentLowArm specifiek (de enige route met de extra
+// voorzichtige 7,0-vloer EN 3,5 mmol-catchup) bouwt genuineMealConfidence
+// sneller op (5-25 min i.p.v. 15-30) — de extra voorzichtigheid zit al in de
+// hogere start-drempels zelf, een traag vertrouwen bovenop díe drempels was
+// dubbelop. Bij hypoDebtArm (geen bevestigde hypo, alleen right-sizing)
+// blijft de bestaande, langzamere 15-30-opbouw gelden — daar was nooit een
+// probleem gesignaleerd. Ditzelfde vertrouwen laat nu ook de slope-eis en de
+// catchup-rise meebewegen (zie toepassing verderop), niet meer alleen de
+// BG-vloer.
+//
+// ⚠️ VEILIGHEIDSMARGE (11/09/2026-incident, zie kdoc bij
+// POST_HYPO_BRAKE_CATCHUP_RISE_AFTER_LOW hieronder — een snelle rebound na
+// een échte hypo die binnen 2 cycli vrijwel volledig losliet op de toen nog
+// vaste 1,0 mmol-drempel, gevolgd door een TWEEDE hypo 50 min later): de
+// catchup-rise bij recentLowArm zakt daarom bewust NIET terug tot de normale
+// 1,0 mmol, maar tot POST_HYPO_BRAKE_CATCHUP_RISE_AFTER_LOW_CONFIDENT (2,0)
+// — een expliciete marge boven de drempel die toen tot die tweede hypo
+// leidde, ook bij vol (meerdere cycli aanhoudend) vertrouwen. Dit vereist
+// bovendien nog steeds meerdere cycli (5-25 min) AANHOUDEND hoge slope SINDS
+// het wapenen (sustainedSinceArmed) — een eenmalige rebound-sprong van één
+// cyclus (zoals 11/9) bouwt dat vertrouwen niet op.
+private const val POST_HYPO_BRAKE_MEAL_CONFIDENCE_SUSTAIN_MIN_AFTER_LOW = 5.0  // minuten sinds wapenen, alleen bij recentLowArm
+private const val POST_HYPO_BRAKE_MEAL_CONFIDENCE_SUSTAIN_MAX_AFTER_LOW = 25.0 // minuten sinds wapenen, alleen bij recentLowArm
+private const val POST_HYPO_BRAKE_CATCHUP_SLOPE_CONFIDENT = 1.0 // recentSlope, bij vol vertrouwen (was altijd 2,0)
+
 // ── Langere vrijgave-afstand specifiek na een écht recente hypo (11/09/2026, de gebruiker) ──
 // AANLEIDING: 11/9 09:44-13:54 — een BG-rebound na een echte hypo (recentLowArm-pad,
 // dus bg<=4,4 binnen de laatste 45 minuten, niet de lichtere hypoDebtArm-route) door
@@ -1285,6 +1369,11 @@ private const val POST_HYPO_BRAKE_CATCHUP_MIN_BG = 7.0 // mmol/L, ondergrens voo
 // steeds tijdig volledige correctie om rustig te kunnen dalen. Rest van de ratchet
 // (curve, rampDamp, auto-disarm) blijft voor beide wapen-paden identiek.
 private const val POST_HYPO_BRAKE_CATCHUP_RISE_AFTER_LOW = 3.5  // mmol/L, alleen bij recentLowArm
+// 19/09/2026 (de gebruiker) -- zie kdoc bij POST_HYPO_BRAKE_MEAL_CONFIDENCE_SUSTAIN_MIN_AFTER_LOW
+// hierboven: bij vol, meerdere-cycli-aanhoudend vertrouwen zakt de 3,5 mmol
+// hierboven mee naar dit getal -- NIET naar de normale 1,0 (de drempel die het
+// 11/09-incident hieronder veroorzaakte), als expliciete marge daarboven.
+private const val POST_HYPO_BRAKE_CATCHUP_RISE_AFTER_LOW_CONFIDENT = 2.0 // mmol/L, alleen bij recentLowArm + vol vertrouwen
 
 // AANSCHERPING (25/07/2026) — twee nieuwe, structurele valse triggers
 // gevonden binnen 24 uur na livegang (24/07 20:38-22:28 en 25/07 13:58-lunch,
@@ -4041,17 +4130,78 @@ private data class PostPeakSummary(
 //
 // Twee niveaus:
 //  - softBrake: continue/dynamische taper (severity 0..1), geen harde cliff.
-//  - hardBrake: vanaf lockoutThreshold volledige stop (commandedDose=0),
-//    niet alleen het WFF/consolidatie-deel.
+//  - hardBrake: vanaf lockoutThreshold een DIEPE, eveneens continue taper
+//    (zie deepBrakeFrac hieronder) — GEEN letterlijke, instante stop meer.
+//
+// HERZIEN (19/09/2026, de gebruiker — analyse maaltijd 18/9 18:04-20:04):
+// hardBrake was tot dan toe een letterlijke aan/uit-schakelaar
+// (commandedDose=0 zodra iobRatio>=lockoutThreshold, tenzij de eveneens
+// harde stillClearlyAccelerating-vrijwaring gold). Concreet incident: om
+// 19:09 sloeg de curve-fit een omslag aan (curveAcceleration net negatief,
+// r²=0,997) en klapte de rem potdicht — maar dat bleek een vals signaal,
+// de BG steeg de daaropvolgende 45+ minuten nog gewoon door van 13,1 naar
+// 15,3 mmol, terwijl er in dat venster (19:09-20:04) 10,45U werd
+// tegengehouden (dose_suppressed_u) en er maar 1,87U doorkwam. Zowel de
+// drempel zelf (iobRatio>=lockoutThreshold) als de vrijwaring
+// (curveAcceleration>0 && recentSlope>2.0) waren keiharde AND-poorten
+// zonder tussenweg.
+// OPLOSSING: dezelfde aanpak als bij de eerdere 5 dynamische remmen
+// (17/09/2026) — de "harde" regio (voorbij lockoutThreshold) krijgt nu een
+// eigen, continue reductie-fractie (deepBrakeFrac) die oploopt tot een bijna
+// volledige (maar nooit letterlijk 0) taper op fullBrakeIobRatio, en de
+// vrijwaring wordt een continue "hoe zeker is dit een échte, aanhoudende
+// stijging"-factor (accelConfidence) die deepBrakeFrac afzwakt in plaats van
+// hem volledig te annuleren. Bij lage/normale iobRatio (onder
+// lockoutThreshold) verandert er niets — softBrakeFactor is daar bit-voor-bit
+// gelijk aan de oude formule.
 //
 // LET OP: maxReduction=0.45 en fullBrakeIobRatio/dropMin zijn een eerste,
 // beredeneerde inschatting (geen historische tuning-data voor déze brede
 // ceiling) — kan bij een volgende update nog bijgesteld worden, met name
 // als blijkt dat langzame/vlakke (vet/eiwitrijke) stijgingen hierdoor
-// onderbedeeld raken.
+// onderbedeeld raken. DEEP_BRAKE_MAX_REDUCTION (0,97) is een even eerste
+// inschatting voor de nieuwe diepe regio — bewust net onder 1.0 (nooit een
+// letterlijke, instante 0 meer), evt. bijstellen bij een volgende update.
+private const val DEEP_BRAKE_MAX_REDUCTION = 0.97
+
+// ── Plafond op hoeveel accelConfidence de diepe rem mag opheffen (19/09/2026,
+// de gebruiker) ─────────────────────────────────────────────────────────────
+// AANLEIDING: backtest van de declinedFromPeak/accelConfidenceRaw-fixes
+// hierboven tegen 18/9 19:09-20:04 liet zien dat +4,15U alsnog doorstroomt op
+// cycli waar iobRatio al 0,60-0,77 was (dus voorbij lockoutThreshold) puur
+// omdat curveAcceleration/recentSlope op dat moment nog sterk positief waren
+// — legitiem "nog aan het versnellen", maar dat verhoogt de opgebouwde IOB
+// vlak vóór de top. De eigen hypo-projectie van het algoritme liet in
+// datzelfde incident zien dat de marge ná de top al dun was (geprojecteerd
+// tot 1,7 mmol om 20:34) — puur op basis van de IOB die er zonder deze
+// verruiming al lag. Meer IOB toevoegen net vóór zo'n al krappe afdaling is
+// onverstandig, ook al is het "vraag" op dat moment zelf terecht.
+//
+// OPLOSSING: accelConfidence mag de diepe rem nooit voor 100% opheffen, hoe
+// overtuigend de versnelling ook is — een restrem (minimaal
+// (1-PEAK_BRAKE_ACCEL_RELIEF_MAX) van de volledige diepe-rem-schaal) blijft
+// altijd staan zodra iobRatio voorbij lockoutThreshold zit.
+//
+// NAGEREKEND (19/09/2026): in het 19:09-20:04-incident zelf bleek
+// accelConfidence op ALLE 8 relevante cycli al 0,000 (curveAcceleration was
+// daar al negatief — tweede-orde-afvlakking, ook al bleef BG zelf nog
+// stijgen), dus dit plafond alléén verandert daar niets. De echte hefboom
+// bleek fullBrakeIobRatio te zijn (zie hieronder in computePeakBrake) — dit
+// plafond blijft niettemin behouden als generieke marge voor het geval
+// accelConfidence ELDERS wél de dominante factor is. Dit raakt alleen
+// de regio waar deepBrakeRaw>0 (iobRatio>=lockoutThreshold) — onder die
+// drempel verandert er niets. Blijft dynamisch (geen harde aan/uit-knip):
+// bij lage iobRatio (nog ruim onder lockoutThreshold) is deepBrakeRaw toch al
+// 0, dus dit plafond heeft daar sowieso geen effect.
+// ⚠️ Eerste inschatting (0,7 = maximaal 70% relief) — geen historische
+// tuning-data voor déze precieze waarde, evt. bijstellen bij een volgende
+// update als blijkt dat een duidelijk doorstijgende curve toch te veel
+// onderbedeeld raakt.
+private const val PEAK_BRAKE_ACCEL_RELIEF_MAX = 0.7
+
 private data class PeakBrakeResult(
-    val softBrakeFactor: Double,   // 1.0 = geen reductie, lager = taper
-    val hardBrake: Boolean,        // true = commandedDose volledig naar 0
+    val softBrakeFactor: Double,   // 1.0 = geen reductie, lager = taper (incl. de diepe regio hieronder)
+    val hardBrake: Boolean,        // true = diepe-brake-regio (voor logging/labeling "HARD_BRAKE"); vervangt GEEN dosis meer hard door 0 — zie softBrakeFactor
     val severity: Double,          // 0..1, voor logging/debug
     val slopeCeiling: Double,      // voor logging/debug
     val recentSlopeDrop: Double,   // voor logging/debug
@@ -4080,7 +4230,32 @@ private fun computePeakBrake(
 
     val suppressThreshold = config.peakIobBrakeSuppressThreshold   // nu actief 0.30
     val lockoutThreshold = config.peakIobBrakeLockoutThreshold     // 0.55
-    val fullBrakeIobRatio = 0.65   // net boven lockoutThreshold — vanaf hier ceiling=max
+    // HERZIEN (19/09/2026, de gebruiker): was 0,65. Nagerekend tegen het 18/9
+    // 19:09-20:04-incident: bij 0,65 bleef deepBrakeRaw bij iobRatio=0,60 nog op
+    // maar 0,5 (effectiveMaxReduction=lerp(0,45,0,97,0,5)=0,71), waardoor de
+    // headroom-cap op die cyclus (4,41×0,454=2,00U) ruim boven de gevraagde
+    // 1,64U bleef en dus HELEMAAL NIET afremde (volledige 1,64U kwam door).
+    // Bij 0,60 bereikt deepBrakeRaw bij iobRatio=0,60 al zijn maximum (1,0),
+    // effectiveMaxReduction=0,97, cap=1,06U — een echte, meetbare rem op
+    // precies de cyclus die er nu ongeremd doorheen kwam. Over het hele
+    // 19:09-20:04-venster: 4,15U (bij 0,65) → 3,47U (bij 0,60) doorgelaten.
+    // Verdere verkrapping naar 0,58 gaf nog maar 0,02U extra (3,45U) — geen
+    // reden om verder te gaan dan 0,60.
+    val fullBrakeIobRatio = 0.60   // net boven lockoutThreshold — vanaf hier ceiling=max
+    // BUGFIX (19/09/2026, code-review): fullBrakeIobRatio hierboven werd EERST
+    // ook hergebruikt voor t/slopeCeiling (de INGANG-poort van deze functie,
+    // brakeCondition), niet alleen voor deepBrakeRaw (de DIEPTE hieronder).
+    // Gevolg: bij iobRatio ONDER lockoutThreshold (0,40-0,55, dus ver van het
+    // beoogde 19:09-20:04-doel) werd slopeCeiling ook hoger, waardoor de rem
+    // daar vaker "actief" werd — en peakIobBrake/suppress is een HARDE
+    // AND-gate voor microRamp, vroege dosering en LateBolusBlock, los van de
+    // daadwerkelijke reductie-sterkte (die daar wel degelijk ongewijzigd
+    // bleef op maxReduction=0,45). Dat had precies het averechtse effect
+    // kunnen hebben op cycli ver vóór de piek — de dosis die deze hele
+    // sessie juist naar voren moet komen. Losgekoppeld: de ingang-poort
+    // gebruikt zijn eigen, ONGEWIJZIGDE breedte; alleen deepBrakeRaw (de
+    // diepte in de 0,55-0,60-regio) is aangescherpt.
+    val slopeCeilingFullIobRatio = 0.65
     val dropMin = 0.8              // mmol/L/u knik t.o.v. vorige cyclus
     val maxSlopeCeiling = 6.0
     val maxReduction = 0.45        // ⚠️ eerste inschatting, evt. bijstellen bij volgende update
@@ -4174,7 +4349,7 @@ private fun computePeakBrake(
         return PeakBrakeResult(1.0, false, 0.0, 0.50, recentSlopeDrop, "NONE", rawDecelSignal)
     }
 
-    val t = smooth01((ctx.iobRatio - suppressThreshold) / (fullBrakeIobRatio - suppressThreshold))
+    val t = smooth01((ctx.iobRatio - suppressThreshold) / (slopeCeilingFullIobRatio - suppressThreshold))
     val slopeCeiling = 0.50 + t * (maxSlopeCeiling - 0.50)
 
     val brakeCondition =
@@ -4216,15 +4391,89 @@ private fun computePeakBrake(
     // vaker terecht vroeg dan te vroeg. Bij een treffer relaxeert dit alleen
     // hardBrake naar softBrake (nog altijd tot -45% reductie via severity
     // hieronder) — geen vrije, ongeremde dosis.
-    val stillClearlyAccelerating = ctx.curveAcceleration > 0.0 && ctx.recentSlope > 2.0
-    val hardBrake = ctx.iobRatio >= lockoutThreshold && !stillClearlyAccelerating
+    //
+    // HERZIEN (19/09/2026, zie kdoc bij PeakBrakeResult/DEEP_BRAKE_MAX_REDUCTION
+    // hierboven): zowel deze vrijwaring als de iobRatio>=lockoutThreshold-drempel
+    // hierboven waren keiharde AND/OR-poorten die commandedDose bij een treffer
+    // volledig naar 0 zetten. accelConfidence hieronder is de continue versie
+    // van stillClearlyAccelerating (0 = geen enkel bewijs van aanhoudende
+    // stijging, 1 = net zo sterk bewijs als de oude harde drempel vereiste) —
+    // curveAcceleration schaalt over 0..3 mmol/u², recentSlope over 1,0..2,0
+    // mmol/u (dus bij precies de oude grenswaarden, curveAcceleration=0/
+    // recentSlope=2,0, is confidence nog laag; ruim eroverheen nadert hij 1).
+    // deepBrakeFrac is de continue versie van "voorbij lockoutThreshold":
+    // loopt van 0 (op lockoutThreshold) naar 1 (op fullBrakeIobRatio), en wordt
+    // vervolgens door (1-accelConfidence) afgezwakt i.p.v. volledig
+    // geannuleerd — bij twijfelachtig bewijs blijft dus nog een deel van de
+    // diepe rem staan, in plaats van alles-of-niets.
+    // HERZIEN (19/09/2026, de gebruiker — incident 18/9 20:04): declinedFromPeak
+    // (dezelfde grens als tailSuppress elders, TAIL_MIN_DECLINE_FROM_PEAK_MMOL) is
+    // een directer, minder ruizig signaal dan curveAcceleration/recentSlope, die
+    // vlak rond een echte omslag door elkaar kunnen lopen. Backtest op het
+    // 20:04-incident zelf liet zien dat het NIET voldoende is om alleen
+    // accelConfidence te blokkeren: iobRatio (0,56) lag toen zelf al maar net
+    // boven lockoutThreshold (0,55) — puur omdat de IOB inmiddels van nature was
+    // weggezakt — waardoor deepBrakeRaw sowieso al klein was (~0,03) en
+    // softBrakeFactor mild bleef (~0,56), ONGEACHT accelConfidence. Een dalende
+    // iobRatio betekent hier niet "veiliger om te doseren": de BG daalt zelf al,
+    // dus minder IOB is geen reden om de rem te laten meebewegen. Daarom forceert
+    // declinedFromPeak nu OOK deepBrakeRaw naar 1,0 (volledige diepe-rem-schaal),
+    // los van hoe dicht iobRatio nog bij lockoutThreshold zit.
+    //
+    // HERZIEN (19/09/2026, de gebruiker — code-review v122): declinedFromPeak alleen
+    // kan een ÉCHTE hernieuwde stijging (bijv. een tweede, later voedingscomponent na
+    // een korte terugval binnen dezelfde episode) onnodig fors blijven afremmen, omdat
+    // peakEstimator.maxBgSeen episode-breed blijft staan en niet bij zo'n hernieuwde
+    // stijging reset.
+    //
+    // EERSTE POGING (verworpen na narekenen): risingAgainTail's grens (recentSlope>=0,35
+    // of recentDelta5m>=0,08) hergebruiken, zoals bij het analoge tailSuppress hierboven.
+    // Bij het 20:04-incident zelf was recentSlope echter 0,56 — al ruim boven die grens,
+    // puur als nasleep-ruis van de net gepasseerde piek, geen echte tweede stijging. Die
+    // vrijwaring had Fix 41 dus precies bij het incident dat hem motiveerde ongedaan
+    // gemaakt. risingAgainTail werkt bij tailSuppress alleen veilig omdat daar altijd
+    // fastPlateau (recentSlope<=0,20) al geëist wordt — een eis die hier ontbreekt.
+    //
+    // In plaats daarvan: hergebruik accelConfidence zelf (hieronder, ONGEWIJZIGDE
+    // formule) — dat is al de bestaande, strengere maatstaf in déze functie voor
+    // "ondubbelzinnig nog versnellend" (zie kdoc 06/08/2026 hierboven: curveAcceleration
+    // over 0..3 mmol/u² x recentSlope over 1,0..2,0 mmol/u). Bij het 20:04-incident geeft
+    // die formule 0 (recentSlope 0,56 ligt al onder de 1,0-ondergrens van die schaal),
+    // dus de fix blijft daar intact. Alleen bij sterk, gelijktijdig bewijs van hernieuwde
+    // versnelling (accelConfidenceRaw>=0,5 — dezelfde 0,5-drempel als hardBrake verderop)
+    // laten we declinedFromPeak's forcering los.
+    val accelConfidenceRaw =
+        smooth01(ctx.curveAcceleration / 3.0) * smooth01((ctx.recentSlope - 1.0) / 1.0)
+    val declinedFromPeak = (peakEstimator.maxBgSeen - ctx.input.bgNow) >= TAIL_MIN_DECLINE_FROM_PEAK_MMOL &&
+        accelConfidenceRaw < 0.5
+    val accelConfidence = if (declinedFromPeak) 0.0 else accelConfidenceRaw
+    val deepBrakeRaw = if (declinedFromPeak) 1.0 else
+        smooth01((ctx.iobRatio - lockoutThreshold) / (fullBrakeIobRatio - lockoutThreshold))
+    // HERZIEN (19/09/2026, zie kdoc bij PEAK_BRAKE_ACCEL_RELIEF_MAX hierboven):
+    // accelConfidence mag deepBrakeRaw nooit voor de volle 100% opheffen — een
+    // restrem (minimaal 1-PEAK_BRAKE_ACCEL_RELIEF_MAX) blijft altijd staan
+    // zodra iobRatio voorbij lockoutThreshold zit, ook bij ondubbelzinnig
+    // bewijs van doorzettende versnelling.
+    val deepBrakeFrac = deepBrakeRaw * (1.0 - PEAK_BRAKE_ACCEL_RELIEF_MAX * accelConfidence)
+    // Alleen voor logging/labeling ("HARD_BRAKE" in de status/CSV) — bepaalt
+    // niet meer of commandedDose hard naar 0 gaat, dat gebeurt nergens meer
+    // op basis van dit veld (zie lockout in evaluatePostPeak() en
+    // peakApproachFactor bij de IOB-taper verderop).
+    val hardBrake = deepBrakeFrac >= 0.5
 
     val severity = smooth01(
         0.5 * ((ctx.iobRatio - suppressThreshold) / (lockoutThreshold - suppressThreshold)) +
             0.3 * ((slopeCeiling - ctx.slope) / slopeCeiling).coerceIn(0.0, 1.0) +
             0.2 * (recentSlopeDrop / 2.0).coerceIn(0.0, 1.0)
     )
-    val softBrakeFactor = 1.0 - severity * maxReduction
+    // Bij deepBrakeFrac=0 (iobRatio nog onder lockoutThreshold) is dit exact
+    // de oude formule (effectiveMaxReduction=maxReduction=0,45) — geen
+    // gedragsverandering in het normale/milde bereik. Pas voorbij
+    // lockoutThreshold loopt de reductie continu door naar
+    // DEEP_BRAKE_MAX_REDUCTION (0,97), i.p.v. de oude instante sprong naar
+    // "volledig naar 0".
+    val effectiveMaxReduction = lerp(maxReduction, DEEP_BRAKE_MAX_REDUCTION, deepBrakeFrac)
+    val softBrakeFactor = 1.0 - severity * effectiveMaxReduction
 
     val reason = if (hardBrake) "HARD_BRAKE" else "SOFT_BRAKE"
     return PeakBrakeResult(softBrakeFactor, hardBrake, severity, slopeCeiling, recentSlopeDrop, reason, rawDecelSignal)
@@ -4397,7 +4646,26 @@ private fun evaluatePostPeak(
                 || (preCommitTop && ctx.iobRatio >= 0.55)
                 // ✅ NIEUW: bij sensorBlip liever hard stoppen met pushen
                 || sensorBlip
-                // ✅ NIEUW: harde stop als IOB echt hoog is vlak voor piek
+                // HERZIEN (19/09/2026, de gebruiker — expliciete, herhaalde eis):
+                // "vlak voor de piek of op de piek moet de insuline nul of
+                // nagenoeg nul worden". peakBrake.hardBrake HERSTELD als
+                // daadwerkelijke lockout (was tijdelijk verwijderd, zie de nu
+                // VERWORPEN kdoc's hierboven bij DEEP_BRAKE_MAX_REDUCTION/
+                // declinedFromPeak) — nagerekend tegen het 18/9 19:09-20:04-
+                // incident: met fullBrakeIobRatio=0,60 (hierboven al aangescherpt)
+                // en PEAK_BRAKE_ACCEL_RELIEF_MAX=0,7 komt dit voor alle 8
+                // cycli in dat venster weer exact op 0,00U uit — identiek aan de
+                // oorspronkelijke v120c-hardBrake, inclusief het 20:04-moment
+                // (declinedFromPeak dwingt daar deepBrakeFrac alsnog naar 1,0).
+                // Het "continu i.p.v. hard aan/uit"-principe blijft wél gelden
+                // voor de MILDERE regio (onder lockoutThreshold, of bij sterk
+                // bewijs van nog onmiskenbaar doorzettende versnelling via
+                // accelConfidence — zie kdoc 06/08/2026 bij computePeakBrake()
+                // voor de reden dat die vrijwaring bestaat) — daar blijft
+                // softBrakeFactor de vloeiende, geleidelijke reductie geven.
+                // Vlak voor/op de piek zelf (hoge iobRatio, geen onmiskenbaar
+                // bewijs van doorzettende versnelling meer, of BG al gedaald
+                // vanaf zijn eigen top) gaat de dosis weer daadwerkelijk naar 0.
                 || peakBrake.hardBrake
             )
 
@@ -4444,7 +4712,17 @@ private fun evaluatePostPeak(
 
     val lockoutReason = when {
         !lockout -> "NONE"
-        peakIobBrake && ctx.iobRatio >= 0.70 -> "PEAK_IOB_BRAKE_HIGH"
+        // HERZIEN (19/09/2026, de gebruiker): peakBrake.hardBrake is hersteld
+        // als daadwerkelijke lockout-oorzaak (zie hierboven) — daarom hier ook
+        // weer expliciet gelabeld, VÓÓR sensorBlip/preCommitTop/ABSORPTION.
+        // BUGFIX tegelijk meegenomen (al eerder deze sessie gevonden, nog niet
+        // gefixt): de oude versie van dit label eiste ctx.iobRatio>=0.70,
+        // terwijl hardBrake zelf al vanaf lockoutThreshold (0,55) kan afgaan —
+        // bij iobRatio 0,55-0,70 viel de ECHTE oorzaak (hardBrake) dus altijd
+        // door naar de misleidende "ABSORPTION"-catch-all hieronder. Nu direct
+        // op peakBrake.hardBrake zelf gecontroleerd, niet op een aparte
+        // iobRatio-drempel die niet bij de daadwerkelijke trigger past.
+        peakBrake.hardBrake -> "PEAK_IOB_BRAKE_HIGH"
         sensorBlip -> "SENSOR_BLIP"
         preCommitTop && ctx.iobRatio >= 0.55 -> "PRE_COMMIT_TOP"
         else -> "ABSORPTION"
@@ -4894,7 +5172,7 @@ class FCLvNext(
     // "vNN-jjjj-mm-dd-uumm" (aanmaaktijdstip, geen omschrijving; die van
     // eerdere versies raakten toch achter). Alleen als het écht relevant
     // is een korte omschrijving toevoegen.
-    private val FCL_CODE_VERSION = "v120c-2026-09-17-2232"
+    private val FCL_CODE_VERSION = "v122-2026-09-19-1900"
 
     // ── Restart-detectie (16/07/2026) ─────────────────────────────────
     // true op precies de EERSTE cyclus na het (her)starten van dit class-
@@ -5555,6 +5833,14 @@ class FCLvNext(
     // cyclus. Gereset op dezelfde 4 episode-grensmomenten als
     // vroegeStijgingBevestigdUsedThisEpisode hieronder.
     private var vroegeStijgingBevestigdSinds: DateTime? = null
+    // 19/09/2026 — zie kdoc bij VROEGE_STIJGING_RESET_CONFIRM_CYCLES hierboven.
+    // Telt opeenvolgende cycli waarin vroegeStijgingBevestigd false was terwijl
+    // een opbouw liep (vroegeStijgingBevestigdSinds != null); pas bij het
+    // bereiken van VROEGE_STIJGING_RESET_CONFIRM_CYCLES wordt de opbouw echt
+    // teruggezet. Gereset op dezelfde 4 episode-grensmomenten als
+    // vroegeStijgingBevestigdSinds hierboven, en telkens naar 0 zodra
+    // vroegeStijgingBevestigd weer (ononderbroken) waar staat.
+    private var vroegeStijgingFalseStreak: Int = 0
 
     // 18/09/2026 -- diagnostische "ThisCycle"-bridge-vars voor vroege_stijging_log
     // (zie kdoc bij VroegeStijgingLogEntity). Puur diagnostisch, geen invloed op
@@ -5976,6 +6262,7 @@ class FCLvNext(
             rapidDecelConfirm = 0
             vroegeStijgingBevestigdUsedThisEpisode = false
             vroegeStijgingBevestigdSinds = null
+            vroegeStijgingFalseStreak = 0
             episodeAnyRealDeliveryDone = false
             episodeAnyRealDeliverySinceReentry = true
             plateauSinceVroegeStijging = false
@@ -6748,6 +7035,7 @@ class FCLvNext(
             rapidDecelConfirm = 0
             vroegeStijgingBevestigdUsedThisEpisode = false
             vroegeStijgingBevestigdSinds = null
+            vroegeStijgingFalseStreak = 0
             episodeAnyRealDeliveryDone = false
             episodeAnyRealDeliverySinceReentry = true
             plateauSinceVroegeStijging = false
@@ -6811,6 +7099,7 @@ class FCLvNext(
             rapidDecelConfirm = 0
             vroegeStijgingBevestigdUsedThisEpisode = false
             vroegeStijgingBevestigdSinds = null
+            vroegeStijgingFalseStreak = 0
             episodeAnyRealDeliveryDone = false
             episodeAnyRealDeliverySinceReentry = true
             plateauSinceVroegeStijging = false
@@ -7336,7 +7625,14 @@ class FCLvNext(
         if (
             microRamp.active &&
             !suppressForPeak &&
-            !postPeak.lockout
+            !postPeak.lockout &&
+            // 19/09/2026, de gebruiker: peakBrake.hardBrake is (opnieuw) een
+            // daadwerkelijke oorzaak van postPeak.lockout (zie evaluatePostPeak()),
+            // dus !postPeak.lockout dekt dit inmiddels al af. Expliciet hier
+            // herhaald als extra, redundante vrijwaring: deze DOSIS-VERHOGENDE
+            // micro-ramp mag NOOIT aanslaan in de hardBrake-regio, ook niet als
+            // een toekomstige wijziging aan lockout dat verband ooit weer losmaakt.
+            !postPeak.peakBrake.hardBrake
         ) {
             // Respecteer ACCESS-cap (MICRO_ONLY/SMALL/NORMAL)
             val microCapped = minOf(microRamp.microU, accessCap)
@@ -7733,6 +8029,12 @@ class FCLvNext(
             ((peak.state == PeakPredictionState.WATCHING) || earlyConfirmedRise) &&
                 !suppressForPeak &&
                 !postPeak.lockout &&
+                // 19/09/2026, de gebruiker: zelfde reden als bij microRamp hierboven
+                // -- peakBrake.hardBrake is weer een daadwerkelijke oorzaak van
+                // postPeak.lockout, dus !postPeak.lockout dekt dit al af. Expliciet
+                // hier herhaald als extra, redundante vrijwaring voor deze
+                // DOSIS-VERHOGENDE WFF-frontload (wffShortfallU).
+                !postPeak.peakBrake.hardBrake &&
                 !postPeak.sensorBlip &&
                 (zoneEnum != BgZone.LOW) &&
                 !wffHypoBlokkade   // WFF geblokkeerd bij dreigende hypo
@@ -8428,6 +8730,7 @@ class FCLvNext(
                     lastKnownLateDecayMul = 1.0
                     vroegeStijgingBevestigdUsedThisEpisode = false
                     vroegeStijgingBevestigdSinds = null
+                    vroegeStijgingFalseStreak = 0
                     episodeAnyRealDeliveryDone = false
                     episodeAnyRealDeliverySinceReentry = true
                     plateauSinceVroegeStijging = false
@@ -8657,8 +8960,25 @@ class FCLvNext(
                 // gespreid over een paar cycli i.p.v. in 1 klap.
                 if (vroegeStijgingNuVoorHetEerst) {
                     if (vroegeStijgingBevestigdSinds == null) vroegeStijgingBevestigdSinds = now
+                    vroegeStijgingFalseStreak = 0
                 } else if (!vroegeStijgingBevestigd) {
-                    vroegeStijgingBevestigdSinds = null
+                    // 19/09/2026 -- zie kdoc bij VROEGE_STIJGING_RESET_CONFIRM_CYCLES
+                    // hierboven: alleen resetten als dit VROEGE_STIJGING_RESET_CONFIRM_CYCLES
+                    // cycli ACHTER ELKAAR zo is, niet meer al bij de eerste losse cyclus.
+                    // Alleen tellen als er ook echt een opbouw loopt (sinds != null) --
+                    // anders blijft de streak zinloos oplopen buiten elke episode om.
+                    if (vroegeStijgingBevestigdSinds != null) {
+                        vroegeStijgingFalseStreak++
+                        if (vroegeStijgingFalseStreak >= VROEGE_STIJGING_RESET_CONFIRM_CYCLES) {
+                            vroegeStijgingBevestigdSinds = null
+                            vroegeStijgingFalseStreak = 0
+                        }
+                    }
+                } else {
+                    // vroegeStijgingBevestigd true maar al vroegeStijgingBevestigdUsedThisEpisode
+                    // (dus vroegeStijgingNuVoorHetEerst false) -- bewijs is niet weggevallen,
+                    // streak dus niet laten oplopen.
+                    vroegeStijgingFalseStreak = 0
                 }
                 // v120b -- opbouwtijd zelf schaalt met recentSlope (zie kdoc bij
                 // VROEGE_STIJGING_RAMP_MIN_SLOW/FAST hierboven): een snelle, onmiskenbare
@@ -10009,14 +10329,79 @@ class FCLvNext(
         // steeds vast, net als voorheen.
         if (postHypoBrakeActive && commandedDose > 0.0) {
             val riseSinceBrake = (ctx.input.bgNow - postHypoBrakeBg).coerceAtLeast(0.0)
-            val slopeOk = ctx.recentSlope >= POST_HYPO_BRAKE_CATCHUP_SLOPE
-            val bgFloorOk = ctx.input.bgNow >= POST_HYPO_BRAKE_CATCHUP_MIN_BG
+            // 19/09/2026 (de gebruiker) -- zie kdoc bij POST_HYPO_BRAKE_CATCHUP_MIN_BG_CONFIDENT
+            // hierboven: de vaste 7,0-vloer zakt continu mee naar
+            // POST_HYPO_BRAKE_CATCHUP_MIN_BG_CONFIDENT naarmate sustainedHighSlopeMinutes
+            // (hetzelfde, elders al beproefde signaal als bij vroegeStijgingBevestigd)
+            // oploopt van VROEGE_STIJGING_SUSTAIN_MIN (15) naar
+            // POST_HYPO_BRAKE_MEAL_CONFIDENCE_SUSTAIN_MAX (30) minuten aanhoudend bewijs.
+            // Bij een kortstondige/onzekere stijging (<15 min) blijft de volledige,
+            // voorzichtige 7,0-grens gelden -- ongewijzigd gedrag.
+            //
+            // HERZIEN (19/09/2026, de gebruiker — code-review v122): sustainedHighSlopeMinutes
+            // telt door vanaf het moment dat de slope hoog werd, dus ook tijdens de
+            // hypo-rebound zelf, VOORDAT de post-hypo-rem al aansloeg. Bij het brontincident
+            // (18/9 18:04) stond de teller bij het wapenen (18:04) al op 22 minuten — grotendeels
+            // rebound-momentum van de hypo, geen bevestigd nieuw koolhydraatbewijs. Om te
+            // voorkomen dat de vloer zakt op grond van rebound-minuten die vóór het wapenen al
+            // meetelden, begrenzen we het "maaltijd-vertrouwen" tot het deel van de teller dat
+            // ten hoogste sinds het wapenen zelf kan zijn opgebouwd (minutesSinceArmed is daarop
+            // een harde bovengrens: als de slope al die tijd onafgebroken hoog is gebleven, is
+            // het NIET ouder dan de armed-duur zelf).
+            val minutesSinceArmed = minutesSince(postHypoBrakeArmedAt, now).toDouble()
+            val sustainedSinceArmed = minOf(sustainedHighSlopeMinutes, minutesSinceArmed)
+            // HERZIEN (19/09/2026, de gebruiker — zie kdoc bij
+            // POST_HYPO_BRAKE_MEAL_CONFIDENCE_SUSTAIN_MIN_AFTER_LOW hierboven): ook met
+            // bovenstaande begrenzing bleef 18:04-18:24 vrijwel op slot, omdat de 15-30
+            // min-opbouw hier te traag was t.o.v. hoe snel de slope zelf afvlakt. Bij
+            // recentLowArm (de route met de extra voorzichtige 7,0-vloer EN 3,5 mmol-
+            // catchup hieronder) bouwt het vertrouwen daarom sneller op -- de extra
+            // voorzichtigheid zit al in die hogere start-drempels. Bij hypoDebtArm blijft
+            // de bestaande, langzamere opbouw gelden.
+            val confSustainMin = if (postHypoBrakeArmedByRecentLow)
+                POST_HYPO_BRAKE_MEAL_CONFIDENCE_SUSTAIN_MIN_AFTER_LOW else VROEGE_STIJGING_SUSTAIN_MIN
+            val confSustainMax = if (postHypoBrakeArmedByRecentLow)
+                POST_HYPO_BRAKE_MEAL_CONFIDENCE_SUSTAIN_MAX_AFTER_LOW else POST_HYPO_BRAKE_MEAL_CONFIDENCE_SUSTAIN_MAX
+            val genuineMealConfidence = smooth01(
+                (sustainedSinceArmed - confSustainMin) / (confSustainMax - confSustainMin)
+            )
+            val effectiveCatchupMinBg = lerp(
+                POST_HYPO_BRAKE_CATCHUP_MIN_BG,
+                POST_HYPO_BRAKE_CATCHUP_MIN_BG_CONFIDENT,
+                genuineMealConfidence
+            )
+            val bgFloorOk = ctx.input.bgNow >= effectiveCatchupMinBg
+            // HERZIEN (19/09/2026, de gebruiker): hetzelfde vertrouwen laat nu ook de
+            // slope-eis meebewegen -- bij recentLowArm zakt POST_HYPO_BRAKE_CATCHUP_SLOPE
+            // (2,0) naar POST_HYPO_BRAKE_CATCHUP_SLOPE_CONFIDENT (1,0) naarmate de stijging
+            // langer aanhoudt, zodat een natuurlijke, tijdelijke afvlakking van de curve
+            // (zoals 18:19→18:24, recentSlope 2,28→1,81) de poort niet meer dichtslaat
+            // terwijl het bewijs voor een echte, doorlopende maaltijd juist toeneemt.
+            val effectiveCatchupSlope = if (postHypoBrakeArmedByRecentLow)
+                lerp(POST_HYPO_BRAKE_CATCHUP_SLOPE, POST_HYPO_BRAKE_CATCHUP_SLOPE_CONFIDENT, genuineMealConfidence)
+            else POST_HYPO_BRAKE_CATCHUP_SLOPE
+            val slopeOk = ctx.recentSlope >= effectiveCatchupSlope
+            if (genuineMealConfidence > 0.01) {
+                status.append(
+                    "POST-HYPO BRAKE: maaltijd-vertrouwen=${"%.2f".format(genuineMealConfidence)} " +
+                        "(sustained=${sustainedHighSlopeMinutes.toInt()}m, sinds-wapenen=${sustainedSinceArmed.toInt()}m) → BG-vloer " +
+                        "${"%.1f".format(POST_HYPO_BRAKE_CATCHUP_MIN_BG)}→${"%.1f".format(effectiveCatchupMinBg)} mmol, slope-eis " +
+                        "${"%.2f".format(POST_HYPO_BRAKE_CATCHUP_SLOPE)}→${"%.2f".format(effectiveCatchupSlope)}\n"
+                )
+            }
             val before = commandedDose
             // 11/09/2026 — zie kdoc bij POST_HYPO_BRAKE_CATCHUP_RISE_AFTER_LOW
             // hierboven: na een écht recente hypo is meer rise nodig voordat de
             // ratchet volledig loslaat dan na een lichte hypoDebtArm-right-sizing.
+            //
+            // HERZIEN (19/09/2026, de gebruiker): bij recentLowArm zakt deze 3,5 mmol
+            // met hetzelfde vertrouwen mee naar POST_HYPO_BRAKE_CATCHUP_RISE_AFTER_LOW_CONFIDENT
+            // (2,0) -- NIET naar de normale 1,0 (zie kdoc: dat was precies de drempel die
+            // het 11/09-incident/tweede-hypo veroorzaakte), dus altijd een expliciete marge
+            // daarboven, ook bij vol (meerdere cycli aanhoudend) vertrouwen.
             val catchupRise =
-                if (postHypoBrakeArmedByRecentLow) POST_HYPO_BRAKE_CATCHUP_RISE_AFTER_LOW
+                if (postHypoBrakeArmedByRecentLow)
+                    lerp(POST_HYPO_BRAKE_CATCHUP_RISE_AFTER_LOW, POST_HYPO_BRAKE_CATCHUP_RISE_AFTER_LOW_CONFIDENT, genuineMealConfidence)
                 else POST_HYPO_BRAKE_CATCHUP_RISE
             if (slopeOk && bgFloorOk && riseSinceBrake > 0.001) {
                 val rampX = (riseSinceBrake / catchupRise).coerceIn(0.0, 1.0)
@@ -10324,12 +10709,13 @@ class FCLvNext(
 // ✅ GECONSOLIDEERD (30/06/2026): piek-nadering taper via postPeak.peakBrake
             // i.p.v. eigen losse conditie (was: ctx.slope in -0.10..0.50, te laat
             // bij hoge IOB — zie computePeakBrake() voor de volledige toelichting).
-            // hardBrake wordt hier niet apart afgehandeld: postPeak.lockout (dat
-            // peakBrake.hardBrake meeneemt) zet commandedDose elders al op 0 bij
-            // een harde stop; deze taper is alleen voor de softBrake-situatie.
+            // HERZIEN (19/09/2026, de gebruiker): hardBrake is hersteld als
+            // daadwerkelijke lockout (zie evaluatePostPeak()) — bij hardBrake=true
+            // is commandedDose op dit punt dus al 0 en doet deze softBrakeFactor-
+            // toepassing niets meer (0×factor=0). Deze taper is nu alleen nog
+            // relevant voor de MILDERE regio waar hardBrake niet aansloeg.
             if (commandedDose > 0.0) {
-                val peakApproachFactor: Double =
-                    if (!postPeak.peakBrake.hardBrake) postPeak.peakBrake.softBrakeFactor else 1.0
+                val peakApproachFactor: Double = postPeak.peakBrake.softBrakeFactor
 
                 logRow.peakApproachFactor = peakApproachFactor
                 if (peakApproachFactor < 1.0 - 1e-9) {

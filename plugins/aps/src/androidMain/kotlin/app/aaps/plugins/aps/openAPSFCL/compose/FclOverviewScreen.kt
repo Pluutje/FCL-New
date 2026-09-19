@@ -52,7 +52,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
@@ -604,6 +606,15 @@ private fun PillChip(
     onClick: (() -> Unit)? = null
 ) {
     val cardModifier = if (fillWidth) modifier else modifier.wrapContentWidth()
+    // 19/09/2026 (de gebruiker) — vaste 13sp voor alle pil-teksten (label én waarde, op elke
+    // pil hier: IOB/Basaal en Sensor/Pomp/Profiel), plus maxLines=1 + ellipsis. Zonder dit
+    // wrapte een lange profielnaam (bv. "FCL u200 lyumjev openapsSMB") naar meerdere regels,
+    // waardoor die kaart véél hoger werd dan de andere twee ernaast in de Row (geen gedeelde
+    // hoogte-afdwinging tussen de drie weight(1f)-kaarten) — en bij 2-cijferige uren ("1d 21u")
+    // paste de waarde soms net niet meer op de oude, grotere bodyMedium-breedte. maxLines=1
+    // garandeert nu dat alle pillen in een rij altijd exact even hoog blijven, ongeacht de
+    // inhoud; ellipsis is de vangnet-afkapping voor het (zeldzame) geval dat het echt niet past.
+    val pillTextSize = 13.sp
     val chipContent: @Composable () -> Unit = {
         if (trailingIcon != null) {
             Row(
@@ -612,8 +623,22 @@ private fun PillChip(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(text = label, style = MaterialTheme.typography.labelSmall, color = DashOnSurfaceMuted)
-                    Text(text = value, style = MaterialTheme.typography.bodyMedium, color = DashOnSurface)
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontSize = pillTextSize,
+                        color = DashOnSurfaceMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = value,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontSize = pillTextSize,
+                        color = DashOnSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
                 Icon(
                     imageVector = trailingIcon,
@@ -628,8 +653,22 @@ private fun PillChip(
                 horizontalAlignment = if (centered) Alignment.CenterHorizontally else Alignment.Start,
                 verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                Text(text = label, style = MaterialTheme.typography.labelSmall, color = DashOnSurfaceMuted)
-                Text(text = value, style = MaterialTheme.typography.bodyMedium, color = DashOnSurface)
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontSize = pillTextSize,
+                    color = DashOnSurfaceMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = value,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontSize = pillTextSize,
+                    color = DashOnSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
         }
     }
