@@ -156,7 +156,7 @@ class LoopHubImpl(
                 carbs = carbsAfterConstraints,
                 note = null,
                 source = Sources.Garmin,
-                onError = { aapsLogger.error(LTag.GARMIN, "carbs delivery failed: $it") }
+                onError = { aapsLogger.error(LTag.GARMIN, "carbs delivery failed: ${it.comment}") }
             )
         }
     }
