@@ -5172,7 +5172,7 @@ class FCLvNext(
     // "vNN-jjjj-mm-dd-uumm" (aanmaaktijdstip, geen omschrijving; die van
     // eerdere versies raakten toch achter). Alleen als het écht relevant
     // is een korte omschrijving toevoegen.
-    private val FCL_CODE_VERSION = "v122-2026-09-19-1900"
+    private val FCL_CODE_VERSION = "v124-2026-09-20-1021"
 
     // ── Restart-detectie (16/07/2026) ─────────────────────────────────
     // true op precies de EERSTE cyclus na het (her)starten van dit class-
@@ -8620,6 +8620,63 @@ class FCLvNext(
                     status.append("COMMIT rawPlateauPenalty=${"%.2f".format(rawPlateauPenalty)}\n")
                 }
 
+                // ── Afbouw op de AFNAME-trend van de acceleratie zelf, niet pas op
+                // absolute vlakheid (20/09/2026, incident log 607307, 20-9 11:14-11:19)
+                // ──────────────────────────────────────────────────────────────────
+                // rawPlateauPenalty hierboven vereist ctx.recentSlope<=0.20 EN
+                // ctx.recentDelta5m<=0.02 -- pas als de stijging vrijwel volledig is
+                // platgevallen. In het aanleidende incident bleef ctx.recentSlope nog
+                // 12,17 (11:14) en 5,86 (11:19) -- ver boven die 0,20-drempel -- terwijl
+                // ctx.acceleration toen al 38% resp. 56% onder zijn eigen episode-piek
+                // (0,88 om 11:04) was gezakt: een onmiskenbare afbuiging, ruim voordat
+                // BG zelf piekte (dat gebeurde pas tussen 11:19 en 11:24, zie
+                // peakEstimator.maxBgSeen/TAIL_MIN_DECLINE_FROM_PEAK_MMOL-gebaseerde
+                // hardBrake elders). rawPlateauPenalty zelf is bewust niet aangepast
+                // (elders al zorgvuldig gekalibreerd op "bevestigde vlakte") -- dit is
+                // een aparte, bewust mildere rem die uitsluitend op de afname t.o.v. de
+                // eigen episode-piek let, en los vermenigvuldigt (zelfde patroon als
+                // commitAggressionMul hieronder: een eigen, orthogonale veiligheidspoort).
+                // peakEstimator.maxAccel is de al bestaande, per-episode bijgehouden piek
+                // van ctx.acceleration (zie SUSTAINED RISE TRACKING-blok, dtH>0.0-tak,
+                // hierboven in de cyclus) -- in tegenstelling tot recentAccelPeakInRise
+                // (elders, voor vroegeStijgingBevestigd) wordt deze NIET teruggezet zodra
+                // iobRatio>=0,40, dus blijft precies in dit venster (iobRatio 0,54-0,55)
+                // bruikbaar.
+                // 20/09/2026 (de gebruiker, na eerste versie hiervan) -- de eerste
+                // uitwerking (max 35% korting, drempel op 25% afname) werd expliciet
+                // afgekeurd als te zwak: "deze 10% gaat niks helpen". Concrete eis:
+                // in een vergelijkbaar geval (11:14: 37,5% afname -> gewenst 60-70%
+                // korting; 11:19: 55,7% afname -> gewenst >=90% korting). Herrekend op
+                // de AFNAME-FRACTIE zelf (1 - ctx.acceleration/eigen piek) i.p.v. de
+                // afstand tot een vaste drempel-waarde, met DECLINE_START=0,10 (vanaf
+                // hier begint de korting -- geeft 11:09's 14,8% afname een kleine,
+                // "marginale" korting, precies zoals de gebruiker dat zelf al
+                // omschreef) en DECLINE_END=0,55 (hier is de korting maximaal -- 11:19's
+                // 55,7% afname zit hier net overheen, dus vol op MAX_REDUCTION).
+                // MAX_REDUCTION nu 0,95 (was 0,35) -- bewust niet 1,00: een acceleratie
+                // die van zijn piek is gezakt kan nog steeds echt zijn (aanhoudende
+                // maaltijd), dus altijd een klein restant laten staan i.p.v. volledig
+                // op nul.
+                // Backtest op incident 607307:
+                //   11:09  afname 14,8% -> korting  3% (marginaal, zoals bedoeld)
+                //   11:14  afname 37,5% -> korting 63% (binnen de gevraagde 60-70%)
+                //   11:19  afname 55,7% -> korting 95% (ruim boven de gevraagde 90%)
+                val accelPeakForDecelTrend = peakEstimator.maxAccel
+                val decelTrendDeclineFrac =
+                    if (accelPeakForDecelTrend >= 0.30)
+                        (1.0 - ctx.acceleration / accelPeakForDecelTrend)
+                    else 0.0
+                val decelTrendSeverity =
+                    smooth01((decelTrendDeclineFrac - 0.10) / (0.55 - 0.10))
+                val decelTrendFactor = (1.0 - 0.95 * decelTrendSeverity).coerceIn(0.05, 1.0)
+                if (decelTrendFactor < 1.0) {
+                    status.append(
+                        "COMMIT decelTrendFactor=${"%.2f".format(decelTrendFactor)} " +
+                            "(accel=${"%.2f".format(ctx.acceleration)} vs eigen piek=${"%.2f".format(accelPeakForDecelTrend)}, " +
+                            "afname=${"%.0f".format(decelTrendDeclineFrac * 100)}%)\n"
+                    )
+                }
+
                 // commitAggressionMul: schaalt de commit op/neer op basis van de
                 // agressiviteitsinstelling. Maximaal 1.20 (meest agressief).
                 // BUGFIX 23/06/2026: bij hoge IOB terwijl BG al dicht bij
@@ -9414,7 +9471,7 @@ class FCLvNext(
 
                 val commitDose =
                     if (allowCommitBoost && commitAccessOk)
-                        (config.maxSMB * fraction * commitIobFactor * prePeakMul * postPeak.commitFactor * rawPlateauPenalty * commitAggressionMul * lateDecayMul * explosiveRiseMul)
+                        (config.maxSMB * fraction * commitIobFactor * prePeakMul * postPeak.commitFactor * rawPlateauPenalty * decelTrendFactor * commitAggressionMul * lateDecayMul * explosiveRiseMul)
                             .coerceAtMost(config.maxSMB)
                     else 0.0
                 logRow.commitDoseRaw = commitDose
