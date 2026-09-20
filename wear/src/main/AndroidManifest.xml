@@ -226,6 +226,29 @@
                 android:value="${applicationId}.watchfacepush.wfs,${applicationId}.watchfacepush.cwf" />
         </service>
 
+        <!-- 20/09/2026 (de gebruiker) — losse tijd+delta complicatie voor naast SgvLargeComplication,
+             zonder waarde/pijl (die staan al in de grote cirkel). Bewust GEEN SAFE_WATCH_FACES:
+             SgvComplication hierboven toont vergelijkbare inhoud maar werkt alleen in AAPS's eigen
+             wfs/cwf-watchfaces, daarom verscheen "SGV" niet in de picker van een watchface van
+             derden (bv. DMM16) — zie kdoc in DeltaTimeComplication.kt. -->
+        <service
+            android:name=".complications.DeltaTimeComplication"
+            android:exported="true"
+            android:icon="@drawable/ic_sgv"
+            android:label="@string/complication_delta_time"
+            android:permission="com.google.android.wearable.permission.BIND_COMPLICATION_PROVIDER">
+            <intent-filter>
+                <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />
+            </intent-filter>
+
+            <meta-data
+                android:name="android.support.wearable.complications.SUPPORTED_TYPES"
+                android:value="SHORT_TEXT" />
+            <meta-data
+                android:name="android.support.wearable.complications.UPDATE_PERIOD_SECONDS"
+                android:value="300" />
+        </service>
+
         <!-- Same reading as SgvComplication, but a tap opens the menu. Used only by the ambient
              layer of the pushed Watch Face Format face, whose slots are invisible while the watch
              is awake yet still answer taps - see CwfAmbientBgComplication. -->
@@ -380,9 +403,35 @@
                 <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />
             </intent-filter>
 
+            <!-- 20/09/2026 (de gebruiker) — SMALL_IMAGE/LARGE_IMAGE toegevoegd naast SHORT_TEXT,
+                 zodat deze complicatie ook past in slots die alleen afbeelding-types accepteren
+                 (bv. DMM16's grootste slot) — zie kdoc in SgvLargeComplication.kt. LONG_TEXT is
+                 bewust NIET toegevoegd: dat rendert titel+tekst samen in klein lettertype vlak
+                 tegen de waarde aan. Leeftijd+delta zitten nu in de losse DeltaTimeComplication. -->
             <meta-data
                 android:name="android.support.wearable.complications.SUPPORTED_TYPES"
-                android:value="SHORT_TEXT" />
+                android:value="SHORT_TEXT,SMALL_IMAGE,LARGE_IMAGE" />
+            <meta-data
+                android:name="android.support.wearable.complications.UPDATE_PERIOD_SECONDS"
+                android:value="300" />
+        </service>
+
+        <!-- 20/09/2026 (de gebruiker) — witte variant van SgvLargeComplication, alleen als
+             afbeelding (geen SHORT_TEXT: daar bestaat het "te fel gekleurd"-probleem niet, zie
+             kdoc in SgvLargeWhiteComplication.kt). -->
+        <service
+            android:name=".complications.SgvLargeWhiteComplication"
+            android:exported="true"
+            android:icon="@drawable/ic_sgv"
+            android:label="@string/complication_blood_glucose_large_white"
+            android:permission="com.google.android.wearable.permission.BIND_COMPLICATION_PROVIDER">
+            <intent-filter>
+                <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />
+            </intent-filter>
+
+            <meta-data
+                android:name="android.support.wearable.complications.SUPPORTED_TYPES"
+                android:value="SMALL_IMAGE,LARGE_IMAGE" />
             <meta-data
                 android:name="android.support.wearable.complications.UPDATE_PERIOD_SECONDS"
                 android:value="300" />

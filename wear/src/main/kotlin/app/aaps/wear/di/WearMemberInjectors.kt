@@ -17,6 +17,7 @@ import app.aaps.wear.complications.ComplicationTapActivity
 import app.aaps.wear.complications.CwfAmbientBgComplication
 import app.aaps.wear.complications.CwfAmbientStatusComplication
 import app.aaps.wear.complications.CwfImageComplication
+import app.aaps.wear.complications.DeltaTimeComplication
 import app.aaps.wear.complications.IobDetailedComplication
 import app.aaps.wear.complications.IobIconComplication
 import app.aaps.wear.complications.LongStatusComplication
@@ -26,6 +27,7 @@ import app.aaps.wear.complications.SgvComplication
 import app.aaps.wear.complications.SgvComplicationExt1
 import app.aaps.wear.complications.SgvComplicationExt2
 import app.aaps.wear.complications.SgvLargeComplication
+import app.aaps.wear.complications.SgvLargeWhiteComplication
 import app.aaps.wear.complications.TargetComplication
 import app.aaps.wear.complications.UploaderBatteryComplication
 import app.aaps.wear.complications.WallpaperDarkComplication
@@ -412,6 +414,28 @@ object WearMemberInjectors {
     @IntoMap
     @ClassKey(SgvLargeComplication::class)
     fun bindSgvLargeComplication(injector: MembersInjector<SgvLargeComplication>): MembersInjector<*> = injector
+
+    // 20/09/2026 -- zelfde ontbrekende entry als hieronder bij DeltaTimeComplication, hier ook
+    // ingehaald: SgvLargeWhiteComplication stond hier ook niet in sinds hij vorige ronde werd
+    // toegevoegd (nog niet getriggerd omdat die variant nog niet was gekozen/geenumereerd).
+    @Provides
+    @FeatureMemberInjectors
+    @IntoMap
+    @ClassKey(SgvLargeWhiteComplication::class)
+    fun bindSgvLargeWhiteComplication(injector: MembersInjector<SgvLargeWhiteComplication>): MembersInjector<*> = injector
+
+    // 20/09/2026 (root cause van "geen enkele AAPS-complicatie komt meer binnen, picker hangt"):
+    // elke complicatie die injectMetroMembers() aanroept (alle ModernBaseComplicationProviderService-
+    // subklassen) MOET hier een @ClassKey-entry hebben. Zonder deze entry gooit injectMetroMembers()
+    // een IllegalStateException in onCreate() -- en omdat alle complicaties in hetzelfde proces
+    // draaien, crasht dat proces zodra het systeem deze complicatie probeert te enumereren (bv. bij
+    // het openen van de complicatie-picker), wat ALLE complicaties meesleurt. Deze entry ontbrak
+    // toen DeltaTimeComplication werd toegevoegd.
+    @Provides
+    @FeatureMemberInjectors
+    @IntoMap
+    @ClassKey(DeltaTimeComplication::class)
+    fun bindDeltaTimeComplication(injector: MembersInjector<DeltaTimeComplication>): MembersInjector<*> = injector
 
     @Provides
     @FeatureMemberInjectors

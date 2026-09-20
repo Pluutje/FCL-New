@@ -3,9 +3,7 @@ package app.aaps.wear.complications
 import android.app.PendingIntent
 import android.content.Intent
 import androidx.wear.watchface.complications.data.ComplicationType
-import androidx.wear.watchface.complications.data.PhotoImageComplicationData
 import androidx.wear.watchface.complications.data.ShortTextComplicationData
-import androidx.wear.watchface.complications.data.SmallImageComplicationData
 import app.aaps.wear.AAPSLoggerTest
 import com.google.common.truth.Truth.assertThat
 import org.junit.Test
@@ -16,16 +14,16 @@ import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
-internal class SgvLargeComplicationTest {
+internal class DeltaTimeComplicationTest {
 
-    private fun sut(): SgvLargeComplication =
-        Robolectric.buildService(SgvLargeComplication::class.java).get().also { it.aapsLogger = AAPSLoggerTest() }
+    private fun sut(): DeltaTimeComplication =
+        Robolectric.buildService(DeltaTimeComplication::class.java).get().also { it.aapsLogger = AAPSLoggerTest() }
 
-    private fun pendingIntent(sut: SgvLargeComplication): PendingIntent =
+    private fun pendingIntent(sut: DeltaTimeComplication): PendingIntent =
         PendingIntent.getActivity(sut, 0, Intent(), PendingIntent.FLAG_IMMUTABLE)
 
     @Test
-    fun `preview builds a short-text complication for the sample glucose`() {
+    fun `preview builds a short-text complication with only delta and time`() {
         val data = sut().getPreviewData(ComplicationType.SHORT_TEXT)
 
         assertThat(data).isInstanceOf(ShortTextComplicationData::class.java)
@@ -33,24 +31,7 @@ internal class SgvLargeComplicationTest {
 
     @Test
     fun `an unsupported complication type yields null`() {
-        assertThat(sut().getPreviewData(ComplicationType.RANGED_VALUE)).isNull()
-    }
-
-    // 20/09/2026 (de gebruiker) -- SMALL_IMAGE/PHOTO_IMAGE toegevoegd zodat deze complicatie ook
-    // past in slots die alleen afbeelding-types accepteren (bv. DMM16's grootste slot, zie kdoc
-    // bij SgvLargeComplication).
-    @Test
-    fun `preview builds a small-image complication for slots that only accept images`() {
-        val data = sut().getPreviewData(ComplicationType.SMALL_IMAGE)
-
-        assertThat(data).isInstanceOf(SmallImageComplicationData::class.java)
-    }
-
-    @Test
-    fun `preview builds a photo-image complication for the largest image slots`() {
-        val data = sut().getPreviewData(ComplicationType.PHOTO_IMAGE)
-
-        assertThat(data).isInstanceOf(PhotoImageComplicationData::class.java)
+        assertThat(sut().getPreviewData(ComplicationType.LONG_TEXT)).isNull()
     }
 
     @Test
@@ -66,12 +47,12 @@ internal class SgvLargeComplicationTest {
     }
 
     @Test
-    fun `tapping the large SGV complication opens the bg graph`() {
+    fun `tapping opens the bg graph`() {
         assertThat(sut().getComplicationAction()).isEqualTo(ComplicationAction.BG_GRAPH)
     }
 
     @Test
     fun `the provider canonical name identifies this complication`() {
-        assertThat(sut().getProviderCanonicalName()).contains("SgvLargeComplication")
+        assertThat(sut().getProviderCanonicalName()).contains("DeltaTimeComplication")
     }
 }

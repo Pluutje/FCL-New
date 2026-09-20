@@ -40,6 +40,7 @@ import app.aaps.wear.complications.BrTtComplication
 import app.aaps.wear.complications.CobDetailedComplication
 import app.aaps.wear.complications.CobIconComplication
 import app.aaps.wear.complications.CobIobComplication
+import app.aaps.wear.complications.DeltaTimeComplication
 import app.aaps.wear.complications.IobDetailedComplication
 import app.aaps.wear.complications.IobIconComplication
 import app.aaps.wear.complications.LongStatusComplication
@@ -49,6 +50,7 @@ import app.aaps.wear.complications.SgvComplication
 import app.aaps.wear.complications.SgvComplicationExt1
 import app.aaps.wear.complications.SgvComplicationExt2
 import app.aaps.wear.complications.SgvLargeComplication
+import app.aaps.wear.complications.SgvLargeWhiteComplication
 import app.aaps.wear.complications.TargetComplication
 import app.aaps.wear.complications.UploaderBatteryComplication
 import app.aaps.wear.data.ComplicationDataRepository
@@ -433,6 +435,10 @@ class DataHandlerWear(
             SgvComplicationExt1::class.java,
             SgvComplicationExt2::class.java,
             SgvLargeComplication::class.java,
+            SgvLargeWhiteComplication::class.java,
+            // 20/09/2026 (de gebruiker) -- ontbrak hier, dus ververste alleen elke 300s (systeem-
+            // poll) i.p.v. direct bij nieuwe data, net als de andere complicaties hieronder.
+            DeltaTimeComplication::class.java,
             // BG graph image complication (for WFF watchfaces on watches without CWF support)
             BgGraphComplication::class.java,
             // Ambient readouts of the pushed Watch Face Format face. Without these they refresh

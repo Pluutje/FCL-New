@@ -5172,7 +5172,7 @@ class FCLvNext(
     // "vNN-jjjj-mm-dd-uumm" (aanmaaktijdstip, geen omschrijving; die van
     // eerdere versies raakten toch achter). Alleen als het écht relevant
     // is een korte omschrijving toevoegen.
-    private val FCL_CODE_VERSION = "v124-2026-09-20-1021"
+    private val FCL_CODE_VERSION = "v125-2026-09-20-1611"
 
     // ── Restart-detectie (16/07/2026) ─────────────────────────────────
     // true op precies de EERSTE cyclus na het (her)starten van dit class-
@@ -9635,7 +9635,21 @@ class FCLvNext(
                     // meer via de andere tak wordt overruled. minCommitDose*0.5 blijft
                     // de ondergrens (nooit volledig naar 0, zoals bij de eerdere
                     // omslag-rem-fix).
-                    val cap = (baseCap * (1.0 - omslagCapCut) * lateDecayMul)
+                    //
+                    // 20/09/2026 (de gebruiker, maaltijd 14:14) — ook decelTrendFactor
+                    // hier meegenomen. Zonder deze koppeling won cappedFinalDose het via
+                    // maxOf(cappedFinalDose, commitDose) van een allang teruggeschroefde
+                    // commitDose zodra een maaltijd nooit één commit >=75% van maxSMB
+                    // haalt (episodePeakAnchored blijft dan false, dus DEZE tak loopt de
+                    // hele episode) — decelTrendFactor zelf zit alleen in de commitDose-
+                    // formule, dus werd volledig genegeerd. Incident 20/09 14:04-14:14:
+                    // accel daalde 36% t.o.v. eigen piek (0,42->0,27), commitDoseRaw zakte
+                    // terecht van 1,45U naar 0,17U, maar cappedFinalDose bleef op 0,44U
+                    // staan (curve_confirmt_omslag was nog False, dus omslagCapCut=0) en
+                    // won de maxOf — decelTrendFactor had daardoor geen enkel effect op
+                    // de uiteindelijke dosis. Nu ook hier vermenigvuldigd, op dezelfde
+                    // plek als lateDecayMul, met dezelfde ondergrens.
+                    val cap = (baseCap * (1.0 - omslagCapCut) * lateDecayMul * decelTrendFactor)
                         .coerceAtLeast(config.minCommitDose * 0.5)
                     if (omslagCapCut > 0.001 && cap < baseCap - 1e-9) {
                         status.append(
@@ -9656,7 +9670,11 @@ class FCLvNext(
                 } else if (bgStijgtNogFors) {
                     finalDose.coerceAtMost(episodePeakCommitU * bgStijgtNogForsBypassStrength)
                 } else {
-                    val normaalGeplafonneerd = finalDose.coerceAtMost(episodePeakCommitU * lateDecayMul)
+                    // 20/09/2026 (de gebruiker) -- decelTrendFactor ook hier meegenomen,
+                    // zelfde reden als bij de unanchored cap hierboven: dit plafond kende
+                    // decelTrendFactor tot nu toe niet, dus kon cappedFinalDose ook in de
+                    // ANCHORED episode de maxOf winnen van een allang afgebouwde commitDose.
+                    val normaalGeplafonneerd = finalDose.coerceAtMost(episodePeakCommitU * lateDecayMul * decelTrendFactor)
                     if (bgStijgtNogForsNaderend > 0.001) {
                         val geblend = normaalGeplafonneerd +
                             bgStijgtNogForsNaderend * (finalDose - normaalGeplafonneerd)
