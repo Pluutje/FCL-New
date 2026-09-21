@@ -674,6 +674,14 @@ class FCLCycleLogRepository @Inject constructor(
         // matches vallen terug op de neutrale defaults hieronder, wat correct
         // is: op zo'n cyclus is dit mechanisme simpelweg niet geëvalueerd.
         val vroegeStijgingByTs = vroegeStijgingDao.getSince(sevenDaysAgo).associateBy { it.timestampMs }
+        // 21/09/2026 -- zelfde patroon, voor de PersistentCorrectionController-
+        // diagnostiek (zie kdoc bij FCLPersistEventEntity). Deze tabel zit in
+        // een eigen database (FCLPersistDatabase, niet FCLAnalyzerDatabase)
+        // maar wordt hier op dezelfde manier op timestampMs samengevoegd.
+        // Sinds 21/09/2026 wordt hij ELKE cyclus gevuld (niet meer alleen
+        // active==true), dus een ontbrekende match betekent hier alleen dat
+        // deze rij ouder is dan de feature zelf.
+        val persistByTs = persistDao.getSince(sevenDaysAgo).associateBy { it.timestampMs }
 
         val dir = File(
             android.os.Environment.getExternalStorageDirectory(),
@@ -725,7 +733,14 @@ class FCLCycleLogRepository @Inject constructor(
         // (v10->v11, v11->v12, v12->v13) zijn zonder problemen doorgevoerd —
         // controleer na deze levering alsnog dat het toestel echt op v14
         // schrijft en niet op v13 is blijven hangen.
-        val file = File(dir, "FCLvNext_Log_v14.csv")
+        // v14->v15 (21/09/2026) -- +6 kolommen (persist_active/persist_fired/
+        // persist_counter/persist_dose_u/persist_escalation/persist_reason,
+        // zie csvHeader() hieronder), afkomstig uit de nieuwe accel/
+        // consistency/active/reason-velden op fcl_persist_event (zelfde
+        // samenvoeg-patroon als de andere aparte log-tabellen hierboven).
+        // LET OP (12/07/2026-incident, zie hierboven): controleer na deze
+        // levering alsnog dat het toestel echt op v15 schrijft.
+        val file = File(dir, "FCLvNext_Log_v15.csv")
 
         val sep = ";"
         // 23/07/2026 — ts_utc blijft de bron van waarheid (ondubbelzinnig,
@@ -743,6 +758,7 @@ class FCLCycleLogRepository @Inject constructor(
                 val explosive = explosiveByTs[row.timestampMs]
                 val tempOverride = tempOverrideByTs[row.timestampMs]
                 val vroegeStijging = vroegeStijgingByTs[row.timestampMs]
+                val persist = persistByTs[row.timestampMs]
                 writer.write(
                     row.toCsvLine(
                         sep, fmt, fmtLocal,
@@ -755,7 +771,10 @@ class FCLCycleLogRepository @Inject constructor(
                         vroegeStijging?.rampFrac ?: 0.0, vroegeStijging?.reentryActive ?: false,
                         vroegeStijging?.recentSensorNoise ?: false,
                         vroegeStijging?.accelDecliningFromRisePeak ?: false,
-                        vroegeStijging?.curveConfirmtOmslag ?: false
+                        vroegeStijging?.curveConfirmtOmslag ?: false,
+                        persist?.active ?: false, persist?.fired ?: false,
+                        persist?.persistentCounter ?: 0, persist?.doseU ?: 0.0,
+                        persist?.escalationFactor ?: 1.0, persist?.reason ?: ""
                     )
                 )
                 writer.newLine()
@@ -850,7 +869,10 @@ private fun csvHeader(sep: String): String = listOf(
     "temp_override_remaining_min",
     // ── VROEGE STIJGING DIAGNOSTIEK (18/09/2026) ──
     "vroege_stijging_bevestigd", "vroege_stijging_used_this_episode", "vroege_stijging_ramp_frac",
-    "reentry_active", "recent_sensor_noise", "accel_declining_from_rise_peak", "curve_confirmt_omslag"
+    "reentry_active", "recent_sensor_noise", "accel_declining_from_rise_peak", "curve_confirmt_omslag",
+    // ── PERSISTENT CORRECTION DIAGNOSTIEK (21/09/2026) ──
+    "persist_active", "persist_fired", "persist_counter", "persist_dose_u", "persist_escalation",
+    "persist_reason"
 ).joinToString(sep)
 
 // ── CSV regel — delta_target afgeleid als bg - target ────────────────────
@@ -875,7 +897,13 @@ private fun FCLCycleLogEntity.toCsvLine(
     reentryActive: Boolean,
     recentSensorNoise: Boolean,
     accelDecliningFromRisePeak: Boolean,
-    curveConfirmtOmslag: Boolean
+    curveConfirmtOmslag: Boolean,
+    persistActive: Boolean,
+    persistFired: Boolean,
+    persistCounter: Int,
+    persistDoseU: Double,
+    persistEscalation: Double,
+    persistReason: String
 ): String {
     val ts = fmt.format(Instant.ofEpochMilli(timestampMs))
     val tsLocal = fmtLocal.format(Instant.ofEpochMilli(timestampMs))
@@ -976,6 +1004,9 @@ private fun FCLCycleLogEntity.toCsvLine(
         // ── VROEGE STIJGING DIAGNOSTIEK (18/09/2026) ──
         bool(vroegeStijgingBevestigd), bool(vroegeStijgingUsedThisEpisode), d2(vroegeStijgingRampFrac),
         bool(reentryActive), bool(recentSensorNoise), bool(accelDecliningFromRisePeak),
-        bool(curveConfirmtOmslag)
+        bool(curveConfirmtOmslag),
+        // ── PERSISTENT CORRECTION DIAGNOSTIEK (21/09/2026) ──
+        bool(persistActive), bool(persistFired), persistCounter, d2(persistDoseU),
+        d2(persistEscalation), persistReason.replace(";", ",")
     ).joinToString(sep)
 }

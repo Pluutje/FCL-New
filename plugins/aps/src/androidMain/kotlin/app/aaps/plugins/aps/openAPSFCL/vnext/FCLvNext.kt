@@ -5172,7 +5172,7 @@ class FCLvNext(
     // "vNN-jjjj-mm-dd-uumm" (aanmaaktijdstip, geen omschrijving; die van
     // eerdere versies raakten toch achter). Alleen als het écht relevant
     // is een korte omschrijving toevoegen.
-    private val FCL_CODE_VERSION = "v125-2026-09-20-1611"
+    private val FCL_CODE_VERSION = "v126-2026-09-21-1037"
 
     // ── Restart-detectie (16/07/2026) ─────────────────────────────────
     // true op precies de EERSTE cyclus na het (her)starten van dit class-
@@ -5588,7 +5588,7 @@ class FCLvNext(
             field = value
         }
 
-    // ── Kort-lopend frontload-signaal (28/07/2026) ────────────────────
+    // ── Kort-lopend frontload-signaal (28/07/2026) ────────────────────   next_log_v
     // AANLEIDING: episodeBoostBudgetU (hierboven) een tijdje breder gemaakt
     // (elke dosis, ongeacht mechanisme) om te voorkomen dat WFF en EarlyBoost
     // elkaar kort na elkaar allebei onbeperkt konden verrassen (incident 28/07
@@ -7835,31 +7835,42 @@ class FCLvNext(
             iobRatioHardStop = 0.45
         )
 
-        // ── V-learner input: log elke cyclus binnen een persistent-cluster ──
-        // (active==true), zowel fired als cooldown-cycli. Aparte database
-        // (FCLPersistDatabase) zodat dit onafhankelijk van de hoofd-CSV
-        // geïtereerd kan worden zonder de 7-dagen cyclus-log te raken.
-        if (persistResult.active) {
-            cycleLogRepository.logPersistEvent(
-                app.aaps.plugins.aps.openAPSFCL.vnext.persist.FCLPersistEventEntity(
-                    timestampMs       = now.millis,
-                    bgMmol            = ctx.input.bgNow,
-                    targetMmol        = ctx.input.targetBG,
-                    deltaToTarget     = ctx.deltaToTarget,
-                    slope             = ctx.slope,
-                    iobRatio          = ctx.iobRatio,
-                    fired             = persistResult.fired,
-                    doseU             = persistResult.doseU,
-                    cooldownLeft      = persistResult.cooldownLeft,
-                    persistentCounter = persistResult.persistentCounter,
-                    escalationFactor  = persistResult.escalationFactor,
-                    effectiveMinDelta = effectiveMinDelta,
-                    stableSlopeAbs    = config.persistentSlopeAbs,
-                    vExtraAtFire      = app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.DFLearner
-                        .getVExtra(context)
-                )
+        // ── V-learner input + CSV-diagnostiek: log ELKE cyclus (21/09/2026,
+        // de gebruiker) ────────────────────────────────────────────────────
+        // WAS: alleen als active==true. Aanleiding: een 2+ uur durend
+        // Bg-plateau (7:54-10:04) bleef vrijwel onbehandeld, en vanuit de
+        // hoofd-CSV was niet te zien of/hoe vaak de persistent controller
+        // daar bevestigde — de "building (x/y)"-cycli (nog niet lang genoeg
+        // aaneengesloten) werden helemaal niet gelogd, dus het opbouwen en
+        // terugzakken van persistentCounter was onzichtbaar. Nu altijd
+        // loggen (ook active=false) zodat een volgend vergelijkbaar plateau
+        // direct te herleiden is via de nieuwe persist_* kolommen in de
+        // hoofd-CSV (zie kdoc bij FCLPersistEventEntity en csvHeader() in
+        // FCLCycleLogRepository.kt). De V-learner zelf blijft ongewijzigd:
+        // die groepeert op active==true en negeert de rest vanzelf.
+        cycleLogRepository.logPersistEvent(
+            app.aaps.plugins.aps.openAPSFCL.vnext.persist.FCLPersistEventEntity(
+                timestampMs       = now.millis,
+                bgMmol            = ctx.input.bgNow,
+                targetMmol        = ctx.input.targetBG,
+                deltaToTarget     = ctx.deltaToTarget,
+                slope             = ctx.slope,
+                iobRatio          = ctx.iobRatio,
+                accel             = ctx.acceleration,
+                consistency       = ctx.consistency,
+                fired             = persistResult.fired,
+                doseU             = persistResult.doseU,
+                cooldownLeft      = persistResult.cooldownLeft,
+                persistentCounter = persistResult.persistentCounter,
+                escalationFactor  = persistResult.escalationFactor,
+                active            = persistResult.active,
+                reason            = persistResult.reason,
+                effectiveMinDelta = effectiveMinDelta,
+                stableSlopeAbs    = config.persistentSlopeAbs,
+                vExtraAtFire      = app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.DFLearner
+                    .getVExtra(context)
             )
-        }
+        )
 
 
         if (persistResult.active ) {

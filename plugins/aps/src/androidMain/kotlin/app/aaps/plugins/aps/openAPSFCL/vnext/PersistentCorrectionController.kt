@@ -82,10 +82,21 @@ class PersistentCorrectionController(
                 abs(accel) <= stableAccelAbs &&
                 consistency >= minConsistency
 
+        // 21/09/2026 (de gebruiker) — teller bij een afwijkende cyclus niet meer
+        // hard naar 0 laten springen, maar met 1 laten zakken. Aanleiding: een
+        // 2+ uur durend Bg-plateau (7:54-10:04) bleef vrijwel onbehandeld omdat
+        // de ruwe slope/versnelling rond een vlakke Bg voortdurend een fractie
+        // buiten de vrij strakke marges wiebelt — genoeg om de teller, vlak
+        // vóór confirmCycles, telkens weer op 0 te zetten, waardoor bevestiging
+        // in de praktijk bijna nooit werd gehaald ondanks een overduidelijk
+        // aanhoudend te hoge, vlakke Bg. Met een geleidelijke afbouw wist één
+        // afwijkende cyclus niet meer alle eerder opgebouwde bevestiging; een
+        // ECHT voorbije periode (meerdere afwijkende cycli op rij, bijv. een
+        // nieuwe stijging) telt nog steeds net zo snel af als hij opbouwde.
         if (persistentCandidate) {
             persistentCounter++
         } else {
-            persistentCounter = 0
+            persistentCounter = (persistentCounter - 1).coerceAtLeast(0)
         }
 
         val persistentConfirmed = persistentCounter >= confirmCycles

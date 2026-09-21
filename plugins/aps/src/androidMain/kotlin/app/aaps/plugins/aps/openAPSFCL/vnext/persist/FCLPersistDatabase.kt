@@ -16,7 +16,7 @@ import androidx.room.RoomDatabase
  */
 @Database(
     entities = [FCLPersistEventEntity::class],
-    version = 1,
+    version = 2, // 21/09/2026 -- +4 kolommen (accel/consistency/active/reason), zie kdoc bij entity
     exportSchema = false
 )
 abstract class FCLPersistDatabase : RoomDatabase() {
