@@ -127,7 +127,14 @@ open class OpenAPSFCLPlugin @Inject constructor(
     private val determineBasalFCL: DetermineBasalFCL,
     private val profiler: Profiler,
     private val sp: SP,
-    private val notificationManager: NotificationManager,
+    // 21/09/2026 — GEEN "private val" meer: PluginBase (dev-merge) declareert nu zelf al een
+    // "protected val notificationManager", dus een eigen property met dezelfde naam hier zou die
+    // verbergen (Kotlin-compilerfout VIRTUAL_MEMBER_HIDDEN: "hides member of supertype... needs
+    // an 'override' modifier"). Als kale constructorparameter (geen property) blijft hij bruikbaar
+    // in de super-aanroep hieronder en in init{} (zie FclNotificationManagerBridge.set(...)), en
+    // na de super-aanroep wijst `notificationManager` overal elders in deze klasse gewoon naar de
+    // GEËRFDE protected property van PluginBase (zelfde waarde, want we geven 'm hieronder door).
+    notificationManager: NotificationManager,
     // Was javax.inject.Provider<APSResult> (.get()) - Metro's voorkeursvorm is een kale
     // () -> T-functie i.p.v. het legacy Provider<T>-type (zie ook pumpEnactResultProvider in
     // LoopPlugin.kt, hetzelfde patroon), aanroeppunten hieronder gebruiken nu "()" i.p.v. ".get()".
@@ -170,7 +177,7 @@ open class OpenAPSFCLPlugin @Inject constructor(
         .description(ApsStrings.description_smb)
         .setDefault(),
     ownPreferences = emptyList(),
-    aapsLogger, rh, preferences
+    aapsLogger, rh, preferences, notificationManager
 ), APS, PluginConstraints {
 
     init {

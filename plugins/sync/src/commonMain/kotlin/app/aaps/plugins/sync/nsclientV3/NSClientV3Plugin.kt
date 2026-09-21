@@ -1,6 +1,7 @@
 package app.aaps.plugins.sync.nsclientV3
 
 import app.aaps.core.interfaces.InterfacesStrings
+import app.aaps.core.interfaces.notifications.NotificationManager
 import app.aaps.core.ui.CoreUiStrings
 import app.aaps.plugins.sync.SyncStrings
 import androidx.annotation.VisibleForTesting
@@ -159,6 +160,7 @@ class NSClientV3Plugin(
     // placeholder gebruikt).
     private val nsConnection: NsConnection,
     private val nsLoadExecutor: NsLoadExecutor,
+    notificationManager: NotificationManager,
 ) : NsClient, Sync, PluginBaseWithPreferences(
     PluginDescription()
         .mainType(PluginType.SYNC)
@@ -178,7 +180,7 @@ class NSClientV3Plugin(
             )
         },
     ownPreferences = NsclientBooleanKey.entries + NsclientStringKey.entries + NsclientLongKey.entries,
-    aapsLogger, rh, preferences
+    aapsLogger, rh, preferences, notificationManager
 ) {
 
     @Suppress("PrivatePropertyName")

@@ -120,7 +120,7 @@ class LoopPlugin(
     private val uel: UserEntryLogger,
     private val persistenceLayer: PersistenceLayer,
     private val uiInteraction: UiInteraction,
-    private val notificationManager: NotificationManager,
+    notificationManager: NotificationManager,
     private val pumpEnactResultProvider: () -> PumpEnactResult,
     private val processedDeviceStatusData: ProcessedDeviceStatusData,
     private val pumpStatusProvider: PumpStatusProvider,
@@ -148,7 +148,7 @@ class LoopPlugin(
         .shortName(ApsStrings.loop_shortname)
         .alwaysEnabled(config.APS)
         .description(ApsStrings.description_loop),
-    aapsLogger, rh
+    aapsLogger, rh, notificationManager
 ), Loop, PluginConstraints {
 
     // Volatile: this is now the only gate against a second automatic loop run for the same BG. It is
@@ -162,6 +162,11 @@ class LoopPlugin(
     // Debounces the device-status upload. Was a Handler on its own HandlerThread; a Job on the app
     // scope does the same and is the only part of this class that was ever Android.
     private var deviceStatusJob: Job? = null
+
+    // The collectors onStart puts on the application scope. That scope outlives the plugin, so onStop
+    // has to cancel them by hand or they keep running - and a later onStart stacks a second pair on top,
+    // so one temp-target change would then invoke the loop twice.
+    private val collectors = mutableListOf<Job>()
 
     // Serializes loop runs. Master's invoke() was @Synchronized; the suspend migration dropped that
     // (and @Synchronized cannot span suspension points). invoke() is reachable concurrently — the
@@ -192,7 +197,7 @@ class LoopPlugin(
                     aapsLogger.error(LTag.APS, "invoke on TempTarget change failed", e)
                 }
             }
-            .launchIn(appScope)
+            .launchIn(appScope).also(collectors::add)
         // Pump-state changes (suspend/resume, typically detected on a status read): reconcile the running
         // mode promptly instead of waiting for the next loop/keepalive tick (~5 min). EventPumpStatusChanged
         // is fired centrally by the command queue after every command, so it is pump-agnostic and arrives
@@ -210,11 +215,13 @@ class LoopPlugin(
                     aapsLogger.error(LTag.APS, "runningModePreCheck on pump status change failed", e)
                 }
             }
-            .launchIn(appScope)
+            .launchIn(appScope).also(collectors::add)
     }
 
     override suspend fun onStop() {
         deviceStatusJob?.cancel()
+        collectors.forEach { it.cancel() }
+        collectors.clear()
         super.onStop()
     }
 
@@ -653,8 +660,18 @@ class LoopPlugin(
                             }
                         }
                     }
+                    // `isHeld()` is the settings-import hold. Do NOT start an enactment under it: the
+                    // executor will not pick the commands up, so the temp basal and the SMB would sit in
+                    // the queue and both land after the hold ends - against pump drivers that were just
+                    // stopped and restarted. Waiting for a running enactment instead was tried and
+                    // refuted: `withHold` raises the flag BEFORE it waits, so the loop's second queue
+                    // call is never picked up and the import always times out.
+                    //
+                    // Skipping a loop run is cheap - the next one is five minutes away and re-decides
+                    // from fresh data. Enacting into a driver being torn down is not.
                     if (resultAfterConstraints.isChangeRequested()
                         && !commandQueue.bolusInQueue()
+                        && !commandQueue.isHeld()
                     ) {
                         val waiting = pumpEnactResultProvider()
                         waiting.queued = true
@@ -766,6 +783,13 @@ class LoopPlugin(
 
     override suspend fun acceptChangeRequest() {
         val profile = profileFunction.getProfile() ?: return
+        // Same hold as in `invoke`, and this path needs its own check: it enacts OUTSIDE `invokeMutex`
+        // and is reachable from the phone and the watch, so nothing `invoke` does protects it. The user
+        // pressed a button, so say why nothing happened rather than failing silently.
+        if (commandQueue.isHeld()) {
+            aapsLogger.debug(LTag.APS, "acceptChangeRequest: queue is held (settings being applied), not enacting")
+            return
+        }
         lastRun?.let { lastRun ->
             lastRun.constraintsProcessed?.let { constraintsProcessed ->
                 // Protected for the same reason as the enactment in `invoke`, and it matters more

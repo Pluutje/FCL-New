@@ -496,9 +496,65 @@ Each of these changes what gets built, and none of them is a coding question.
    default. A `kind` with no default breaks every key enum at once and has to be filled in one pass.
    Two very different pieces of work; phase 1 cannot start without the answer.
 2. **What is the quiet point**, given that nothing can stop the loop between the temp basal and the
-   SMB (8.A)? Until this is answered, "nothing runs now" is a wish.
-3. **What does "cancel the queued commands" mean**, given that `completeAllAsNoOp` reports
-   `success = true` and the loop reads that as enacted (8.A)?
+   SMB (8.A)? **HALF SETTLED AND BUILT; the other half is specified below and not built.**
+
+   - **The queue half is done** (`21570ca902`). The recommendation below - do not stop the loop, stop a
+     new enactment from starting - is implemented as `&& !commandQueue.isHeld()` in `LoopPlugin.invoke`
+     and as an early return in `LoopPlugin.acceptChangeRequest` and
+     `RunningModeReconciler.issueZeroTbrIfNeeded`. Two of the three have tests proven red without the
+     guard; `invoke` does not, and that gap is deliberate rather than overlooked.
+   - **The plugin-state half is NOT done, and it is the one users are hitting.** The hold stops commands;
+     it does nothing about a plugin reading plugin state while the selection is being rebuilt. Live
+     Crashlytics `PluginStore.getActivePumpInternal` - "No pump selected", 13 events / 6 users on
+     `4.0.0-dev`..`dev-c`, newest 2026-09-16 - is `PersistentNotificationPlugin.onStart` restarting
+     during an import and reading the active pump inside the window where `loadSettings` has disabled
+     the old pump and not yet elected the new one. Its `config.appInitialized` guard was PRESENT in
+     those builds and was passed, because `appInitialized` means "start up finished once", not "plugin
+     state is valid now".
+
+     **The answer is not to soften the throw.** `PluginStore`'s "No pump selected" and its `checkNotNull`
+     siblings are deliberate assertions - no nullable variant, no default fallback, no cached
+     last-known value, no try/catch at a call site. See the comment block above the interface section
+     of `PluginStore.kt`.
+
+     **What to build instead:** a separate `reconfiguring` state on `Config`, with
+     `appInitialized = initProgressFlow.value.done && !reconfiguring`. Every one of the ~15 existing
+     `if (!config.appInitialized) return` guards then closes during an import, with no call-site changes.
+
+     **Do NOT implement this by clearing `initProgressFlow.done`.** A six-dimension consequence analysis
+     (2026-09-21, 30 findings, 16 refuted) returned seven independent blockers on that, all the same one:
+     `done` is also the splash gate. `AapsAppRoot` renders
+     `AnimatedVisibility(visible = !initProgress.done) { SplashScreen(...) }` over
+     `AnimatedVisibility(visible = initProgress.done) { content(navController) }`, and `AnimatedVisibility`
+     REMOVES the subtree from composition. Clearing `done` would (a) put the splash over a running app for
+     up to 30 s with stale boot text, (b) take the import screen performing the apply off the display,
+     (c) dispose and re-run every screen's `LaunchedEffect` on restore - including
+     `LaunchedEffect(source) { importViewModel.startImport(source) }`, which writes `ImportStep.FilePicker`
+     to the same `_importStep` that `onApplyConfirmed` writes `Applied`/`ApplyFailed` to, with no ordering
+     - and (d) hide `ImportStep.ApplyFailed`, the only screen offering `retryApply()`, behind a splash with
+     no Close button, after the settings are already on disk. It also re-introduces exactly what
+     `ImportViewModel.finishApply` already defers `uiRestart.request()` to avoid.
+
+     **Constraints on the build, from the same analysis:**
+     - the restore must be a `finally` INSIDE `applySettings()`, ideally a scoped
+       `config.whileApplyingSettings { }` so it cannot be forgotten, and a counter rather than a boolean;
+     - set and clear it INSIDE the `withHold` block, after the wait - otherwise a watch "cancel bolus" is
+       dropped while a bolus is actually delivering;
+     - the wear handlers need a state that ANSWERS the watch ("the phone is reconfiguring, try again");
+       reusing `appInitialized` inherits fifteen silent returns unchanged;
+     - neither flag subsumes the other: all three `isHeld()` guards stay necessary.
+3. ~~**What does "cancel the queued commands" mean**, given that `completeAllAsNoOp` reports
+   `success = true` and the loop reads that as enacted (8.A)?~~ **SETTLED AND BUILT.**
+   `completeAllAsNoOp` no longer exists. `16147121cc` replaced it with
+   `CommandQueue.cancelAll(comment, success)` routed through `Command.cancel`, exactly as the
+   recommendation below proposed, and the import passes `success = false`
+   (`ImportViewModel.applySettings`). `clear()` deliberately keeps `cancelled = false`, because a
+   connection timeout IS a delivery failure and must still raise its alarm.
+   One correction to the recommendation below: it says the alarm cannot be suppressed because
+   "`PumpEnactResult` holds a resolved `String` and every consumer branches on `success`". That was
+   overtaken by `8f13138e29`, which added `PumpEnactResult.cancelled` - a dropped command is now told
+   apart from a failed one, and `CommandQueueImplementation.postProfileWriteResult` returns early on
+   it rather than posting `FAILED_UPDATE_PROFILE`.
 4. **Replace or merge?** Dropping `sp.clear()` changes what an import means, and the removal rule is
    not written anywhere (8.B).
 5. **ComboV2: device state or pump configuration?** 3.1.3 and 3.1.4 say different things, and the
@@ -839,17 +895,35 @@ Every item below survived two skeptics who were told to refute it. Each names th
 
 This is the group that reorders the work (4.2 step 1). All of it is about 3.5 step 3.
 
-- **A throwing `onStart` can make every later restart a no-op.** `PluginBase.pluginScope` is
-  `CoroutineScope(Dispatchers.Default + Job())` - a plain `Job`, not a `SupervisorJob` - and it is
-  what `setPluginEnabled` launches `onStart()`/`onStop()` on. One uncaught throw cancels the scope,
-  and a cancelled scope swallows every later `launch` in silence. **Blocker.**
-- **Nothing stops the running loop.** `CalculationExecutor.waitForPrepare` is documented as covering
-  "Only the prepare phase, because the post phase invokes the loop", so neither waiting nor
-  cancelling reaches the enactment. Sub-steps 3 and 4 are not buildable as written. **Blocker.**
-- **`completeAllAsNoOp` tells the loop the cancelled command succeeded.** It completes each queued
-  command with `success(true).enacted(false)`, and `LoopPlugin.invoke` branches on
-  `if (tbrResult.enacted || tbrResult.success)`: it records a temp basal that never happened and
-  then queues an SMB against it. **Blocker.**
+- ~~**A throwing `onStart` can make every later restart a no-op.**~~ **FIXED, `3761a48629`.**
+  `onStart`/`onStop` no longer run on `pluginScope` at all - they run on a private `lifecycleScope`
+  with its own `SupervisorJob` and exception handler, and `runPhase` catches everything a phase can
+  throw, records it in `PluginBase.lastStartFailed` and raises an URGENT notification. `pluginScope`
+  also carries a `SupervisorJob` now, plus a handler (`430982af5f`) - without one a throwing plugin
+  launch reached the thread's default handler and ended the process. A failed pump driver reports
+  `isInitialized() == false` through `PumpWithConcentrationImpl`, so the dosing gates refuse it.
+- ~~**Nothing stops the running loop.**~~ **ADDRESSED, `21570ca902` - by not trying to stop it.**
+  `CalculationExecutor.waitForPrepare` still covers only the prepare phase, so waiting for a running
+  enactment remains impossible and waiting for it under the hold still deadlocks (`withHold` raises the
+  flag before it waits, so the loop's second queue call is never picked up). The answer was to stop a
+  NEW enactment from starting instead: `&& !commandQueue.isHeld()` in `LoopPlugin.invoke`, and early
+  returns in `LoopPlugin.acceptChangeRequest` (which enacts outside `invokeMutex` and is reachable from
+  the watch) and `RunningModeReconciler.issueZeroTbrIfNeeded` (worst of the three - a hold granted
+  between its `cancelExtended()` and its zero TBR leaves full basal running while the app believes the
+  pump is suspended). Sub-steps 3 and 4 are buildable once reworded this way.
+- **Plugin state is not quiet during an import, and nothing says so.** The hold covers the command
+  queue; it does not stop a plugin restarted by `loadSettings` from reading an active plugin that is
+  mid-election. Live in Crashlytics. See 4.1 decision 2 for the mechanism, the evidence, and why the
+  fix must NOT be to clear `initProgressFlow.done` or to soften `PluginStore`'s assertions. **Blocker
+  for 3.5 step 3.**
+- ~~**`completeAllAsNoOp` tells the loop the cancelled command succeeded.**~~ **FIXED, `16147121cc`.**
+  Replaced by `cancelAll(comment, success)` routed through `Command.cancel`, with the import passing
+  `success = false`. The last caller that still passed `true` - `CommandExecutor`, when the pump is
+  selected but not configured - was flipped in `a837bb1f86`; it had been persisting the accompanying
+  carbs for insulin that never left the pump, because `bolus()` writes them on a successful result.
+  `PumpEnactResult.cancelled` (`8f13138e29`) keeps all of this silent: a dropped command is told apart
+  from a failed one, so nothing raises the delivery alarm. `clear()` deliberately keeps
+  `cancelled = false`, because a connection timeout IS a delivery failure and must still alarm.
 - **`completeAllAsNoOp` also bypasses `Command.cancel`.** It calls `callback?.result(...)?.run()`
   directly, so `CommandBolus.cancel`/`CommandSMBBolus.cancel` never run and `BolusProgressData`
   stays started. `CommandQueueImplementation.clear()` does go through `cancel`. One line to fix, and
@@ -857,16 +931,30 @@ This is the group that reorders the work (4.2 step 1). All of it is about 3.5 st
 - **Stopping `PersistentNotificationPlugin` stops the foreground service.** `onStop()` calls
   `dummyServiceHelper.stopService(context)`, and `DummyService` is what keeps AAPS out of the
   background execution limits. The plugin is `alwaysEnabled`, so "stop every enabled plugin"
-  includes it, and `onStart` does not start the service again.
+  includes it, and `onStart` does not start the service again. **Done**: `onStart` now starts it,
+  deferred and idempotent - the missing half of this plugin's own `onStop`. Exempting `alwaysEnabled`
+  plugins from the sweep was the alternative and was rejected: it would leave the plugin running while
+  everything it reports on is restarting, and the asymmetry would still be there for anything else
+  that stops a service.
 - **`verifySelectionInCategories` starts plugins itself and drops the jobs**, for six categories. So
   "start every plugin, awaited" is unreachable however the calls are ordered, and the note added
   earlier to 3.5 was wrong to suggest that reordering alone fixes it. It has to return its jobs, and
-  `activePumpInternal`'s fallback has to stop enabling plugins from inside a getter.
-- **The scan test looks in the wrong place.** The work that survives a stop is launched from ordinary
-  methods, not from `onStart`: `LoopPlugin.invoke` ends its SMB branch with
+  `activePumpInternal`'s fallback has to stop **disabling** plugins from inside a getter. (Corrected
+  2026-09-21: this bullet said "enabling". The fallback calls `getTheOneEnabledInArray`, which keeps
+  the first enabled pump and disables every later one - a write, and dropped `onStop` jobs, during a
+  property read.) **Both done**: `verifySelectionInCategories` returns `List<Job>`, `loadSettings`
+  adds them to the list `applyConfiguration` already waits on, and the getter is a pure read.
+- **No scan test exists.** 3.5 step 3 and an earlier version of this bullet read as though one did.
+  When it is written it must scan the whole plugin class, not `onStart`: the work that survives a stop
+  is launched from ordinary methods, and `LoopPlugin.invoke` ends its SMB branch with
   `appScope.launch { delay(1000); invoke(...) }`, which lands inside or just after the restart window
-  and queues pump commands. Scan the whole plugin class for `appScope`, `postDelayed`, `Handler`,
-  `Thread(` and raw `CoroutineScope(`.
+  and queues pump commands. **Done**: `PluginLifetimeWorkScanTest` in `:app/src/testFull`. It looks for
+  `appScope`, `GlobalScope`, `postDelayed`, `Handler(`/`Thread(` across the whole class and makes every
+  hit declare itself either reviewed-safe or survives-stop. Two limits worth knowing: it reads source
+  text, so it cannot see work a helper class schedules on the plugin's behalf, and it does not look at
+  `WorkManager` or `AlarmManager`, which outlive the process and are a separate problem. Raw
+  `CoroutineScope(` is deliberately not matched - created in `onStart` and cancelled in `onStop` is the
+  correct idiom that 25 plugins already use, and flagging it buried the real hits in noise.
 - **Two pump-safety singletons outside plugins are missing from the reload list** (3.5 step 2):
   `PumpSyncStorage`, guarded by a one-shot `storageInitialized` flag, and
   `DetailedBolusInfoStorageImpl`.

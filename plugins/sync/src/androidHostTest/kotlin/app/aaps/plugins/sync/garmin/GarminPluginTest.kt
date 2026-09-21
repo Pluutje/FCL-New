@@ -61,7 +61,7 @@ class GarminPluginTest : TestBaseWithProfile() {
 
     @BeforeEach
     fun setup() {
-        gp = GarminPlugin(aapsLogger, rh, preferences, sp, context, loopHub, persistenceLayer)
+        gp = GarminPlugin(aapsLogger, rh, preferences, sp, context, loopHub, persistenceLayer, mock())
         gp.clock = clock
         whenever(loopHub.currentProfileName).thenReturn("Default")
         whenever(preferences.get(GarminIntKey.LocalHttpPort)).thenReturn(28890)
