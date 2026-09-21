@@ -138,6 +138,11 @@ open class OpenAPSFCLPlugin @Inject constructor(
     // dit scherm toont gewoon dezelfde live data als het standaard hoofdscherm.
     private val graphViewModelFactory: GraphViewModel.Factory,
     private val overviewDataCache: OverviewDataCache,
+    // 21/09/2026 (de gebruiker) — alleen nodig om FclOverviewScreen de laatste TOTALE gestuurde
+    // dosis (basaal-over-cyclus + SMB samen, FCLCycleLogEntity.deliveredTotal) te laten tonen
+    // i.p.v. alleen de kleine BS-bolus (zie kdoc bij lastDoseText in FclOverviewScreen.kt). Zelfde
+    // al-bestaande AppScope-singleton als DetermineBasalFCL.kt gebruikt, geen nieuwe instantie.
+    private val cycleLogRepository: app.aaps.plugins.aps.openAPSFCL.vnext.database.FCLCycleLogRepository,
     // 15/09/2026 (de gebruiker) — alleen nodig om de "alternatief hoofdscherm"-toggle te lezen in
     // overviewOverride hieronder (zelfde SharedPreferences-bestand als FCLComposeContent.kt/
     // FCLSettingsScreen.kt, niet via Compose's LocalContext.current bereikbaar omdat
@@ -237,6 +242,7 @@ open class OpenAPSFCLPlugin @Inject constructor(
                     profileFunction = profileFunction,
                     iobCobCalculator = iobCobCalculator,
                     dateUtil = dateUtil,
+                    cycleLogRepository = cycleLogRepository,
                     onOpenFclSettings = { navigationRequest(NavigationRequest.Element(ElementType.FCL_OPEN_SCREEN)) }
                 )
             }

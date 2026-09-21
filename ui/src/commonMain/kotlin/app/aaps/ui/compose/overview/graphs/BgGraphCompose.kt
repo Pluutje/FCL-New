@@ -124,6 +124,12 @@ fun BgGraphCompose(
     // Null (standaard) laat het standaard AAPS-hoofdscherm exact ongewijzigd. Ontvangt de RUWE,
     // ongeclampte zichtbare data-min/max (niet geclampt tegen chartConfig.lowMark/highMark).
     yRangeOverride: ((dataMin: Double, dataMax: Double) -> NiceScale)? = null,
+    // 21/09/2026 (de gebruiker) — optionele kleur-override voor "in range" (groen) en "hoog"
+    // (geel/oranje), gebruikt door FclOverviewScreen.kt om minder fluorescerende tinten te tonen
+    // dan de pure 0x00FF00/0xFFFF00 theme-kleuren. Zelfde patroon als yRangeOverride hierboven:
+    // null (standaard) laat het standaard AAPS-hoofdscherm exact ongewijzigd.
+    inRangeColorOverride: Color? = null,
+    highColorOverride: Color? = null,
     modifier: Modifier = Modifier
 ) {
     val dateUtil = LocalDateUtil.current
@@ -161,8 +167,8 @@ fun BgGraphCompose(
     // Colors from theme (stable - won't change)
     val regularColor = AapsTheme.generalColors.originalBgValue
     val lowColor = AapsTheme.generalColors.bgLow
-    val inRangeColor = AapsTheme.generalColors.bgInRange
-    val highColor = AapsTheme.generalColors.bgHigh
+    val inRangeColor = inRangeColorOverride ?: AapsTheme.generalColors.bgInRange
+    val highColor = highColorOverride ?: AapsTheme.generalColors.bgHigh
     val basalColor = AapsTheme.elementColors.tempBasal
     val targetLineColor = AapsTheme.elementColors.tempTarget
     val activityColor = AapsTheme.elementColors.activity

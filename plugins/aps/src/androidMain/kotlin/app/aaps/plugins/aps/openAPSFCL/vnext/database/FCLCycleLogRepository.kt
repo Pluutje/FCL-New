@@ -787,9 +787,12 @@ class FCLCycleLogRepository @Inject constructor(
     suspend fun getRowsInRange(fromMs: Long, toMs: Long) = dao.getInRange(fromMs, toMs)
     suspend fun count() = dao.count()
     suspend fun getAll() = dao.getAll()
+
+    /** Zie kdoc bij [FCLCycleLogDao.getLastDelivery]. */
+    suspend fun getLastDelivery() = dao.getLastDelivery()
 }
 
-// ── CSV header — exact gelijk aan FCLvNextCsvLogger ──────────────────────
+// ── CSV header — exact gelijk aan FCLvNextCsvLogger ────────────────────── FCL
 // 05/07/2026: FCLCycleLogEntity is herstructureerd in @Embedded-
 // groepen (zie doc-comment bij FCLCycleLogEntity.kt) — de kolomnamen in de
 // CSV blijven ONGEWIJZIGD (Room "plat" de groepen terug uit tot dezelfde

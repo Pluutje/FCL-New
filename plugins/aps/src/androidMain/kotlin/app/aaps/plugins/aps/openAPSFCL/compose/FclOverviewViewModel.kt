@@ -2,12 +2,14 @@ package app.aaps.plugins.aps.openAPSFCL.compose
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import app.aaps.core.data.model.BS
 import app.aaps.core.data.model.TE
 import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.core.interfaces.iob.IobCobCalculator
 import app.aaps.core.interfaces.plugin.ActivePlugin
 import app.aaps.core.interfaces.profile.ProfileFunction
 import app.aaps.core.interfaces.utils.DateUtil
+import app.aaps.plugins.aps.openAPSFCL.vnext.database.FCLCycleLogRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -38,7 +40,8 @@ class FclOverviewViewModel(
     private val activePlugin: ActivePlugin,
     private val profileFunction: ProfileFunction,
     private val iobCobCalculator: IobCobCalculator,
-    private val dateUtil: DateUtil
+    private val dateUtil: DateUtil,
+    private val cycleLogRepository: FCLCycleLogRepository
 ) : ViewModel() {
 
     private val _deviceState = MutableStateFlow(FclDeviceState())
@@ -56,6 +59,42 @@ class FclOverviewViewModel(
             val cannulaChange = withContext(Dispatchers.IO) {
                 persistenceLayer.getLastTherapyRecordUpToNow(TE.Type.CANNULA_CHANGE)
             }
+            // 21/09/2026 (de gebruiker, 2e ronde) — EERST persistenceLayer.getNewestBolus()
+            // gebruikt, maar de gebruiker wees erop dat dat de kleine, losse BS-bolus is die
+            // FCLvNext zelf registreert nadat het een commit al heeft opgesplitst via
+            // hybridPercentage (zie executeDelivery() in FCLvNext.kt) — grotendeels basaal-over-
+            // cyclus, een klein deel bolus. Die BS-waarde alleen geeft dus een veel te kleine
+            // indruk van wat er echt gestuurd is. In plaats daarvan nu de laatste cyclus met een
+            // echte afgifte uit FCLvNext's EIGEN per-cyclus-log (deliveredTotal = basaal-over-
+            // cyclus + SMB SAMEN, vóór de basaal/bolus-opsplitsing) — zie
+            // FCLCycleLogDao.getLastDelivery().
+            //
+            // 21/09/2026 (de gebruiker, 3e ronde) — dat alleen was nog niet genoeg: de gebruiker
+            // gaf zelf een HANDMATIGE correctie (2E om 15:38) die later was dan de laatste
+            // FCLvNext-cyclus (0,69E om 14:19), maar bleef onzichtbaar. Nu drie mogelijke bronnen
+            // vergelijken op tijdstip en de ECHT laatste tonen, met een compacte bron-tag:
+            //  - FCL:  laatste FCLCycleLogEntity-rij met deliveredTotal>0 (het algoritme's eigen
+            //          besluit, basaal+SMB samen, vóór opsplitsing).
+            //  - AAPS: laatste BS-record met type=SMB (de daadwerkelijk UITGEVOERDE automatische
+            //          microbolus — kan door de wachtrij soms een cyclus later landen dan het
+            //          FCLvNext-logboek, vandaar apart vergeleken i.p.v. aangenomen gelijk).
+            //  - Man:  laatste BS-record met type=NORMAL (een echte, door de gebruiker zelf
+            //          ingevoerde bolus — niets met FCLvNext's besluitvorming te maken).
+            val lastDelivery = withContext(Dispatchers.IO) {
+                cycleLogRepository.getLastDelivery()
+            }
+            val lastAapsSmb = withContext(Dispatchers.IO) {
+                persistenceLayer.getNewestBolusOfType(BS.Type.SMB)
+            }
+            val lastManualBolus = withContext(Dispatchers.IO) {
+                persistenceLayer.getNewestBolusOfType(BS.Type.NORMAL)
+            }
+            val lastDoseCandidates = listOfNotNull(
+                lastDelivery?.let { row -> Triple(row.timestampMs, row.delivery.deliveredTotal, LastDoseSource.FCLVNEXT) },
+                lastAapsSmb?.let { Triple(it.timestamp, it.amount, LastDoseSource.AAPS) },
+                lastManualBolus?.let { Triple(it.timestamp, it.amount, LastDoseSource.MANUAL) }
+            )
+            val lastDose = lastDoseCandidates.maxByOrNull { it.first }
             val now = dateUtil.now()
             val profile = profileFunction.getProfile()
             val reservoirU = profile?.let {
@@ -82,7 +121,10 @@ class FclOverviewViewModel(
                 reservoirUnits = reservoirU,
                 iobTotal = iobTotal,
                 basalRateUh = basalRateUh,
-                profileBasalRateUh = profileBasalRateUh
+                profileBasalRateUh = profileBasalRateUh,
+                lastDoseUnits = lastDose?.second,
+                lastDoseTimestamp = lastDose?.first,
+                lastDoseSource = lastDose?.third
             )
         }
     }
@@ -99,5 +141,18 @@ data class FclDeviceState(
     val iobTotal: Double = 0.0,
     val basalRateUh: Double = 0.0,
     /** Profile's scheduled base rate (no temp basal) — used to show verlaagd/verhoogd/vlak. */
-    val profileBasalRateUh: Double = 0.0
+    val profileBasalRateUh: Double = 0.0,
+    /**
+     * 21/09/2026 (de gebruiker) — laatste dosis, ongeacht bron: de meest recente van (1) een
+     * FCLvNext-cyclus met een echte afgifte (TOTALE dosis, basaal-over-cyclus + SMB samen), (2)
+     * een automatische AAPS-microbolus (BS type=SMB), of (3) een handmatige bolus (BS
+     * type=NORMAL). Zie [LastDoseSource] en de kdoc bij `FclOverviewViewModel.refresh()`. Null
+     * als er nog nooit een dosis is geregistreerd.
+     */
+    val lastDoseUnits: Double? = null,
+    val lastDoseTimestamp: Long? = null,
+    val lastDoseSource: LastDoseSource? = null
 )
+
+/** Compacte bron-tag voor de "laatste dosis"-tekst op FclOverviewScreen.kt. */
+enum class LastDoseSource { FCLVNEXT, AAPS, MANUAL }

@@ -28,4 +28,12 @@ interface FCLCycleLogDao {
 
     @Query("SELECT * FROM fcl_cycle_log ORDER BY timestampMs ASC")
     suspend fun getAll(): List<FCLCycleLogEntity>
+
+    // 21/09/2026 (de gebruiker) — laatste cyclus met een echte afgifte (deliveredTotal, de
+    // TOTALE dosis: basaal-over-cyclus + SMB samen), voor de "laatste dosis"-tekst op
+    // FclOverviewScreen.kt. Bewust NIET de laatste rij ongeacht deliveredTotal (getRecent(1)) —
+    // de meeste cycli leveren 0 af, dus die zou meestal een lege/oude cyclus teruggeven i.p.v.
+    // de laatste echte dosis.
+    @Query("SELECT * FROM fcl_cycle_log WHERE deliveredTotal > 0 ORDER BY timestampMs DESC LIMIT 1")
+    suspend fun getLastDelivery(): FCLCycleLogEntity?
 }

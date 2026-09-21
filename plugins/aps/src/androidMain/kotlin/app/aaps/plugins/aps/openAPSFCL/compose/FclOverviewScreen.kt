@@ -163,6 +163,7 @@ fun FclOverviewScreen(
     profileFunction: ProfileFunction,
     iobCobCalculator: IobCobCalculator,
     dateUtil: DateUtil,
+    cycleLogRepository: app.aaps.plugins.aps.openAPSFCL.vnext.database.FCLCycleLogRepository,
     onOpenFclSettings: () -> Unit
 ) {
     val graphViewModel: GraphViewModel = viewModel(
@@ -174,7 +175,7 @@ fun FclOverviewScreen(
         factory = remember {
             viewModelFactory {
                 initializer {
-                    FclOverviewViewModel(persistenceLayer, activePlugin, profileFunction, iobCobCalculator, dateUtil)
+                    FclOverviewViewModel(persistenceLayer, activePlugin, profileFunction, iobCobCalculator, dateUtil, cycleLogRepository)
                 }
             }
         }
@@ -232,6 +233,28 @@ fun FclOverviewScreen(
     val now by graphViewModel.nowTimestamp.collectAsStateWithLifecycle()
     val derivedTimeRange by graphViewModel.derivedTimeRange.collectAsStateWithLifecycle()
 
+    // 21/09/2026 (de gebruiker) — de Y-as-schaal van de BG-grafiek (fclBgYRange hieronder) bleek
+    // niet meer mee te schalen zodra de gebruiker terugscrolde naar oudere data: hij was gekoppeld
+    // aan een VAST "nu ±venster" (visibleWindowFallback hieronder), dus zodra het echte, geschoven
+    // kijkvenster daar niet meer mee overeenkwam, viel de dataMax-berekening terug op grotendeels
+    // buiten-venster-gefilterde (lege) data en dus op chartConfig.highMark als fallback — vandaar
+    // de vaste 12-mmol-plafond ongeacht de zichtbare piek. Zelfde patroon als GraphsSection.kt
+    // (bgVisibleTimeRange/iobVisibleRange): het ECHTE zichtbare x-bereik van de IOB-grafiek
+    // (onVisibleRangeChanged hieronder) volgen, gedebounced tegen chart-rebuild-storms tijdens
+    // slepen, en pas omzetten naar absolute timestamps zodra minTs bekend is.
+    var iobVisibleRange by remember { mutableStateOf<Pair<Double, Double>?>(null) }
+    var iobVisibleRangeSettled by remember { mutableStateOf<Pair<Double, Double>?>(null) }
+    LaunchedEffect(Unit) {
+        snapshotFlow { iobVisibleRange }
+            .debounce(400)
+            .collect { iobVisibleRangeSettled = it }
+    }
+    val bgVisibleTimeRange = derivedTimeRange?.first?.let { minTs ->
+        iobVisibleRangeSettled?.let { (minXv, maxXv) ->
+            (minTs + (minXv * 60_000).toLong()) to (minTs + (maxXv * 60_000).toLong())
+        }
+    }
+
     // 17/09/2026 (de gebruiker) — deviceViewModel.refresh() liep hiervoor alleen bij het EERSTE
     // opbouwen van dit scherm (init{} in FclOverviewViewModel), dus IOB/basaal ververste nooit meer
     // zolang dit scherm het echte hoofdscherm is en dus nooit meer weg-en-opnieuw-opgebouwd wordt
@@ -280,12 +303,16 @@ fun FclOverviewScreen(
             }
     }
 
-    // Vast zichtbaar venster voor de Y-as-berekening van de BG-grafiek (zie fclBgYRange
-    // hieronder) — bewust gekoppeld aan "nu" i.p.v. de werkelijke scroll-positie, zodat de
-    // schaal in de normale (niet-gescrolde) situatie altijd de actuele/aankomende waarden dekt.
-    val visibleWindow = remember(now) {
+    // Zichtbaar venster voor de Y-as-berekening van de BG-grafiek (zie fclBgYRange hieronder).
+    // 21/09/2026 (de gebruiker) — was een VAST "nu ±venster" (bgVisibleTimeRange hierboven was er
+    // nog niet), wat de schaal liet vastlopen op de standaard 12-mmol-plafond zodra de gebruiker
+    // terugscrolde naar data buiten dat venster. Nu bgVisibleTimeRange (het ECHTE, live bijgehouden
+    // zichtbare bereik) als eerste keus, met het oude vaste venster alleen nog als terugval vóór
+    // het allereerste scroll/zoom-rebuild-event (nog geen SecondaryGraphCompose-callback gehad).
+    val visibleWindowFallback = remember(now) {
         (now - WINDOW_HOURS_BACK * 3600_000L) to (now + WINDOW_HOURS_FORWARD * 3600_000L)
     }
+    val visibleWindow = bgVisibleTimeRange ?: visibleWindowFallback
 
     Column(
         modifier = Modifier
@@ -404,13 +431,23 @@ fun FclOverviewScreen(
                 nowTimestamp = now,
                 visibleTimeRange = visibleWindow,
                 yRangeOverride = ::fclBgYRange,
+                inRangeColorOverride = DashBgInRangeColor,
+                highColorOverride = DashBgHighColor,
                 modifier = graphModifier
             )
         }
 
         // ── IOB/basaal-grafiek: eigen kaart, maar dezelfde scroll/zoom-status als de BG-grafiek
         // hierboven — zoomen/schuiven op de ene beweegt de andere automatisch mee.
-        GraphCard(title = "IOB / basaal", height = iobGraphHeight, onHeightChange = { h -> iobGraphHeight = h; prefs.edit().putInt(PREF_IOB_HEIGHT, h).apply() }) { graphModifier ->
+        GraphCard(
+            title = "IOB / basaal",
+            height = iobGraphHeight,
+            onHeightChange = { h -> iobGraphHeight = h; prefs.edit().putInt(PREF_IOB_HEIGHT, h).apply() },
+            // 21/09/2026 (de gebruiker) — laatste dosis (ongeacht bron) + tijdstip + compacte
+            // bron-tag, zelfde stijl als "Target: 5.4" op de BG-kaart (zie GraphCard's
+            // trailingText: bodyMedium/DashOnSurfaceMuted).
+            trailingText = lastDoseText(deviceState.lastDoseUnits, deviceState.lastDoseTimestamp, deviceState.lastDoseSource, dateUtil)
+        ) { graphModifier ->
             SecondaryGraphCompose(
                 viewModel = graphViewModel,
                 seriesTypes = listOf(SeriesType.IOB),
@@ -418,6 +455,8 @@ fun FclOverviewScreen(
                 zoomState = sharedZoomState,
                 derivedTimeRange = derivedTimeRange,
                 nowTimestamp = now,
+                // 21/09/2026 (de gebruiker) — voedt bgVisibleTimeRange hierboven, zie kdoc daar.
+                onVisibleRangeChanged = { iobVisibleRange = it },
                 modifier = graphModifier
             )
         }
@@ -493,8 +532,11 @@ private fun GraphCard(
     DashCard {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(text = title, style = MaterialTheme.typography.titleMedium, color = DashOnSurface)
+            // 21/09/2026 (de gebruiker) — kleiner dan de titel en veel minder fel (DashOnSurfaceMuted
+            // i.p.v. DashOnSurface): stond eerst even fel/groot als "BG"/"IOB / basaal" zelf, wat te
+            // dominant oogde voor bijkomende info als "Target: 5.4" of de laatste bolus.
             if (trailingText != null) {
-                Text(text = trailingText, style = MaterialTheme.typography.titleMedium, color = DashOnSurface)
+                Text(text = trailingText, style = MaterialTheme.typography.bodyMedium, color = DashOnSurfaceMuted)
             }
         }
         Box(modifier = Modifier.fillMaxWidth()) {
@@ -710,6 +752,18 @@ private val DashOnSurface = Color(0xFFE7ECFF)
 private val DashOnSurfaceMuted = Color(0xFFB7C2E6)
 private val DashGlowColor = Color(0xFF4C6AA6)
 
+// 21/09/2026 (de gebruiker) — minder fluorescerende BG-grafiekkleuren voor dit scherm dan de
+// pure theme-kleuren (bgInRange 0x00FF00, bgHigh 0xFFFF00 in donkere modus) — "knalt minder van
+// het scherm". Alleen dit scherm; het standaard AAPS-hoofdscherm (GraphsSection.kt) gebruikt nog
+// gewoon AapsTheme.generalColors via BgGraphCompose's inRangeColorOverride/highColorOverride =
+// null default (zie BgGraphCompose.kt).
+private val DashBgInRangeColor = Color(0xFF4CAF50)
+// 21/09/2026 (de gebruiker, 2e ronde) — eerst een amber/oranje (0xFFFFB300, HSL ~42°/100%/50%)
+// geprobeerd, maar dat oogde te oranje i.p.v. geel. Nu een echte geel-tint (HSL ~55°) met
+// vergelijkbare verzadiging/helderheid als DashBgInRangeColor hierboven (HSL ~122°/39%/49%), dus
+// consistent "gedempt" met het groen, niet feller.
+private val DashBgHighColor = Color(0xFFB9AF46)
+
 /**
  * 15/09/2026 (de gebruiker) — de vier onderste snelkoppelingen: vaste hoogte (max. 2 tekstregels,
  * zodat langere labels niet afwijken van de andere drie) en dezelfde afgeronde pil-vorm
@@ -774,6 +828,28 @@ private fun basalTrendIcon(actualUh: Double, profileUh: Double): ImageVector? {
 private fun targetValueText(value: Double?): String {
     if (value == null) return "-"
     return roundTo(value, 1).toString()
+}
+
+/**
+ * 21/09/2026 (de gebruiker) — laatste dosis + tijdstip + compacte bron-tag als trailingText
+ * naast "IOB / basaal", in dezelfde stijl als "Target: 5.4" op de BG-kaart (zie GraphCard's
+ * trailingText-parameter). Dit is bewust de MEEST RECENTE van drie mogelijke bronnen (zie kdoc
+ * bij `FclOverviewViewModel.refresh()` en [LastDoseSource]) — niet altijd FCLvNext: een latere
+ * handmatige correctie moet ook zichtbaar zijn, anders lijkt het scherm een oude/kleine dosis te
+ * tonen terwijl de gebruiker zelf net iets gegeven heeft. `null` (dus geen tekst) als er nog
+ * nooit een dosis is geregistreerd, i.p.v. een "-" placeholder die verwarrend zou zijn naast een
+ * lege kaart.
+ */
+private fun lastDoseText(units: Double?, timestamp: Long?, source: LastDoseSource?, dateUtil: DateUtil): String? {
+    if (units == null || timestamp == null) return null
+    val unitsText = roundTo(units, 2).toString()
+    val sourceTag = when (source) {
+        LastDoseSource.FCLVNEXT -> "fcl:"
+        LastDoseSource.AAPS     -> "aaps:"
+        LastDoseSource.MANUAL   -> "manueel:"
+        null                    -> "?"
+    }
+    return "$sourceTag $unitsText E · ${dateUtil.timeString(timestamp)}"
 }
 
 private fun roundTo(value: Double, decimals: Int): Double {
