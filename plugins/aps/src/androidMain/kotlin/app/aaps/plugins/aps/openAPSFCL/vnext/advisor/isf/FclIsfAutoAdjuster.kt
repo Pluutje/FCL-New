@@ -98,8 +98,16 @@ object FclIsfAutoAdjuster {
     // drempels en eventuele voorstellen zelf handmatig terug te zetten.
     const val MIN_SAMPLES_TOTAL_DISPLAY = 4          // = IsfLearner.MIN_SAMPLES_PER_HOUR (één uur is al genoeg om te tonen)
     const val MIN_AVG_CONFIDENCE_DISPLAY = 0.30      // = ondergrens van IsfLearner's eigen confidence-clip
-    const val MIN_SAMPLES_TOTAL = 20                 // productie-drempel — som van sampleCount over alle aangeraakte uren
-    const val MIN_AVG_CONFIDENCE = 0.55              // productie-drempel
+
+    // 22/09/2026 (de gebruiker) — MIN_SAMPLES_TOTAL was 20, verlaagd naar 15. Samen met
+    // IsfLearner.LOOKBACK_DAYS (14->28, zie aldaar) moet AUTO na een maand daadwerkelijk
+    // iets kunnen toepassen i.p.v. structureel op "geen data" te blijven staan. Bewust NIET
+    // MIN_AVG_CONFIDENCE verlaagd: dat blijft het kwaliteitsslot tegen ruizige voorstellen — een
+    // voorstel met te weinig spreiding-zekerheid (zie IQR-straf in IsfLearner) wordt nog steeds
+    // geweigerd, ook als er 15 (of meer) samples zijn. Alleen de HOEVEELHEID bewijs die nodig is
+    // gaat omlaag, niet de eis aan de KWALITEIT van dat bewijs.
+    const val MIN_SAMPLES_TOTAL = 15                 // productie-drempel — som van sampleCount over alle aangeraakte uren
+    const val MIN_AVG_CONFIDENCE = 0.55              // productie-drempel — ONGEWIJZIGD, blijft het kwaliteitsslot
 
     // Zelfde gemiddelde-over-meerdere-dagen-ontwerp als FclNightBasalAutoAdjuster
     // (zie de uitgebreide kdoc daar, 27/07/2026) — hier "dagen" i.p.v. "nachten",

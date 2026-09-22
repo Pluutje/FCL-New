@@ -37,6 +37,7 @@ import app.aaps.plugins.aps.openAPSFCL.vnext.database.FCLCycleLogRepository
 import app.aaps.plugins.aps.openAPSFCL.vnext.healthconnect.FclHealthConnectPermissions
 import app.aaps.plugins.aps.openAPSFCL.vnext.lang.FclStrings
 import app.aaps.plugins.aps.openAPSFCL.update.FclCsvUploader
+import app.aaps.plugins.aps.openAPSFCL.update.FclTrustedBuild
 import app.aaps.plugins.aps.openAPSFCL.update.FclUpdateChecker
 import app.aaps.plugins.aps.openAPSFCL.update.FclUpdateInstaller
 import app.aaps.plugins.aps.openAPSFCL.update.FclUpdateNotificationHelper
@@ -1169,6 +1170,17 @@ fun FCLSettingsScreen(
                             onClick = {
                                 val entry = versionList?.firstOrNull { it.versionCode == selectedVersionCode }
                                     ?: return@TextButton
+                                // 22/09/2026 (de gebruiker) — controleren en "Wat is nieuw" mogen
+                                // altijd werken (zie FCL_STATUS_VERSION-check hierboven en
+                                // FclUpdateScheduler, die is bewust NIET gegate), maar het
+                                // daadwerkelijk installeren heeft geen zin op een build die niet
+                                // met de eigen keystore ondertekend is — Android weigert die
+                                // installatie toch (zie §6.15 handleiding). Dan meteen een
+                                // duidelijke foutmelding i.p.v. de download te starten.
+                                if (!FclTrustedBuild.isTrustedBuild(ctx)) {
+                                    installError = "verkeerde keystore — deze build is niet ondertekend met de officiële keystore en kan niet automatisch updaten"
+                                    return@TextButton
+                                }
                                 coroutineScope.launch {
                                     updateInstalling = true
                                     installError = null

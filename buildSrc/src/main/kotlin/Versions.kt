@@ -9,7 +9,7 @@ object Versions {
     // Het buildnummer loopt voortaan gelijk op met FCL_STATUS_VERSION (FCLvNextStatusFormatter.kt)
     // en FCL_CODE_VERSION (FCLvNext.kt) — alle drie samen ophogen bij elke FCLvNext-wijziging die
     // het waard is. Zichtbaar op het hoofdscherm via VersionOverlay.kt (config.VERSION_NAME).
-    const val appVersion = "4.0C-v9-v126"
+    const val appVersion = "4.0C-v9-v127"
 
     // BEVROREN OP 1598 (07/09/2026, de gebruiker) — NIET MEER OPHOGEN.
     //

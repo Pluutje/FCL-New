@@ -10,6 +10,7 @@ import app.aaps.core.interfaces.plugin.ActivePlugin
 import app.aaps.core.interfaces.profile.ProfileFunction
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.plugins.aps.openAPSFCL.vnext.database.FCLCycleLogRepository
+import kotlin.math.abs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -43,6 +44,16 @@ class FclOverviewViewModel(
     private val dateUtil: DateUtil,
     private val cycleLogRepository: FCLCycleLogRepository
 ) : ViewModel() {
+
+    companion object {
+        /** Zie kdoc bij `refresh()` — hoelang FCLvNext's cyclus-log en de bijbehorende
+         *  AAPS-SMB-rij nog als DEZELFDE afgifte gelden. */
+        private const val FCL_AAPS_SAME_EVENT_TOLERANCE_MS = 60_000L
+
+        /** Zie kdoc bij `refresh()` — hoelang een handmatige bolus nog als "toevallig
+         *  samenvallend" (dus optellen) geldt i.p.v. als eigen, latere gebeurtenis. */
+        private const val MANUAL_COINCIDENCE_TOLERANCE_MS = 15_000L
+    }
 
     private val _deviceState = MutableStateFlow(FclDeviceState())
     val deviceState: StateFlow<FclDeviceState> = _deviceState.asStateFlow()
@@ -89,12 +100,55 @@ class FclOverviewViewModel(
             val lastManualBolus = withContext(Dispatchers.IO) {
                 persistenceLayer.getNewestBolusOfType(BS.Type.NORMAL)
             }
-            val lastDoseCandidates = listOfNotNull(
-                lastDelivery?.let { row -> Triple(row.timestampMs, row.delivery.deliveredTotal, LastDoseSource.FCLVNEXT) },
-                lastAapsSmb?.let { Triple(it.timestamp, it.amount, LastDoseSource.AAPS) },
-                lastManualBolus?.let { Triple(it.timestamp, it.amount, LastDoseSource.MANUAL) }
-            )
-            val lastDose = lastDoseCandidates.maxByOrNull { it.first }
+
+            // 22/09/2026 (de gebruiker, 4e ronde) — simpelweg "neem de hoogste timestamp van de
+            // drie" (vorige versie) kon de verkeerde bron kiezen: FCLvNext's eigen cyclus-log
+            // (deliveredTotal, bijv. 2,54E) en de kleine AAPS-SMB-rij die uit diezelfde opsplitsing
+            // ontstaat (bijv. 0,10E, zie executeDelivery()/hybridPercentage in FCLvNext.kt) horen
+            // vrijwel gelijktijdig in de database te landen — maar niet noodzakelijk op exact
+            // dezelfde milliseconde, dus een kale max-op-tijdstip koos soms de AAPS-rij (het kleine
+            // deel) in plaats van FCLvNext's TOTALE dosis. Nu expliciet: die twee horen bij DEZELFDE
+            // afgifte als ze binnen FCL_AAPS_SAME_EVENT_TOLERANCE_MS van elkaar liggen, en dan
+            // leidt altijd FCLvNext's totaal (niet het AAPS-deelbedrag). Alleen als de AAPS-SMB-rij
+            // er duidelijk LATER is dan die tolerantie (bijv. een cyclus later, zoals de gebruiker
+            // eerder beschreef) wordt die als eigen, losse AAPS-gebeurtenis behandeld.
+            val algoEvent: Triple<Long, Double, LastDoseSource>? = when {
+                lastDelivery != null && lastAapsSmb != null -> {
+                    val fclTs = lastDelivery.timestampMs
+                    val aapsTs = lastAapsSmb.timestamp
+                    if (aapsTs - fclTs > FCL_AAPS_SAME_EVENT_TOLERANCE_MS) {
+                        Triple(aapsTs, lastAapsSmb.amount, LastDoseSource.AAPS)
+                    } else {
+                        Triple(fclTs, lastDelivery.delivery.deliveredTotal, LastDoseSource.FCLVNEXT)
+                    }
+                }
+
+                lastDelivery != null -> Triple(lastDelivery.timestampMs, lastDelivery.delivery.deliveredTotal, LastDoseSource.FCLVNEXT)
+                lastAapsSmb != null  -> Triple(lastAapsSmb.timestamp, lastAapsSmb.amount, LastDoseSource.AAPS)
+                else                 -> null
+            }
+
+            // Een handmatige bolus die toevallig binnen MANUAL_COINCIDENCE_TOLERANCE_MS van de
+            // fcl/aaps-gebeurtenis valt, is een AANVULLING (optellen: de gebruiker gaf zelf iets
+            // extra's op hetzelfde moment) — geen vervanging. Ligt de handmatige bolus duidelijk
+            // LATER (een eigen, losstaande correctie), dan toont die alleen. Ligt hij duidelijk
+            // vroeger, dan blijft de fcl/aaps-gebeurtenis leidend ("anders heeft fcl de lead").
+            val lastDose: Triple<Long, Double, LastDoseSource>? = when {
+                lastManualBolus != null && algoEvent != null -> {
+                    val manualTs = lastManualBolus.timestamp
+                    val diffMs = manualTs - algoEvent.first
+                    when {
+                        abs(diffMs) <= MANUAL_COINCIDENCE_TOLERANCE_MS ->
+                            Triple(maxOf(manualTs, algoEvent.first), lastManualBolus.amount + algoEvent.second, LastDoseSource.COMBINED)
+
+                        manualTs > algoEvent.first -> Triple(manualTs, lastManualBolus.amount, LastDoseSource.MANUAL)
+                        else                        -> algoEvent
+                    }
+                }
+
+                lastManualBolus != null -> Triple(lastManualBolus.timestamp, lastManualBolus.amount, LastDoseSource.MANUAL)
+                else                     -> algoEvent
+            }
             val now = dateUtil.now()
             val profile = profileFunction.getProfile()
             val reservoirU = profile?.let {
@@ -143,16 +197,19 @@ data class FclDeviceState(
     /** Profile's scheduled base rate (no temp basal) — used to show verlaagd/verhoogd/vlak. */
     val profileBasalRateUh: Double = 0.0,
     /**
-     * 21/09/2026 (de gebruiker) — laatste dosis, ongeacht bron: de meest recente van (1) een
-     * FCLvNext-cyclus met een echte afgifte (TOTALE dosis, basaal-over-cyclus + SMB samen), (2)
-     * een automatische AAPS-microbolus (BS type=SMB), of (3) een handmatige bolus (BS
-     * type=NORMAL). Zie [LastDoseSource] en de kdoc bij `FclOverviewViewModel.refresh()`. Null
-     * als er nog nooit een dosis is geregistreerd.
+     * 22/09/2026 (de gebruiker) — laatste dosis, ongeacht bron: FCLvNext's eigen cyclus-log
+     * (TOTALE dosis, basaal-over-cyclus + SMB samen) en de bijbehorende AAPS-SMB-rij tellen als
+     * ÉÉN gebeurtenis (FCLvNext's totaal leidt); een handmatige bolus (BS type=NORMAL) die daar
+     * toevallig binnen enkele seconden mee samenvalt wordt OPGETELD; anders wint de laatste,
+     * losstaande gebeurtenis op tijdstip. Zie [LastDoseSource] en de kdoc bij
+     * `FclOverviewViewModel.refresh()`. Null als er nog nooit een dosis is geregistreerd.
      */
     val lastDoseUnits: Double? = null,
     val lastDoseTimestamp: Long? = null,
     val lastDoseSource: LastDoseSource? = null
 )
 
-/** Compacte bron-tag voor de "laatste dosis"-tekst op FclOverviewScreen.kt. */
-enum class LastDoseSource { FCLVNEXT, AAPS, MANUAL }
+/** Compacte bron-tag voor de "laatste dosis"-tekst op FclOverviewScreen.kt.
+ *  COMBINED (22/09/2026) = een handmatige bolus die toevallig binnen enkele seconden samenviel
+ *  met een fcl/aaps-dosis — [FclDeviceState.lastDoseUnits] is dan de SOM van beide. */
+enum class LastDoseSource { FCLVNEXT, AAPS, MANUAL, COMBINED }

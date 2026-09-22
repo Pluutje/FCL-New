@@ -318,7 +318,14 @@ fun FclOverviewScreen(
         modifier = Modifier
             .fillMaxWidth()
             .verticalScroll(rememberScrollState())
-            .padding(12.dp),
+            // 22/09/2026 (de gebruiker) — extra ruimte boven de bovenste kaart: MainScreen.kt
+            // tekent de versietekst (VersionOverlay.kt, bijv. "4.0C-v9-v127 (56ee)") ZWEVEND
+            // rechtsboven over de hele scherminhoud heen (Modifier.align(Alignment.TopEnd) op
+            // Box-niveau, dus buiten deze Column om) — zonder extra marge hier liep die tekst
+            // over de rand van de bovenste DashCard. Bewust hier opgelost (alleen dit scherm) en
+            // NIET in VersionOverlay.kt/MainScreen.kt zelf, want dat is gedeelde UI voor de hele
+            // app en zou elk ander scherm ook raken.
+            .padding(top = 28.dp, start = 12.dp, end = 12.dp, bottom = 12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
 
@@ -847,6 +854,7 @@ private fun lastDoseText(units: Double?, timestamp: Long?, source: LastDoseSourc
         LastDoseSource.FCLVNEXT -> "fcl:"
         LastDoseSource.AAPS     -> "aaps:"
         LastDoseSource.MANUAL   -> "manueel:"
+        LastDoseSource.COMBINED -> "som:"
         null                    -> "?"
     }
     return "$sourceTag $unitsText E · ${dateUtil.timeString(timestamp)}"

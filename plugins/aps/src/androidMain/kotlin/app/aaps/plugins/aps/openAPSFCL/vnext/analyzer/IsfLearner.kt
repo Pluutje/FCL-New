@@ -137,7 +137,19 @@ object IsfLearner {
     const val MIN_PLAUSIBLE_ISF = 0.8              // mmol/L per U — alles daarbuiten is een verworpen uitschieter,
     const val MAX_PLAUSIBLE_ISF = 12.0             // niet geclipt (zie kdoc)
     const val MIN_SAMPLES_PER_HOUR = 4
-    const val LOOKBACK_DAYS = 14
+
+    // 22/09/2026 (de gebruiker) — was 14. Na >1 maand productiegebruik bleven de meeste
+    // uur-sloten op "geen data" staan: schone, maaltijdvrije correctiemomenten (zie kdoc
+    // hierboven — MIN_DOSE_U/MAX_IOB_RATIO_AT_FIRE/CONTAMINATION_MAX_U) zijn sowieso zeldzaam,
+    // en elk van de 24 uursloten heeft z'n EIGEN MIN_SAMPLES_PER_HOUR nodig. Verdubbeld naar 28
+    // dagen zodat er structureel meer schone bouts per uur te vinden zijn — dit versoepelt GEEN
+    // van de kwaliteitseisen aan een individuele bout, het vergroot alleen de historische pool
+    // waaruit geput wordt. Overweging: ISF verandert normaal traag genoeg dat 4 weken oude data
+    // nog representatief is; mocht dat niet zo blijken (bijv. na een duidelijke lichamelijke
+    // verandering), dan telt oudere, inmiddels achterhaalde data wel iets langer mee dan bij 14
+    // dagen — de IQR-spreiding-straf in confidence (zie computeSuggestionsWithProgress) vangt een
+    // deel daarvan op doordat inconsistente oude+nieuwe metingen de confidence juist verlagen.
+    const val LOOKBACK_DAYS = 28
 
     // ── Bout-aggregatie (07/09/2026) — zie kdoc bovenaan dit bestand voor de
     //    volledige aanleiding. Opeenvolgende cycli met commandedDose>0 tellen
