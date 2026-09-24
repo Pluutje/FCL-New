@@ -26,6 +26,16 @@ import androidx.room.PrimaryKey
  * actief is: dan targetPct=100, effectiveMul=1.0, remainingMinutes=-1) — zo
  * blijft in de CSV altijd zichtbaar of, en hoe sterk, de override deze
  * cyclus daadwerkelijk heeft meegewogen.
+ *
+ * 24/09/2026 (de gebruiker, ronde 3) — +portionAmountU/+pendingExtraU/
+ * +presetName (MIGRATION_25_26): naast het percentage nu ook de
+ * preset-extra-insuline zichtbaar in de CSV. portionAmountU is de
+ * hoeveelheid van een preset-portie die DEZE cyclus daadwerkelijk is
+ * afgeleverd (0.0 als er deze cyclus geen portie viel); pendingExtraU is de
+ * som van de nog NIET afgeleverde porties op dat moment (context: hoeveel
+ * er nog "in de wachtrij" staat); presetName is de naam van het preset
+ * waarmee de override is gestart, of null bij een handmatige start via de
+ * percentage/duur-sliders zelf.
  */
 @Entity(
     tableName = "temp_override_log",
@@ -41,5 +51,8 @@ data class TempOverrideLogEntity(
     val active: Boolean,
     val targetPct: Int,
     val effectiveMul: Double,
-    val remainingMinutes: Int
+    val remainingMinutes: Int,
+    val portionAmountU: Double = 0.0,
+    val pendingExtraU: Double = 0.0,
+    val presetName: String? = null
 )

@@ -50,7 +50,6 @@ import app.aaps.core.interfaces.rx.events.EventNewOpenLoopNotification
 import app.aaps.core.interfaces.rx.events.EventPumpStatusChanged
 import app.aaps.core.interfaces.rx.events.EventRefreshOverview
 import app.aaps.core.interfaces.rx.weardata.EventData
-import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.interfaces.utils.DecimalFormatter
 import app.aaps.core.interfaces.utils.HardLimits
@@ -63,6 +62,7 @@ import app.aaps.core.objects.constraints.ConstraintObject
 import app.aaps.core.objects.extensions.asAnnouncement
 import app.aaps.core.objects.extensions.convertedToAbsolute
 import app.aaps.core.objects.extensions.convertedToPercent
+import app.aaps.core.objects.extensions.jsonObject
 import app.aaps.core.objects.extensions.plannedRemainingMinutes
 import app.aaps.core.objects.extensions.with
 import app.aaps.core.ui.CoreUiStrings
@@ -70,6 +70,7 @@ import app.aaps.core.ui.compose.icons.IcLoopClosed
 import app.aaps.core.ui.compose.preference.PreferenceSubScreenDef
 import app.aaps.plugins.aps.ApsStrings
 import app.aaps.plugins.aps.loop.events.EventLoopSetLastRunGui
+import app.aaps.plugins.aps.loop.extensions.jsonObject
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.ContributesBinding
 import dev.zacsweers.metro.ContributesIntoMap
@@ -90,12 +91,11 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
-import app.aaps.core.objects.extensions.jsonObject
-import app.aaps.plugins.aps.loop.extensions.jsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 import kotlin.concurrent.Volatile
 import kotlin.math.abs
+import kotlin.time.Duration.Companion.seconds
 import dev.zacsweers.metro.IntKey as MetroIntKey
 
 @ContributesIntoMap(AppScope::class, binding = binding<PluginBase>())
@@ -119,7 +119,6 @@ class LoopPlugin(
     private val dateUtil: DateUtil,
     private val uel: UserEntryLogger,
     private val persistenceLayer: PersistenceLayer,
-    private val uiInteraction: UiInteraction,
     notificationManager: NotificationManager,
     private val pumpEnactResultProvider: () -> PumpEnactResult,
     private val processedDeviceStatusData: ProcessedDeviceStatusData,
@@ -146,7 +145,11 @@ class LoopPlugin(
         .icon(IcLoopClosed)
         .pluginName(CoreUiStrings.loop)
         .shortName(ApsStrings.loop_shortname)
-        .alwaysEnabled(config.APS)
+        // Only a build with an APS of its own may run the loop, and it is not the user's to switch off
+        // where there is one. Both directions matter: without the forced-off half, a client that imports a
+        // master's settings gets ConfigBuilder_Enabled_LOOP_* = true and runs the algorithm on synced data.
+        // See #5145.
+        .enforceEnabledOnlyWhen { config.APS }
         .description(ApsStrings.description_loop),
     aapsLogger, rh, notificationManager
 ), Loop, PluginConstraints {
@@ -205,7 +208,7 @@ class LoopPlugin(
         // TempTarget changes
         persistenceLayer.observeChanges(TT::class)
             // Skip db change of ending previous TT
-            .debounce(10_000L)
+            .debounce(10.seconds)
             // try/catch keeps this app-lifetime subscription alive: an uncaught throw in onEach would
             // permanently cancel the collection (invoke() is try/finally, not try/catch, so it propagates).
             .onEach {
@@ -225,7 +228,7 @@ class LoopPlugin(
         // never EventPumpStatusChanged — so there is no feedback loop, and the debounce collapses
         // connection chatter.
         rxBus.toFlow(EventPumpStatusChanged::class)
-            .debounce(1000L)
+            .debounce(1.seconds)
             .onEach {
                 try {
                     runningModePreCheck()
@@ -245,16 +248,6 @@ class LoopPlugin(
         collectors.forEach { it.cancel() }
         collectors.clear()
         super.onStop()
-    }
-
-    override fun specialEnableCondition(): Boolean {
-        return try {
-            val pump = activePlugin.activePump
-            pump.pumpDescription.isTempBasalCapable
-        } catch (_: Exception) {
-            // may fail during initialization
-            true
-        }
     }
 
     override suspend fun minutesToEndOfSuspend(): Int =
@@ -541,7 +534,7 @@ class LoopPlugin(
         val start = dateUtil.now()
         while (start + T.mins(maxMinutes).msecs() > dateUtil.now()) {
             if (commandQueue.size() == 0 && commandQueue.performing() == null) return true
-            delay(1000)
+            delay(1.seconds)
         }
         return false
     }
@@ -997,7 +990,7 @@ class LoopPlugin(
     internal fun scheduleSmbFallback(allowNotification: Boolean) {
         smbFallbackJob?.cancel()
         smbFallbackJob = appScope.launch {
-            delay(1000)
+            delay(1.seconds)
             invoke("tempBasalFallback", allowNotification, true)
         }
     }
@@ -1007,7 +1000,7 @@ class LoopPlugin(
         // steps stores the device status once, five seconds after the last of them.
         deviceStatusJob?.cancel()
         deviceStatusJob = appScope.launch {
-            delay(5000)
+            delay(5.seconds)
             buildAndStoreDeviceStatus(reason)
         }
     }
@@ -1081,9 +1074,4 @@ class LoopPlugin(
         ),
         icon = pluginDescription.icon
     )
-
-    companion object {
-
-        private const val CHANNEL_ID = "AAPS-OpenLoop"
-    }
 }

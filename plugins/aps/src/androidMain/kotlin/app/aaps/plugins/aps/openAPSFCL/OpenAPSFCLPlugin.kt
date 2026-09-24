@@ -257,21 +257,8 @@ open class OpenAPSFCLPlugin @Inject constructor(
             return content
         }
 
-    override fun specialEnableCondition(): Boolean {
-        return try {
-            activePlugin.activePump.pumpDescription.isTempBasalCapable
-        } catch (_: Exception) {
-            true
-        }
-    }
-
-    override fun specialShowInListCondition(): Boolean {
-        return try {
-            activePlugin.activePump.pumpDescription.isTempBasalCapable
-        } catch (_: Exception) {
-            true
-        }
-    }
+    // No temp basal check here - see the note in OpenAPSSMBPlugin. SafetyPlugin.isLoopInvocationAllowed
+    // owns that rule (specialEnableCondition()/specialShowInListCondition() no longer exist on PluginBase).
 
     override suspend fun invoke(initiator: String, tempBasalFallback: Boolean) {
         aapsLogger.debug(LTag.APS, "invoke from $initiator tempBasalFallback: $tempBasalFallback")

@@ -217,6 +217,22 @@ val MIGRATION_24_25 = object : Migration(24, 25) {
     }
 }
 
+// ── MIGRATION_25_26 (24/09/2026) ─────────────────────────────────────
+// Zuiver additief: 3 nieuwe kolommen op de bestaande temp_override_log-
+// tabel (portionAmountU/pendingExtraU/presetName) — zelfde ALTER-TABLE-
+// patroon als MIGRATION_16_17/MIGRATION_19_20. Zie kdoc bij
+// TempOverrideLogEntity voor de aanleiding (preset-extra-insuline
+// zichtbaar maken naast het percentage in de CSV). presetName is
+// nullable (TEXT, geen NOT NULL) — een handmatige start zonder preset
+// heeft er terecht geen.
+val MIGRATION_25_26 = object : Migration(25, 26) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE temp_override_log ADD COLUMN portionAmountU REAL NOT NULL DEFAULT 0.0")
+        db.execSQL("ALTER TABLE temp_override_log ADD COLUMN pendingExtraU REAL NOT NULL DEFAULT 0.0")
+        db.execSQL("ALTER TABLE temp_override_log ADD COLUMN presetName TEXT DEFAULT NULL")
+    }
+}
+
 @Database(
     entities = [
         FCLCycleLogEntity::class,
@@ -318,7 +334,12 @@ val MIGRATION_24_25 = object : Migration(24, 25) {
     // exact zoals in v24) — MIGRATION_24_25 hierboven, zelfde bewezen
     // patroon als v23->v24. Zie kdoc bij VroegeStijgingLogEntity voor de
     // aanleiding (Rick's csv 17/9 19:13, Ecko's csv 17/9 18:29).
-    version = 25,
+    // v25->v26 (24/09/2026): +portionAmountU/+pendingExtraU/+presetName op
+    // de bestaande temp_override_log-tabel. Zuiver additief (ALTER TABLE,
+    // geen wijziging aan fcl_cycle_log of enige andere tabel) —
+    // MIGRATION_25_26 hierboven. Zie kdoc bij TempOverrideLogEntity voor de
+    // aanleiding (preset-extra-insuline naast het percentage in de CSV).
+    version = 26,
     exportSchema = false
 )
 abstract class FCLAnalyzerDatabase : RoomDatabase() {
@@ -347,7 +368,7 @@ abstract class FCLAnalyzerDatabase : RoomDatabase() {
                     FCLAnalyzerDatabase::class.java,
                     DB_NAME
                 )
-                    .addMigrations(MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25)
+                    .addMigrations(MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26)
                     .fallbackToDestructiveMigration(dropAllTables = true)
                     .build()
                     .also { INSTANCE = it }

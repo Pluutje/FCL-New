@@ -120,8 +120,20 @@ class FCLCycleLogRepository @Inject constructor(
      * eigen, kleine tabel -- zie kdoc bij TempOverrideLogEntity voor de
      * aanleiding. Zelfde fire-and-forget patroon als logPostHypoBrake()/
      * logExplosiveRise() hierboven.
+     *
+     * 24/09/2026 (ronde 3) — +portionAmountU/+pendingExtraU/+presetName: zie
+     * kdoc bij TempOverrideLogEntity voor wat elk veld betekent.
      */
-    fun logTempOverride(active: Boolean, targetPct: Int, effectiveMul: Double, remainingMinutes: Int, timestampMs: Long) {
+    fun logTempOverride(
+        active: Boolean,
+        targetPct: Int,
+        effectiveMul: Double,
+        remainingMinutes: Int,
+        timestampMs: Long,
+        portionAmountU: Double = 0.0,
+        pendingExtraU: Double = 0.0,
+        presetName: String? = null
+    ) {
         scope.launch {
             tempOverrideDao.insert(
                 TempOverrideLogEntity(
@@ -129,7 +141,10 @@ class FCLCycleLogRepository @Inject constructor(
                     active = active,
                     targetPct = targetPct,
                     effectiveMul = effectiveMul,
-                    remainingMinutes = remainingMinutes
+                    remainingMinutes = remainingMinutes,
+                    portionAmountU = portionAmountU,
+                    pendingExtraU = pendingExtraU,
+                    presetName = presetName
                 )
             )
             tempOverrideDao.deleteOlderThan(FCLAnalyzerDatabase.cutoffMs())
@@ -740,7 +755,15 @@ class FCLCycleLogRepository @Inject constructor(
         // samenvoeg-patroon als de andere aparte log-tabellen hierboven).
         // LET OP (12/07/2026-incident, zie hierboven): controleer na deze
         // levering alsnog dat het toestel echt op v15 schrijft.
-        val file = File(dir, "FCLvNext_Log_v15.csv")
+        // v15->v16 (24/09/2026) -- +3 kolommen (temp_override_portion_u/
+        // temp_override_pending_extra_u/temp_override_preset_name, zie
+        // csvHeader() hieronder), afkomstig uit de nieuwe portionAmountU/
+        // pendingExtraU/presetName-velden op temp_override_log (zelfde
+        // samenvoeg-patroon als de andere aparte log-tabellen hierboven) —
+        // toont de preset-extra-insuline naast het al aanwezige percentage.
+        // LET OP (12/07/2026-incident, zie hierboven): controleer na deze
+        // levering alsnog dat het toestel echt op v16 schrijft.
+        val file = File(dir, "FCLvNext_Log_v16.csv")
 
         val sep = ";"
         // 23/07/2026 — ts_utc blijft de bron van waarheid (ondubbelzinnig,
@@ -767,6 +790,8 @@ class FCLCycleLogRepository @Inject constructor(
                         explosive?.active ?: false, explosive?.projectedMinNoInsulin ?: -1.0,
                         tempOverride?.active ?: false, tempOverride?.targetPct ?: 100,
                         tempOverride?.effectiveMul ?: 1.0, tempOverride?.remainingMinutes ?: -1,
+                        tempOverride?.portionAmountU ?: 0.0, tempOverride?.pendingExtraU ?: 0.0,
+                        (tempOverride?.presetName ?: "").replace(";", ","),
                         vroegeStijging?.bevestigd ?: false, vroegeStijging?.usedThisEpisode ?: false,
                         vroegeStijging?.rampFrac ?: 0.0, vroegeStijging?.reentryActive ?: false,
                         vroegeStijging?.recentSensorNoise ?: false,
@@ -870,9 +895,10 @@ private fun csvHeader(sep: String): String = listOf(
     "activity_active", "activity_insulin_pct", "activity_target_adjust",
     // ── DOSEERRUIMTE ──
     "iob_headroom",
-    // ── TEMP OVERRIDE (11/09/2026) ──
+    // ── TEMP OVERRIDE (11/09/2026, +portion/+pending/+preset 24/09/2026) ──
     "temp_override_active", "temp_override_target_pct", "temp_override_effective_mul",
-    "temp_override_remaining_min",
+    "temp_override_remaining_min", "temp_override_portion_u", "temp_override_pending_extra_u",
+    "temp_override_preset_name",
     // ── VROEGE STIJGING DIAGNOSTIEK (18/09/2026) ──
     "vroege_stijging_bevestigd", "vroege_stijging_used_this_episode", "vroege_stijging_ramp_frac",
     "reentry_active", "recent_sensor_noise", "accel_declining_from_rise_peak", "curve_confirmt_omslag",
@@ -897,6 +923,9 @@ private fun FCLCycleLogEntity.toCsvLine(
     tempOverrideTargetPct: Int,
     tempOverrideEffectiveMul: Double,
     tempOverrideRemainingMinutes: Int,
+    tempOverridePortionAmountU: Double,
+    tempOverridePendingExtraU: Double,
+    tempOverridePresetName: String,
     vroegeStijgingBevestigd: Boolean,
     vroegeStijgingUsedThisEpisode: Boolean,
     vroegeStijgingRampFrac: Double,
@@ -1004,9 +1033,10 @@ private fun FCLCycleLogEntity.toCsvLine(
         bool(delivery.activityActive), d2(delivery.activityInsulinPct), d2(delivery.activityTargetAdjust),
         // ── DOSEERRUIMTE ──
         d2(doseerruimte.iobHeadroom),
-        // ── TEMP OVERRIDE (11/09/2026) ──
+        // ── TEMP OVERRIDE (11/09/2026, +portion/+pending/+preset 24/09/2026) ──
         bool(tempOverrideActive), tempOverrideTargetPct, d2(tempOverrideEffectiveMul),
-        tempOverrideRemainingMinutes,
+        tempOverrideRemainingMinutes, d2(tempOverridePortionAmountU), d2(tempOverridePendingExtraU),
+        tempOverridePresetName,
         // ── VROEGE STIJGING DIAGNOSTIEK (18/09/2026) ──
         bool(vroegeStijgingBevestigd), bool(vroegeStijgingUsedThisEpisode), d2(vroegeStijgingRampFrac),
         bool(reentryActive), bool(recentSensorNoise), bool(accelDecliningFromRisePeak),

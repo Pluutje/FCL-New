@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -34,12 +35,15 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Divider
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -59,6 +63,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -85,6 +90,7 @@ import app.aaps.core.ui.compose.icons.IcTbrLow
 import app.aaps.core.ui.compose.metroViewModel
 import app.aaps.core.ui.compose.navigation.LocalPluginNavigationRequest
 import app.aaps.core.ui.compose.navigation.NavigationRequest
+import app.aaps.plugins.aps.openAPSFCL.vnext.FclTempOverrideSettings
 import app.aaps.plugins.aps.openAPSFCL.vnext.database.FCLCycleLogRepository
 import app.aaps.ui.compose.manageSheet.ManageSheetHost
 import app.aaps.ui.compose.manageSheet.ManageViewModel
@@ -106,6 +112,7 @@ import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.roundToInt
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.debounce
 
 /**
@@ -214,7 +221,26 @@ fun FclOverviewScreen(
     // navigatie naar het volledige FCLvNext-instellingenscherm meer. Zo blijft de functie van de
     // knop duidelijk (en niet, per ongeluk, een snelkoppeling naar andere FCLvNext-instellingen),
     // ook wanneer hier later meer override-functies/preset-knoppen bijkomen.
+    //
+    // 24/09/2026 (de gebruiker, ronde 2) — de knop toont nu zelf de actieve status ("Override" /
+    // "Actief", andere kleur) en opent bij een klik ÉÉN van twee sheets: niet actief -> de
+    // bestaande bewerk/start-sheet (showOverrideSheet, ongewijzigd), WEL actief ->
+    // showOverrideStatusSheet met voortgang/portie-lijst/Stop/Pauze i.p.v. de bewerk-UI, zodat een
+    // per-ongeluk-tik tijdens een lopende override niet meteen de sliders opent.
     var showOverrideSheet by remember { mutableStateOf(false) }
+    var showOverrideStatusSheet by remember { mutableStateOf(false) }
+    var overrideStatus by remember { mutableStateOf(FclTempOverrideSettings.status(ctx, System.currentTimeMillis())) }
+    // 24/09/2026 (de gebruiker, ronde 3) — toont de naam van het preset i.p.v. het generieke
+    // "Actief" wanneer de lopende override via een preset is gestart (null bij een handmatige
+    // start met de percentage/duur-sliders zelf, dan blijft "Actief" de fallback hieronder).
+    var overridePresetName by remember { mutableStateOf(FclTempOverrideSettings.activePresetName(ctx)) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            overrideStatus = FclTempOverrideSettings.status(ctx, System.currentTimeMillis())
+            overridePresetName = FclTempOverrideSettings.activePresetName(ctx)
+            delay(15_000L)
+        }
+    }
 
     // 22/09/2026 (de gebruiker) — popup met de laatste 20 doseringen, geopend door op de
     // laatste-dosis-tekst (trailingText van de "IOB / basaal"-kaart hieronder) te tikken. Zie
@@ -505,7 +531,11 @@ fun FclOverviewScreen(
             ActionButton(
                 modifier = Modifier.weight(1f),
                 label = "Override",
-                onClick = { showOverrideSheet = true }
+                subtitle = if (overrideStatus.active) (overridePresetName ?: "Actief") else null,
+                active = overrideStatus.active,
+                onClick = {
+                    if (overrideStatus.active) showOverrideStatusSheet = true else showOverrideSheet = true
+                }
             )
             ActionButton(
                 modifier = Modifier.weight(1f),
@@ -520,7 +550,23 @@ fun FclOverviewScreen(
         }
     }
     if (showOverrideSheet) {
-        OverrideBottomSheet(onDismiss = { showOverrideSheet = false })
+        OverrideBottomSheet(
+            onDismiss = {
+                showOverrideSheet = false
+                // 24/09/2026 (ronde 3) — meteen verversen bij sluiten, anders toont de knop tot
+                // 15s lang nog de oude status na het starten/stoppen van een override hierbinnen.
+                overrideStatus = FclTempOverrideSettings.status(ctx, System.currentTimeMillis())
+                overridePresetName = FclTempOverrideSettings.activePresetName(ctx)
+            }
+        )
+    }
+    if (showOverrideStatusSheet) {
+        OverrideStatusBottomSheet(
+            ctx = ctx,
+            dateUtil = dateUtil,
+            onDismiss = { showOverrideStatusSheet = false },
+            onStatusChanged = { overrideStatus = it }
+        )
     }
     if (showDoseHistory) {
         DoseHistoryDialog(
@@ -544,8 +590,152 @@ fun FclOverviewScreen(
 private fun OverrideBottomSheet(onDismiss: () -> Unit) {
     val sheetState = rememberModalBottomSheetState()
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
-        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        // 24/09/2026 (de gebruiker) — verticalScroll + imePadding toegevoegd: de presets-editor
+        // (naam/percentage/duur/extra-insuline/porties) maakt deze sheet lang genoeg om samen met
+        // een opengeklapt toetsenbord van het scherm af te vallen. Zonder scroll kon de gebruiker
+        // dan niet meer bij de velden of de Opslaan-knop onder de tekstinvoer komen.
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .imePadding()
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+        ) {
             TempOverrideCard(startExpanded = true)
+        }
+    }
+}
+
+/**
+ * Status-sheet voor een ACTIEVE override (24/09/2026, ronde 2, de gebruiker) — geopend door op de
+ * "Override"-knop te tikken terwijl er al iets loopt. Toont, in tegenstelling tot
+ * [OverrideBottomSheet] (die de volledige bewerk-UI met sliders toont), alleen een duidelijk
+ * overzicht: welk preset/percentage actief is, hoever de override is (voortgangsbalk + resterende
+ * tijd), welke porties al zijn gegeven en welke nog komen (met kloktijd), plus Stop- en
+ * Pauze/Hervat-knoppen. Ververst elke 5 seconden zolang de sheet open staat; sluit zichzelf als de
+ * override intussen is afgelopen (auto-expire) of gestopt.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun OverrideStatusBottomSheet(
+    ctx: Context,
+    dateUtil: DateUtil,
+    onDismiss: () -> Unit,
+    onStatusChanged: (FclTempOverrideSettings.Status) -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState()
+    var status by remember { mutableStateOf(FclTempOverrideSettings.status(ctx, System.currentTimeMillis())) }
+    var portions by remember { mutableStateOf(FclTempOverrideSettings.activePortionsSnapshot(ctx)) }
+    var paused by remember { mutableStateOf(FclTempOverrideSettings.isPaused(ctx)) }
+    val presetName = remember { FclTempOverrideSettings.activePresetName(ctx) }
+    val extraStartMs = remember { FclTempOverrideSettings.activeExtraStartMs(ctx) }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            val now = System.currentTimeMillis()
+            status = FclTempOverrideSettings.status(ctx, now)
+            portions = FclTempOverrideSettings.activePortionsSnapshot(ctx)
+            paused = FclTempOverrideSettings.isPaused(ctx)
+            onStatusChanged(status)
+            if (!status.active) {
+                onDismiss()
+                break
+            }
+            delay(5_000L)
+        }
+    }
+
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .imePadding()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                if (presetName != null) "Tijdelijke aanpassing — $presetName" else "Tijdelijke aanpassing — Actief",
+                style = MaterialTheme.typography.titleMedium
+            )
+
+            val totalDurationMin = FclTempOverrideSettings.getDurationMinutes(ctx)
+            val elapsedFraction = if (totalDurationMin > 0) {
+                (1.0f - status.remainingMinutes.toFloat() / totalDurationMin.toFloat()).coerceIn(0f, 1f)
+            } else 0f
+            LinearProgressIndicator(progress = { elapsedFraction }, modifier = Modifier.fillMaxWidth())
+
+            val uren = status.remainingMinutes / 60
+            val minuten = status.remainingMinutes % 60
+            Text(
+                if (paused) "Gepauzeerd op ${"%.0f".format(status.effectiveMul * 100)}% · nog ${uren}u ${minuten}m"
+                else "${"%.0f".format(status.effectiveMul * 100)}% · nog ${uren}u ${minuten}m",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                color = if (paused) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary
+            )
+
+            if (portions.isNotEmpty()) {
+                Divider(modifier = Modifier.padding(vertical = 4.dp))
+                Text("Porties", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                portions.forEach { p ->
+                    val scheduledText = extraStartMs?.let { start ->
+                        dateUtil.timeString(start + p.delayMinutes * 60_000L)
+                    } ?: "${p.delayMinutes}min"
+                    // 24/09/2026 (ronde 3 vervolg, retry+erosie): geen apart delivered-veld meer —
+                    // status volgt nu uit remainingU t.o.v. het oorspronkelijke amountU. Bij een
+                    // gedeeltelijke aflevering (retry-restant, of al gedeeltelijk geërodeerd) wordt
+                    // dat expliciet getoond i.p.v. alleen "gegeven"/"gepland".
+                    val fullyDone = kotlin.math.abs(p.remainingU) < 0.005
+                    val untouched = kotlin.math.abs(p.remainingU - p.amountU) < 0.005
+                    val (statusText, statusColor) = when {
+                        fullyDone -> "✓ gegeven" to MaterialTheme.colorScheme.primary
+                        untouched -> "⏳ gepland" to MaterialTheme.colorScheme.onSurfaceVariant
+                        else -> "◐ nog ${"%+.2f".format(p.remainingU)} E" to MaterialTheme.colorScheme.tertiary
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            "${"%+.2f".format(p.amountU)} E om $scheduledText",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            statusText,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = statusColor
+                        )
+                    }
+                }
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = {
+                        val now = System.currentTimeMillis()
+                        if (paused) FclTempOverrideSettings.resume(ctx, now) else FclTempOverrideSettings.pause(ctx, now)
+                        paused = FclTempOverrideSettings.isPaused(ctx)
+                        status = FclTempOverrideSettings.status(ctx, now)
+                        onStatusChanged(status)
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(if (paused) "Hervat" else "Pauze")
+                }
+                Button(
+                    onClick = {
+                        FclTempOverrideSettings.stop(ctx)
+                        val now = System.currentTimeMillis()
+                        status = FclTempOverrideSettings.status(ctx, now)
+                        onStatusChanged(status)
+                        onDismiss()
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Stop")
+                }
+            }
         }
     }
 }
@@ -824,6 +1014,13 @@ private val DashOnSurface = Color(0xFFE7ECFF)
 private val DashOnSurfaceMuted = Color(0xFFB7C2E6)
 private val DashGlowColor = Color(0xFF4C6AA6)
 
+// 24/09/2026 (de gebruiker, ronde 2) — aparte, iets afwijkende kleur voor de "Override"-knop
+// wanneer een tijdelijke aanpassing actief is: een gedempte paars-tint (i.p.v. het gebruikelijke
+// blauwgrijs van DashChipBackground) zodat in één oogopslag te zien is dat er iets loopt, zonder
+// zo fel te worden dat het niet meer bij de rest van dit donkere dashboard past.
+private val DashOverrideActiveBackground = Color(0xFF4A3B78)
+private val DashOverrideActiveBorder = Color(0xFF8C7AE6)
+
 // 21/09/2026 (de gebruiker) — minder fluorescerende BG-grafiekkleuren voor dit scherm dan de
 // pure theme-kleuren (bgInRange 0x00FF00, bgHigh 0xFFFF00 in donkere modus) — "knalt minder van
 // het scherm". Alleen dit scherm; het standaard AAPS-hoofdscherm (GraphsSection.kt) gebruikt nog
@@ -841,22 +1038,48 @@ private val DashBgHighColor = Color(0xFFB9AF46)
  * zodat langere labels niet afwijken van de andere drie) en dezelfde afgeronde pil-vorm
  * als de kaarten/pillen hierboven (i.p.v. Material3's standaard knopvorm) voor een iets
  * moderner, met de rest van dit scherm consistent uiterlijk.
+ *
+ * 24/09/2026 (de gebruiker, ronde 2) — optionele [subtitle] (tweede, kleinere regel — gebruikt
+ * door de "Override"-knop om "Actief" te tonen) en [active] (schakelt de container-/randkleur om
+ * naar een iets afwijkende paars-tint, zie DashOverrideActiveBackground/-Border hieronder) zodat
+ * in één oogopslag te zien is dat er een tijdelijke aanpassing loopt.
  */
 @Composable
-private fun ActionButton(modifier: Modifier = Modifier, label: String, onClick: () -> Unit) {
+private fun ActionButton(
+    modifier: Modifier = Modifier,
+    label: String,
+    subtitle: String? = null,
+    active: Boolean = false,
+    onClick: () -> Unit
+) {
     Button(
         onClick = onClick,
         modifier = modifier.height(56.dp),
         shape = RoundedCornerShape(18.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = DashChipBackground, contentColor = DashOnSurface),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (active) DashOverrideActiveBackground else DashChipBackground,
+            contentColor = DashOnSurface
+        ),
+        border = if (active) BorderStroke(1.dp, DashOverrideActiveBorder) else null,
         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
     ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
-            textAlign = TextAlign.Center,
-            maxLines = 2
-        )
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                textAlign = TextAlign.Center,
+                maxLines = 1
+            )
+            if (subtitle != null) {
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.labelSmall,
+                    textAlign = TextAlign.Center,
+                    color = DashOverrideActiveBorder,
+                    maxLines = 1
+                )
+            }
+        }
     }
 }
 

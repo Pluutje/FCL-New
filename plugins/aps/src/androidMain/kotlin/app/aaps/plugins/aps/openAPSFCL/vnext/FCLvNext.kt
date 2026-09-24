@@ -621,6 +621,18 @@ private var tempOverrideTargetPctThisCycle: Int = 100
 private var tempOverrideEffectiveMulThisCycle: Double = 1.0
 private var tempOverrideRemainingMinThisCycle: Int = -1
 
+// 24/09/2026 (de gebruiker, ronde 3; HERZIEN ronde 3-vervolg — retry+erosie)
+// — +portion/+pending/+preset: gezet bij het PRESET PORTIE-AFREKENING-blok
+// verderop, vlak vóór "🔟 Execution" (ná de portie-aanvraag, de afbouw-check
+// én de latere veiligheidsstappen — DOWN-TREND GATE, absolute cap,
+// Herstart-blokkade — zie kdoc daar), dus pas dan bekend hoeveel er dit
+// cyclus ECHT is afgeleverd. logTempOverride() zelf staat daarom ook bij
+// dat blok, niet meer hier bovenaan samen met de andere 4 velden — puur een
+// logging-detail, geen gedragswijziging.
+private var tempOverridePortionAmountThisCycle: Double = 0.0
+private var tempOverridePendingExtraThisCycle: Double = 0.0
+private var tempOverridePresetNameThisCycle: String? = null
+
 // ─────────────────────────────────────────────
 // ⚡ FAST-CARB micro ramp (earlier IOB without commit)
 // thresholds tuned from your CSV sample
@@ -1799,6 +1811,26 @@ private var prevStaleOmslagCandidateAt: DateTime? = null
 private val persistCtrl = PersistentCorrectionController(
     cooldownCycles = 3,        // of 2, jij kiest
     maxBolusFraction = 0.30
+)
+
+// 24/09/2026 (de gebruiker — analyse 23/9 appeltaart+ribeye-dag): tweede,
+// APARTE instantie voor een LANGZAME MAAR AANHOUDENDE STIJGING die het
+// normale systeem al met commitFraction op (bijna) het maximum probeert te
+// bedienen, maar toch maar een kleine daadwerkelijke dosis geeft — zoals
+// 's nachts na een vet/eiwitrijke maaltijd (23:19-02:19, Bg 9-11,2 mmol
+// bleef hangen terwijl commitFraction 0,7-1,0 was). Bewust een TWEEDE
+// instantie i.p.v. persistCtrl hierboven hergebruiken: persistCtrl is
+// getuned voor het vlak/dalend scenario en VERVANGT finalDose volledig
+// (incl. hem op 0 zetten tijdens cooldown) — dat is veilig bij een vlakke
+// Bg, maar zou een nog dóórgaande stijging voor cooldownCycles cycli
+// blokkeren. Deze instantie wordt daarom NOOIT gebruikt om iets te
+// vervangen/nullen (zie sustainedRiseResult.fired-check verderop, vlak
+// vóór de downtrend-gate) — alleen om additief bovenop de al berekende
+// commandedDose te tellen. maxBolusFraction lager (0,20 i.p.v. 0,30): een
+// aanvulling, geen zelfstandige correctie.
+private val sustainedRiseCtrl = PersistentCorrectionController(
+    cooldownCycles = 3,
+    maxBolusFraction = 0.20
 )
 
 
@@ -5172,7 +5204,7 @@ class FCLvNext(
     // "vNN-jjjj-mm-dd-uumm" (aanmaaktijdstip, geen omschrijving; die van
     // eerdere versies raakten toch achter). Alleen als het écht relevant
     // is een korte omschrijving toevoegen.
-    private val FCL_CODE_VERSION = "v127-2026-09-22-1122"
+    private val FCL_CODE_VERSION = "v129-2026-09-24-1610"
 
     // ── Restart-detectie (16/07/2026) ─────────────────────────────────
     // true op precies de EERSTE cyclus na het (her)starten van dit class-
@@ -6648,6 +6680,9 @@ class FCLvNext(
         tempOverrideTargetPctThisCycle = 100
         tempOverrideEffectiveMulThisCycle = 1.0
         tempOverrideRemainingMinThisCycle = -1
+        tempOverridePortionAmountThisCycle = 0.0
+        tempOverridePendingExtraThisCycle = 0.0
+        tempOverridePresetNameThisCycle = null
 
         // Snapshot vóór deze cyclus' eigen commit-beslissing: de post-big-
         // commit afterload-laag (zie hieronder) moet reageren op de VORIGE
@@ -10549,13 +10584,12 @@ class FCLvNext(
         // Diagnostiek (11/09/2026): eindstand van de Temp Override deze
         // cyclus, zelfde eigen-tabel-patroon als post_hypo_brake_log/
         // explosive_rise_log hierboven (zie kdoc bij TempOverrideLogEntity).
-        cycleLogRepository.logTempOverride(
-            active = tempOverrideActiveThisCycle,
-            targetPct = tempOverrideTargetPctThisCycle,
-            effectiveMul = tempOverrideEffectiveMulThisCycle,
-            remainingMinutes = tempOverrideRemainingMinThisCycle,
-            timestampMs = now.millis
-        )
+        // 24/09/2026 (ronde 3): de daadwerkelijke logTempOverride()-aanroep
+        // staat NIET meer hier — verplaatst naar het PRESET EXTRA-INSULINE
+        // PORTIES-blok verderop in deze cyclus, want pas daar is bekend of
+        // er deze cyclus een portie is afgeleverd (portionAmountU) en hoeveel
+        // er nog klaarstaat (pendingExtraU). De 4 bestaande *ThisCycle-velden
+        // hierboven blijven ongewijzigd tot die latere aanroep bewaard.
 
         // Diagnostiek (18/09/2026): eindstand van vroegeStijgingBevestigd/de
         // v120-ramp deze cyclus, zelfde eigen-tabel-patroon als post_hypo_brake_log/
@@ -11054,6 +11088,140 @@ class FCLvNext(
 
 
         // ─────────────────────────────────────────────
+        // 🔺 SUSTAINED-RISE TOP-UP (24/09/2026, de gebruiker)
+        // ─────────────────────────────────────────────
+        // Bewust HIER (na alle commit-/peak-/afterload-logica hierboven, vóór
+        // de downtrend-gate en de absolute veiligheidscap hieronder) — zo
+        // erven een eventuele extra dosis ALLE resterende vangrails, en telt
+        // hij niet mee tegen een downtrend-lock (die hoort een echte daling
+        // altijd te mogen winnen). commitFraction is pas hier bekend (zie
+        // hierboven), dus dit kon niet bij persistCtrl/sustainedRiseCtrl
+        // samen met de gewone maaltijd-detectie vroeg in de cyclus.
+        //
+        // Backtest (24/09/2026, volledige logweek + Rick's log,
+        // FCL-V9-Werkversie): met de eis commandedDose<=0,60U deze cyclus
+        // (dus het normale systeem zelf al zwak, ondanks commitFraction op
+        // het maximum) vuurt dit 2x tijdens de onderbediende nacht van 23/9
+        // (~0,6U totaal, Bg bleef daarna nog 20-40 min gewoon licht
+        // doorstijgen — geen teken van een dosis vlak vóór een omslag) en 0x
+        // in Rick's volledige week (geen enkel vals-positief signaal). Een
+        // ruimere versie zonder de commandedDose-eis vuurde wél een paar
+        // keer verkeerd: exact op een piek-omslag, of bovenop een toch al
+        // grote dosis van het normale systeem — die momenten filtert deze
+        // eis er expliciet uit.
+        val sustainedRiseCandidate =
+            ctx.deltaToTarget >= 3.0 &&
+                ctx.slope > config.persistentSlopeAbs && ctx.slope <= 1.3 &&
+                kotlin.math.abs(ctx.acceleration) <= 0.25 &&
+                ctx.consistency >= 0.45 &&
+                commitFraction >= 0.95 &&
+                commandedDose <= 0.60
+
+        val sustainedRiseResult = sustainedRiseCtrl.tickAndMaybeFire(
+            tsMillis = now.millis,
+            bgMmol = ctx.input.bgNow,
+            targetMmol = ctx.input.targetBG,
+            deltaToTarget = ctx.deltaToTarget,
+            slope = ctx.slope,
+            accel = ctx.acceleration,
+            consistency = ctx.consistency,
+            iob = ctx.input.currentIOB,
+            iobRatio = ctx.iobRatio,
+            maxBolusU = config.maxSMB,
+
+            minDeltaToTarget = 3.0,
+            stableSlopeAbs = -999.0,   // schakelt het ingebouwde vlak/dalend-pad uit; alleen overrideCandidate telt
+            stableAccelAbs = 0.25,
+            minConsistency = 0.45,
+            confirmCycles = 2,
+
+            minDoseU = 0.05,
+            iobRatioHardStop = 0.45,
+            overrideCandidate = sustainedRiseCandidate
+        )
+
+        // Puur additief — NOOIT commandedDose vervangen of op 0 zetten (dat
+        // is precies wat persistCtrl hierboven wél doet, en wat hier een
+        // nog doorgaande stijging juist zou blokkeren tijdens de cooldown).
+        if (sustainedRiseResult.fired) {
+            val before = commandedDose
+            commandedDose += sustainedRiseResult.doseU
+            status.append(
+                "SUSTAINED-RISE TOP-UP: +${"%.2f".format(sustainedRiseResult.doseU)}U " +
+                    "(${"%.2f".format(before)}→${"%.2f".format(commandedDose)}U) " +
+                    "delta=${"%.2f".format(ctx.deltaToTarget)} slope=${"%.2f".format(ctx.slope)} " +
+                    "commitFraction=${"%.2f".format(commitFraction)}\n"
+            )
+        }
+
+        // ─────────────────────────────────────────────
+        // 🎯 PRESET EXTRA-INSULINE PORTIES (24/09/2026, de gebruiker; HERZIEN
+        // 24/09/2026 ronde 3 — retry + erosie i.p.v. one-shot)
+        // ─────────────────────────────────────────────
+        // Zie kdoc bij FclTempOverrideSettings.kt (PRESETS-blok) voor de volledige
+        // aanleiding en afbouwregels. Bewust op dezelfde late plek als de
+        // SUSTAINED-RISE TOP-UP hierboven — "boven op de standaard gedoseerde
+        // waarde, dus na alle correcties", letterlijk de eis van de gebruiker.
+        // Werkt zowel positief (extra dosis) als negatief (dosis-aftrek, bijv.
+        // vóór het sporten): coerceAtLeast(0.0) voorkomt alleen een negatieve
+        // TOTALE dosis, de verlaging zelf wordt nooit tegengehouden.
+        //
+        // RONDE 3: dit is nu alleen de AANVRAAG, niet meer de afrekening. De
+        // oude one-shot-versie telde de portie precies 1x op en markeerde 'm
+        // meteen als afgeleverd — een negatieve portie zonder iets om van af
+        // te trekken (coerceAtLeast(0.0) hieronder) of een positieve portie
+        // die de DOWN-TREND GATE/absolute cap/Herstart-blokkade verderop nog
+        // (deels) terugzette, verdween zo onherroepelijk. Nu wordt pas vlak
+        // vóór "🔟 Execution" — ná al die latere veiligheidsstappen — via een
+        // diff van commandedDose afgerekend hoeveel er dit cyclus ECHT is
+        // blijven staan (portionRequestBeforeDose/-Amount/-Id hieronder, zie
+        // de afrekening verderop in deze functie); het restant blijft
+        // gewoon open en wordt een volgende cyclus opnieuw (en, richting het
+        // einde van de override, getaperd via erodeOutstandingPortions())
+        // aangevraagd.
+        val portionRequest = FclTempOverrideSettings.nextDuePortionRequest(context, now.millis)
+        var portionRequestBeforeDose = 0.0
+        var portionRequestAmount = 0.0
+        var portionRequestId: Int? = null
+        if (portionRequest != null) {
+            portionRequestBeforeDose = commandedDose
+            portionRequestAmount = portionRequest.requestU
+            portionRequestId = portionRequest.portionId
+            commandedDose = (commandedDose + portionRequestAmount).coerceAtLeast(0.0)
+            status.append(
+                "PRESET PORTIE AANVRAAG: ${"%+.2f".format(portionRequestAmount)}U " +
+                    "(${"%.2f".format(portionRequestBeforeDose)}→${"%.2f".format(commandedDose)}U, " +
+                    "portionId=$portionRequestId)\n"
+            )
+        }
+
+        // Afbouw: UITSLUITEND bij een POSITIEF actief schema (zie kdoc in
+        // FclTempOverrideSettings.kt) — een negatief schema of een
+        // percentage<100% loopt altijd gewoon af zoals ingesteld, zonder
+        // enige slimme afbouw. Dit is een bewuste, 2x met de gebruiker
+        // gecorrigeerde asymmetrie (24/09/2026).
+        if (FclTempOverrideSettings.isActiveRaw(context) &&
+            FclTempOverrideSettings.isActiveExtraPositive(context) &&
+            FclTempOverrideSettings.hasPendingPortions(context)
+        ) {
+            val shouldTaperPortions = FclTempOverrideSettings.recordCommitAndShouldTaper(context, commitFraction, now.millis)
+            if (shouldTaperPortions) {
+                FclTempOverrideSettings.cancelRemainingPortions(context)
+                status.append(
+                    "PRESET PORTIE AFBOUW: commitFraction bleef ${FclTempOverrideSettings.LOW_COMMIT_TAPER_MINUTES}min " +
+                        "onder ${"%.2f".format(FclTempOverrideSettings.LOW_COMMIT_THRESHOLD)} " +
+                        "→ resterende porties vervallen\n"
+                )
+            }
+        }
+
+        // Diagnostiek + logTempOverride(): RONDE 3 — de daadwerkelijke
+        // afrekening (dus ook de portionAmountU die gelogd wordt) kan pas na
+        // de DOWN-TREND GATE/absolute cap/Herstart-blokkade hieronder bekend
+        // zijn (zie kdoc bij de portie-aanvraag hierboven), dus dit blok
+        // staat nu vlak vóór "🔟 Execution", NA die stappen — zie daar.
+
+        // ─────────────────────────────────────────────
         // 🧯 DOWN-TREND FINAL DOSE GATE (last line of defense)
         if (downGate.locked && mealSignal.state == MealState.NONE) {
             status.append("DOWNTREND LOCKED (no-meal): commandedDose forced to 0\n")
@@ -11118,6 +11286,61 @@ class FCLvNext(
             )
             commandedDose = 0.0
         }
+
+        // ─────────────────────────────────────────────
+        // 🎯 PRESET PORTIE-AFREKENING (24/09/2026, ronde 3 — retry + erosie)
+        // ─────────────────────────────────────────────
+        // Vlak vóór Execution, ná ALLE resterende mutaties op commandedDose
+        // (DOWN-TREND GATE, absolute veiligheidscap, Herstart-blokkade
+        // hierboven) is pas bekend hoeveel van de aangevraagde portie DIT
+        // cyclus daadwerkelijk is blijven staan. Niets tussen de aanvraag
+        // hierboven en dit punt verhoogt commandedDose ooit — alleen deze 3
+        // stappen kunnen 'm verlagen/nulzetten — dus het verschil
+        // (commandedDose - portionRequestBeforeDose) is exact het effect van
+        // de portie, begrensd tot [0, aangevraagd] (positief) resp.
+        // [aangevraagd, 0] (negatief) zodat een onafhankelijke reden voor een
+        // lagere/hogere commandedDose nooit een groter (of kleiner, verkeerd
+        // teken) effect aan de portie toegeschreven krijgt dan hij zelf heeft
+        // aangevraagd. Het restant (aangevraagd - geleverd) blijft gewoon in
+        // remainingU staan en wordt een volgende cyclus opnieuw (en, richting
+        // het einde van de override, getaperd) aangevraagd — zie kdoc bij
+        // FclTempOverrideSettings.nextDuePortionRequest()/erodeOutstandingPortions().
+        var portionDeliveredThisCycle = 0.0
+        val settlePortionId = portionRequestId
+        if (settlePortionId != null) {
+            val rawDelta = commandedDose - portionRequestBeforeDose
+            portionDeliveredThisCycle = if (portionRequestAmount >= 0.0)
+                rawDelta.coerceIn(0.0, portionRequestAmount)
+            else
+                rawDelta.coerceIn(portionRequestAmount, 0.0)
+            FclTempOverrideSettings.applyPortionDelivery(context, settlePortionId, portionDeliveredThisCycle)
+            if (kotlin.math.abs(portionDeliveredThisCycle - portionRequestAmount) > 0.001) {
+                status.append(
+                    "PRESET PORTIE AFREKENING: ${"%.2f".format(portionDeliveredThisCycle)}U geleverd van " +
+                        "${"%+.2f".format(portionRequestAmount)}U aangevraagd — restant blijft openstaan\n"
+                )
+            }
+        }
+
+        // Diagnostiek (11/09/2026, +portion/+pending/+preset 24/09/2026, herzien
+        // ronde 3): pas hier — ná de afrekening hierboven — is bekend hoeveel
+        // er DIT cyclus écht is afgeleverd, dus de logTempOverride()-aanroep
+        // staat bewust hier en niet bij de andere 4 *ThisCycle-velden
+        // verderop in deze functie — zie kdoc bij die velden.
+        tempOverridePortionAmountThisCycle = portionDeliveredThisCycle
+        tempOverridePendingExtraThisCycle = FclTempOverrideSettings.activePortionsSnapshot(context)
+            .sumOf { it.remainingU }
+        tempOverridePresetNameThisCycle = FclTempOverrideSettings.activePresetName(context)
+        cycleLogRepository.logTempOverride(
+            active = tempOverrideActiveThisCycle,
+            targetPct = tempOverrideTargetPctThisCycle,
+            effectiveMul = tempOverrideEffectiveMulThisCycle,
+            remainingMinutes = tempOverrideRemainingMinThisCycle,
+            timestampMs = now.millis,
+            portionAmountU = tempOverridePortionAmountThisCycle,
+            pendingExtraU = tempOverridePendingExtraThisCycle,
+            presetName = tempOverridePresetNameThisCycle
+        )
 
         // ─────────────────────────────────────────────
         // 🔟 Execution: SMB / hybride bolus + basaal

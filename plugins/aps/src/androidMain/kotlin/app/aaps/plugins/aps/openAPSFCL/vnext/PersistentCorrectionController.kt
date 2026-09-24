@@ -52,7 +52,20 @@ class PersistentCorrectionController(
         confirmCycles: Int = 2,
 
         minDoseU: Double = 0.05,
-        iobRatioHardStop: Double = 0.55
+        iobRatioHardStop: Double = 0.55,
+
+        // 24/09/2026 (de gebruiker — analyse 23/9 appeltaart+ribeye-dag):
+        // extern al berekende, ALTERNATIEVE candidacy-voorwaarde, OR'd bij de
+        // ingebouwde vlak/dalend-definitie hieronder. Bestaat zodat een tweede
+        // instantie van deze klasse (zie sustainedRiseCtrl in FCLvNext.kt) ook
+        // een AANHOUDENDE STIJGING als "persistent hoog" kan herkennen — iets
+        // wat de ingebouwde slopeOk-eis (slope <= stableSlopeAbs) bewust nooit
+        // toelaat, want die is voor het vlak/dalend scenario getuned. De
+        // dosis-/escalatieformule hieronder blijft ONGEWIJZIGD voor beide
+        // paden — alleen de candidacy-poort wordt verruimd. Default false:
+        // bestaande aanroepen (de "vlak/dalend"-persistCtrl) blijven exact
+        // hetzelfde gedrag vertonen.
+        overrideCandidate: Boolean = false
     ): Result {
 
         // Cooldown countdown
@@ -77,10 +90,11 @@ class PersistentCorrectionController(
         // - geen sterke versnelling (accel stabiel)
         val slopeOk = slope <= stableSlopeAbs && slope >= -0.60
         val persistentCandidate =
-            deltaToTarget >= minDeltaToTarget &&
+            (deltaToTarget >= minDeltaToTarget &&
                 slopeOk &&
                 abs(accel) <= stableAccelAbs &&
-                consistency >= minConsistency
+                consistency >= minConsistency) ||
+                overrideCandidate
 
         // 21/09/2026 (de gebruiker) — teller bij een afwijkende cyclus niet meer
         // hard naar 0 laten springen, maar met 1 laten zakken. Aanleiding: een
