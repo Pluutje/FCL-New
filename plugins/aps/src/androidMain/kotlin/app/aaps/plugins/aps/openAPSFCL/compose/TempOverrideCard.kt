@@ -168,14 +168,63 @@ fun TempOverrideCard(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
+                    // ── Presets (24/09/2026, ronde 4 — de gebruiker) ────────────────
+                    // Bewust BOVENAAN, vóór de handmatige sectie: dit is het pad dat de
+                    // meeste keren wordt gebruikt, dus je hoeft er niet eerst langs de
+                    // sliders voor te scrollen. Bediening (de knop) staat vóór de
+                    // details (chevron): de percentage/duur/portie-info per preset
+                    // staat, net als de algemene uitleg onderaan, standaard ingeklapt —
+                    // na een paar keer gebruiken kijk je daar toch niet meer naar.
                     Text(
-                        "Schaalt elke dosis tijdelijk op of af — bijvoorbeeld voorzichtiger " +
-                            "als je een hypo ziet aankomen en die gaat wegeten, of juist iets " +
-                            "sterker bij een uitgebreide maaltijd. Blijft de hele duur op het " +
-                            "ingestelde percentage en loopt in het laatste kwart vloeiend terug " +
-                            "naar normaal (100%). Laat je vaste instellingen ongemoeid.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        "Presets",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    var presets by remember { mutableStateOf(FclTempOverrideSettings.getPresets(ctx)) }
+                    var editingPresetId by remember { mutableStateOf<Int?>(null) }
+
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        presets.forEach { preset ->
+                            PresetRow(
+                                preset = preset,
+                                isEditing = editingPresetId == preset.id,
+                                onApply = {
+                                    FclTempOverrideSettings.startWithPreset(ctx, preset, System.currentTimeMillis())
+                                    tempOverrideStatus = FclTempOverrideSettings.status(ctx, System.currentTimeMillis())
+                                    tempOverridePct = FclTempOverrideSettings.getPercentage(ctx)
+                                    tempOverrideDurationMin = FclTempOverrideSettings.getDurationMinutes(ctx)
+                                },
+                                onEditToggle = {
+                                    editingPresetId = if (editingPresetId == preset.id) null else preset.id
+                                },
+                                onSave = { updated ->
+                                    FclTempOverrideSettings.savePreset(ctx, updated)
+                                    presets = FclTempOverrideSettings.getPresets(ctx)
+                                    editingPresetId = null
+                                },
+                                onCancelEdit = { editingPresetId = null }
+                            )
+                        }
+                    }
+
+                    ExplanationToggle(
+                        "Combineert percentage+duur met 1-3 porties extra insuline (elk met een " +
+                            "eigen hoeveelheid — mag negatief zijn, bijv. vóór het sporten — en " +
+                            "een eigen vertraging), boven op de normale dosis. Tik op een preset " +
+                            "om 'm direct te starten; tik op ✏️ om aan te passen."
+                    )
+
+                    Divider(modifier = Modifier.padding(vertical = 4.dp))
+
+                    // ── Handmatige aanpassing (24/09/2026, ronde 4 — de gebruiker) ──
+                    // Zelfde volgorde-principe als bij Presets hierboven: eerst de
+                    // bediening (sliders + Start/Stop), de uitleg pas daaronder en
+                    // standaard ingeklapt.
+                    Text(
+                        "Handmatige aanpassing",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
                     )
 
                     if (tempOverrideStatus.active) {
@@ -249,53 +298,13 @@ fun TempOverrideCard(
                         }
                     }
 
-                    // ── Presets (24/09/2026, de gebruiker) ──────────────────────────
-                    // Zie kdoc bij FclTempOverrideSettings.PRESETS-blok voor de volledige
-                    // aanleiding/afbouwregels. Elke preset combineert percentage+duur (zelfde
-                    // mechanisme als hierboven) met 1-3 porties, elk met een EIGEN hoeveelheid
-                    // en vertraging. De activatieknop toont de naam van het preset en is
-                    // uitgeschakeld zolang er niets is ingesteld.
-                    Divider(modifier = Modifier.padding(vertical = 4.dp))
-                    Text(
-                        "Presets",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold
+                    ExplanationToggle(
+                        "Schaalt elke dosis tijdelijk op of af — bijvoorbeeld voorzichtiger " +
+                            "als je een hypo ziet aankomen en die gaat wegeten, of juist iets " +
+                            "sterker bij een uitgebreide maaltijd. Blijft de hele duur op het " +
+                            "ingestelde percentage en loopt in het laatste kwart vloeiend terug " +
+                            "naar normaal (100%). Laat je vaste instellingen ongemoeid."
                     )
-                    Text(
-                        "Combineert percentage+duur met 1-3 porties extra insuline (elk met een " +
-                            "eigen hoeveelheid — mag negatief zijn, bijv. vóór het sporten — en " +
-                            "een eigen vertraging), boven op de normale dosis. Tik op een preset " +
-                            "om 'm direct te starten; tik op ✏️ om aan te passen.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    var presets by remember { mutableStateOf(FclTempOverrideSettings.getPresets(ctx)) }
-                    var editingPresetId by remember { mutableStateOf<Int?>(null) }
-
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        presets.forEach { preset ->
-                            PresetRow(
-                                preset = preset,
-                                isEditing = editingPresetId == preset.id,
-                                onApply = {
-                                    FclTempOverrideSettings.startWithPreset(ctx, preset, System.currentTimeMillis())
-                                    tempOverrideStatus = FclTempOverrideSettings.status(ctx, System.currentTimeMillis())
-                                    tempOverridePct = FclTempOverrideSettings.getPercentage(ctx)
-                                    tempOverrideDurationMin = FclTempOverrideSettings.getDurationMinutes(ctx)
-                                },
-                                onEditToggle = {
-                                    editingPresetId = if (editingPresetId == preset.id) null else preset.id
-                                },
-                                onSave = { updated ->
-                                    FclTempOverrideSettings.savePreset(ctx, updated)
-                                    presets = FclTempOverrideSettings.getPresets(ctx)
-                                    editingPresetId = null
-                                },
-                                onCancelEdit = { editingPresetId = null }
-                            )
-                        }
-                    }
                 }
             }
         }
@@ -344,6 +353,46 @@ private fun StepperSlider(
 }
 
 /**
+ * Inklapbaar "Uitleg"-blokje (24/09/2026, ronde 4, de gebruiker: "als je die 3 keer gelezen hebt
+ * lees je dat ook niet meer") — standaard dicht, een tik op de chevron+label klapt de tekst open.
+ * Gedeeld door zowel de Presets- als de Handmatige-aanpassing-sectie in TempOverrideCard, zodat
+ * beide dezelfde "bediening eerst, uitleg op aanvraag"-opmaak hebben.
+ */
+@Composable
+private fun ExplanationToggle(text: String, modifier: Modifier = Modifier) {
+    var expanded by remember { mutableStateOf(false) }
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = { expanded = !expanded })
+        ) {
+            Icon(
+                imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp)
+            )
+            Text(
+                "Uitleg",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        AnimatedVisibility(visible = expanded, enter = expandVertically(), exit = shrinkVertically()) {
+            Text(
+                text,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+        }
+    }
+}
+
+/**
  * Kleine 3-koloms infotabel (Portie/Hoeveelheid/Vertraging) onder een preset-knop, plus
  * percentage+duur erboven — vervangt de eerdere eenregelige samenvatting (24/09/2026, ronde 2:
  * de gebruiker wil dit als "kleine tabel" i.p.v. platte tekst).
@@ -385,10 +434,12 @@ private fun PresetInfoTable(preset: OverridePreset, modifier: Modifier = Modifie
 
 /**
  * Eén preset-rij: gesloten toont een activatieknop (naam van het preset als label, uitgeschakeld
- * zolang FclTempOverrideSettings.isConfigured() false is) + potlood (bewerken), met de infotabel
- * eronder. Open (isEditing) toont een inline editor met een LOKALE draft (pas bij "Opslaan" via
- * onSave teruggeschreven) zodat tikken op een ander preset of annuleren de wijzigingen niet per
- * ongeluk bewaart.
+ * zolang FclTempOverrideSettings.isConfigured() false is) + chevron (details tonen/verbergen) +
+ * potlood (bewerken). De infotabel staat, net als de algemene uitleg bij ExplanationToggle,
+ * standaard ingeklapt achter de chevron (24/09/2026, ronde 4, de gebruiker) — pas als je 'm
+ * openklikt zie je percentage/duur/porties. Open (isEditing) toont een inline editor met een
+ * LOKALE draft (pas bij "Opslaan" via onSave teruggeschreven) zodat tikken op een ander preset of
+ * annuleren de wijzigingen niet per ongeluk bewaart.
  */
 @Composable
 private fun PresetRow(
@@ -401,10 +452,11 @@ private fun PresetRow(
     modifier: Modifier = Modifier
 ) {
     val configured = FclTempOverrideSettings.isConfigured(preset)
+    var detailsExpanded by remember(preset.id) { mutableStateOf(false) }
     Column(modifier = modifier.fillMaxWidth()) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
             Button(
@@ -414,23 +466,33 @@ private fun PresetRow(
             ) {
                 Text(preset.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
             }
-            IconButton(onClick = onEditToggle) {
+            IconButton(onClick = { detailsExpanded = !detailsExpanded }, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    imageVector = if (detailsExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = if (detailsExpanded) "Details verbergen" else "Details tonen",
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            IconButton(onClick = onEditToggle, modifier = Modifier.size(32.dp)) {
                 Icon(
                     imageVector = if (isEditing) Icons.Default.Close else Icons.Default.Edit,
-                    contentDescription = if (isEditing) "Bewerken sluiten" else "Preset bewerken"
+                    contentDescription = if (isEditing) "Bewerken sluiten" else "Preset bewerken",
+                    modifier = Modifier.size(18.dp)
                 )
             }
         }
 
-        if (configured) {
-            PresetInfoTable(preset, modifier = Modifier.padding(top = 2.dp, start = 4.dp))
-        } else {
-            Text(
-                "Niet ingesteld",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 2.dp, start = 4.dp)
-            )
+        AnimatedVisibility(visible = detailsExpanded, enter = expandVertically(), exit = shrinkVertically()) {
+            if (configured) {
+                PresetInfoTable(preset, modifier = Modifier.padding(top = 2.dp, start = 4.dp))
+            } else {
+                Text(
+                    "Niet ingesteld",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 2.dp, start = 4.dp)
+                )
+            }
         }
 
         AnimatedVisibility(visible = isEditing, enter = expandVertically(), exit = shrinkVertically()) {
