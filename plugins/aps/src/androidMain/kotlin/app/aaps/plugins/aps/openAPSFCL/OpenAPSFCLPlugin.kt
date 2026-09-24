@@ -250,6 +250,7 @@ open class OpenAPSFCLPlugin @Inject constructor(
                     iobCobCalculator = iobCobCalculator,
                     dateUtil = dateUtil,
                     cycleLogRepository = cycleLogRepository,
+                    profileUtil = profileUtil,
                     onOpenFclSettings = { navigationRequest(NavigationRequest.Element(ElementType.FCL_OPEN_SCREEN)) }
                 )
             }

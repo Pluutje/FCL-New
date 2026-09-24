@@ -3,6 +3,9 @@ package app.aaps.plugins.aps.openAPSFCL.compose
 import android.content.Context
 import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,19 +16,24 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -68,6 +76,7 @@ import app.aaps.core.interfaces.overview.graph.OverviewDataCache
 import app.aaps.core.interfaces.overview.graph.SeriesType
 import app.aaps.core.interfaces.plugin.ActivePlugin
 import app.aaps.core.interfaces.profile.ProfileFunction
+import app.aaps.core.interfaces.profile.ProfileUtil
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.ui.CoreUiStrings
 import app.aaps.core.ui.compose.NumberInputRow
@@ -76,6 +85,7 @@ import app.aaps.core.ui.compose.icons.IcTbrLow
 import app.aaps.core.ui.compose.metroViewModel
 import app.aaps.core.ui.compose.navigation.LocalPluginNavigationRequest
 import app.aaps.core.ui.compose.navigation.NavigationRequest
+import app.aaps.plugins.aps.openAPSFCL.vnext.database.FCLCycleLogRepository
 import app.aaps.ui.compose.manageSheet.ManageSheetHost
 import app.aaps.ui.compose.manageSheet.ManageViewModel
 import app.aaps.ui.compose.overview.BgInfoSection
@@ -163,7 +173,8 @@ fun FclOverviewScreen(
     profileFunction: ProfileFunction,
     iobCobCalculator: IobCobCalculator,
     dateUtil: DateUtil,
-    cycleLogRepository: app.aaps.plugins.aps.openAPSFCL.vnext.database.FCLCycleLogRepository,
+    cycleLogRepository: FCLCycleLogRepository,
+    profileUtil: ProfileUtil,
     onOpenFclSettings: () -> Unit
 ) {
     val graphViewModel: GraphViewModel = viewModel(
@@ -175,7 +186,7 @@ fun FclOverviewScreen(
         factory = remember {
             viewModelFactory {
                 initializer {
-                    FclOverviewViewModel(persistenceLayer, activePlugin, profileFunction, iobCobCalculator, dateUtil, cycleLogRepository)
+                    FclOverviewViewModel(persistenceLayer, activePlugin, profileFunction, iobCobCalculator, dateUtil, cycleLogRepository, profileUtil)
                 }
             }
         }
@@ -205,10 +216,17 @@ fun FclOverviewScreen(
     // ook wanneer hier later meer override-functies/preset-knoppen bijkomen.
     var showOverrideSheet by remember { mutableStateOf(false) }
 
+    // 22/09/2026 (de gebruiker) — popup met de laatste 20 doseringen, geopend door op de
+    // laatste-dosis-tekst (trailingText van de "IOB / basaal"-kaart hieronder) te tikken. Zie
+    // kdoc bij `FclOverviewViewModel.loadDoseHistory()`.
+    var showDoseHistory by remember { mutableStateOf(false) }
+
     val bgInfo by overviewDataCache.bgInfoFlow.collectAsState()
     val profile by overviewDataCache.profileFlow.collectAsState()
     val targetLine by overviewDataCache.targetLineFlow.collectAsState()
     val deviceState by deviceViewModel.deviceState.collectAsState()
+    val doseHistory by deviceViewModel.doseHistory.collectAsState()
+    val doseHistoryLoading by deviceViewModel.doseHistoryLoading.collectAsState()
 
     // Eigen SharedPreferences-bestand voor grafiekhoogtes (zelfde bestand als de preview-toggle
     // in FCLComposeContent.kt, andere keys) — blijft bewaard tussen sessies, geen nieuwe
@@ -453,7 +471,13 @@ fun FclOverviewScreen(
             // 21/09/2026 (de gebruiker) — laatste dosis (ongeacht bron) + tijdstip + compacte
             // bron-tag, zelfde stijl als "Target: 5.4" op de BG-kaart (zie GraphCard's
             // trailingText: bodyMedium/DashOnSurfaceMuted).
-            trailingText = lastDoseText(deviceState.lastDoseUnits, deviceState.lastDoseTimestamp, deviceState.lastDoseSource, dateUtil)
+            trailingText = lastDoseText(deviceState.lastDoseUnits, deviceState.lastDoseTimestamp, deviceState.lastDoseSource, dateUtil),
+            // 22/09/2026 (de gebruiker) — klik op deze tekst opent een popup met de laatste 20
+            // doseringen (zie loadDoseHistory() in FclOverviewViewModel.kt). Alleen klikbaar als
+            // er al iets te tonen is (anders is er ook niets te laden).
+            onTrailingClick = if (deviceState.lastDoseTimestamp != null) {
+                { deviceViewModel.loadDoseHistory(); showDoseHistory = true }
+            } else null
         ) { graphModifier ->
             SecondaryGraphCompose(
                 viewModel = graphViewModel,
@@ -498,6 +522,15 @@ fun FclOverviewScreen(
     if (showOverrideSheet) {
         OverrideBottomSheet(onDismiss = { showOverrideSheet = false })
     }
+    if (showDoseHistory) {
+        DoseHistoryDialog(
+            entries = doseHistory,
+            loading = doseHistoryLoading,
+            profileUtil = profileUtil,
+            dateUtil = dateUtil,
+            onDismiss = { showDoseHistory = false }
+        )
+    }
 }
 
 /**
@@ -533,6 +566,10 @@ private fun GraphCard(
     // uitgelijnd (gebruikt door de BG-kaart voor "Target: 5.4"). Beide groter dan het oude
     // kleine grafieklabel, zodat ze goed leesbaar zijn.
     trailingText: String? = null,
+    // 22/09/2026 (de gebruiker) — optioneel: maakt trailingText klikbaar (gebruikt door de
+    // "IOB / basaal"-kaart voor de "laatste doseringen"-popup). Null = niet klikbaar, zoals
+    // voorheen (bijv. de BG-kaart se "Target: 5.4").
+    onTrailingClick: (() -> Unit)? = null,
     graph: @Composable (Modifier) -> Unit
 ) {
     var editingHeight by remember { mutableStateOf(false) }
@@ -543,7 +580,35 @@ private fun GraphCard(
             // i.p.v. DashOnSurface): stond eerst even fel/groot als "BG"/"IOB / basaal" zelf, wat te
             // dominant oogde voor bijkomende info als "Target: 5.4" of de laatste bolus.
             if (trailingText != null) {
-                Text(text = trailingText, style = MaterialTheme.typography.bodyMedium, color = DashOnSurfaceMuted)
+                // 22/09/2026 (de gebruiker) — geen onderstreping (vond de gebruiker niet mooi),
+                // maar een hele subtiele "verhoogde knop" (raised button) voor de klikbare
+                // trailingText (laatste dosis): een klein pilletje met een minimale schaduw en
+                // een dun randje in de bestaande chip-kleuren, laag contrast — bewust veel
+                // stiller dan de echte knoppen (ActionButton/Button) elders op dit scherm. Een
+                // niet-klikbare trailingText (bijv. "Target: 5.4" op de BG-kaart) blijft platte
+                // tekst zonder deze styling.
+                val trailingShape = RoundedCornerShape(8.dp)
+                val trailingModifier = if (onTrailingClick != null) {
+                    // 22/09/2026 (de gebruiker) — iets meer knop-gevoel dan de eerste versie:
+                    // vulling is een gedempte versie van de bestaande pil-kleur (DashChipBackground,
+                    // dezelfde als Sensor/Pomp/Profiel) i.p.v. de kaartkleur zelf, zodat hij net
+                    // zichtbaar lichter is dan de achtergrond — maar nog steeds duidelijk stiller
+                    // dan de volle pillen en de echte knoppen onderaan het scherm.
+                    Modifier
+                        .shadow(elevation = 1.dp, shape = trailingShape, clip = false)
+                        .background(color = DashChipBackground.copy(alpha = 0.55f), shape = trailingShape)
+                        .border(width = 0.5.dp, color = DashChipBorder.copy(alpha = 0.5f), shape = trailingShape)
+                        .clickable(onClick = onTrailingClick)
+                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                } else {
+                    Modifier
+                }
+                Text(
+                    text = trailingText,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = DashOnSurfaceMuted,
+                    modifier = trailingModifier
+                )
             }
         }
         Box(modifier = Modifier.fillMaxWidth()) {
@@ -850,14 +915,121 @@ private fun targetValueText(value: Double?): String {
 private fun lastDoseText(units: Double?, timestamp: Long?, source: LastDoseSource?, dateUtil: DateUtil): String? {
     if (units == null || timestamp == null) return null
     val unitsText = roundTo(units, 2).toString()
-    val sourceTag = when (source) {
-        LastDoseSource.FCLVNEXT -> "fcl:"
-        LastDoseSource.AAPS     -> "aaps:"
-        LastDoseSource.MANUAL   -> "manueel:"
-        LastDoseSource.COMBINED -> "som:"
-        null                    -> "?"
-    }
-    return "$sourceTag $unitsText E · ${dateUtil.timeString(timestamp)}"
+    return "${doseSourceTag(source)} $unitsText E · ${dateUtil.timeString(timestamp)}"
+}
+
+/**
+ * Gedeeld met [DoseHistoryDialog] hieronder, zodat de bron-tag overal hetzelfde is.
+ * 23/09/2026 (de gebruiker) — "manueel:" ingekort naar "man:" zodat alle vier tags ongeveer even
+ * lang zijn en netjes uitlijnen in de tabel.
+ */
+private fun doseSourceTag(source: LastDoseSource?): String = when (source) {
+    LastDoseSource.FCLVNEXT -> "fcl:"
+    LastDoseSource.AAPS     -> "aaps:"
+    LastDoseSource.MANUAL   -> "man:"
+    LastDoseSource.COMBINED -> "som:"
+    null                    -> "?"
+}
+
+/**
+ * 22/09/2026 (de gebruiker) — popup met de laatste [DoseHistoryEntry]'s (zie
+ * `FclOverviewViewModel.loadDoseHistory()`), geopend door op de laatste-dosis-tekst te tikken.
+ * Tabel met drie kolommen: tijd, dosis (+ bron-tag), en de op dat moment geldende Bg — null-Bg
+ * (geen meting dicht genoeg in de tijd) toont een "-" i.p.v. een verwarrende 0-waarde.
+ */
+@Composable
+private fun DoseHistoryDialog(
+    entries: List<DoseHistoryEntry>,
+    loading: Boolean,
+    profileUtil: ProfileUtil,
+    dateUtil: DateUtil,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Laatste doseringen") },
+        text = {
+            when {
+                loading         -> {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text("Bezig met laden…")
+                    }
+                }
+
+                entries.isEmpty() -> Text("Nog geen doseringen gevonden.")
+                else              -> {
+                    // 23/09/2026 (de gebruiker) — verdere verfijning na eerdere feedback:
+                    // (1) "Bg (mmol/L)" past niet meer op 1 regel in de kolomkop op een smal scherm,
+                    //     dus de eenheid staat nu op een kleinere tweede regel onder "Bg" i.p.v.
+                    //     ernaast;
+                    // (2) vaste kolombreedtes i.p.v. gewichten die de volle dialoogbreedte opvullen —
+                    //     dat gaf een grote lege ruimte tussen de dosis- en de Bg-kolom. Vaste
+                    //     breedtes houden de tabel compact, ook op een veel kleiner scherm;
+                    // (3) de dosis toont nu altijd 2 decimalen ("%.2f", i.p.v. de vorige
+                    //     roundTo(...).toString() die een decimaal kon laten vallen, bijv. "0.1"),
+                    //     zodat de kolom altijd even breed is en de "E" er steeds recht onder staat.
+                    val timeWidth = 50.dp
+                    val tagWidth = 44.dp
+                    val valueWidth = 38.dp
+                    val bgWidth = 56.dp
+                    val dosisToBgGap = 8.dp
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Row(verticalAlignment = Alignment.Bottom) {
+                            Text("Tijd", style = MaterialTheme.typography.labelMedium, color = DashOnSurfaceMuted, modifier = Modifier.width(timeWidth))
+                            Text(
+                                "Dosis",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = DashOnSurfaceMuted,
+                                modifier = Modifier.width(tagWidth + valueWidth + 16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(dosisToBgGap))
+                            Column(horizontalAlignment = Alignment.End, modifier = Modifier.width(bgWidth)) {
+                                Text("Bg", style = MaterialTheme.typography.labelMedium, color = DashOnSurfaceMuted)
+                                Text(profileUtil.unitLabel, style = MaterialTheme.typography.labelSmall, color = DashOnSurfaceMuted)
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        LazyColumn(modifier = Modifier.heightIn(max = 360.dp)) {
+                            items(entries) { entry ->
+                                Row(modifier = Modifier.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        dateUtil.timeString(entry.timestampMs),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        modifier = Modifier.width(timeWidth)
+                                    )
+                                    Text(
+                                        doseSourceTag(entry.source),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        modifier = Modifier.width(tagWidth)
+                                    )
+                                    Text(
+                                        "%.2f".format(entry.units),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        textAlign = TextAlign.End,
+                                        modifier = Modifier.width(valueWidth)
+                                    )
+                                    Text(" E", style = MaterialTheme.typography.bodyMedium)
+                                    Spacer(modifier = Modifier.width(dosisToBgGap))
+                                    Text(
+                                        entry.bgMgdl?.let { profileUtil.fromMgdlToStringInUnits(it) } ?: "-",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        modifier = Modifier.width(bgWidth),
+                                        textAlign = TextAlign.End,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onDismiss) { Text("Sluiten") }
+        }
+    )
 }
 
 private fun roundTo(value: Double, decimals: Int): Double {

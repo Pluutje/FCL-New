@@ -790,6 +790,9 @@ class FCLCycleLogRepository @Inject constructor(
 
     /** Zie kdoc bij [FCLCycleLogDao.getLastDelivery]. */
     suspend fun getLastDelivery() = dao.getLastDelivery()
+
+    /** Zie kdoc bij [FCLCycleLogDao.getRecentDeliveries]. */
+    suspend fun getRecentDeliveries(limit: Int) = dao.getRecentDeliveries(limit)
 }
 
 // ── CSV header — exact gelijk aan FCLvNextCsvLogger ────────────────────── FCL

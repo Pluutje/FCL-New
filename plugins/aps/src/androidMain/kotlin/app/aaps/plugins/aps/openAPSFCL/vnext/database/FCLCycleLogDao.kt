@@ -36,4 +36,10 @@ interface FCLCycleLogDao {
     // de laatste echte dosis.
     @Query("SELECT * FROM fcl_cycle_log WHERE deliveredTotal > 0 ORDER BY timestampMs DESC LIMIT 1")
     suspend fun getLastDelivery(): FCLCycleLogEntity?
+
+    // 22/09/2026 (de gebruiker) — zelfde WHERE deliveredTotal > 0-filter als getLastDelivery(),
+    // maar dan de laatste N i.p.v. alleen de nieuwste — voor het "laatste doseringen"-lijstje
+    // (popup bij een klik op de laatste-dosis-tekst) op FclOverviewScreen.kt.
+    @Query("SELECT * FROM fcl_cycle_log WHERE deliveredTotal > 0 ORDER BY timestampMs DESC LIMIT :limit")
+    suspend fun getRecentDeliveries(limit: Int): List<FCLCycleLogEntity>
 }

@@ -3,11 +3,15 @@ package app.aaps.plugins.aps.openAPSFCL.compose
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.aaps.core.data.model.BS
+import app.aaps.core.data.model.GV
+import app.aaps.core.data.model.GlucoseUnit
 import app.aaps.core.data.model.TE
+import app.aaps.core.interfaces.concurrent.withLock
 import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.core.interfaces.iob.IobCobCalculator
 import app.aaps.core.interfaces.plugin.ActivePlugin
 import app.aaps.core.interfaces.profile.ProfileFunction
+import app.aaps.core.interfaces.profile.ProfileUtil
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.plugins.aps.openAPSFCL.vnext.database.FCLCycleLogRepository
 import kotlin.math.abs
@@ -42,7 +46,12 @@ class FclOverviewViewModel(
     private val profileFunction: ProfileFunction,
     private val iobCobCalculator: IobCobCalculator,
     private val dateUtil: DateUtil,
-    private val cycleLogRepository: FCLCycleLogRepository
+    private val cycleLogRepository: FCLCycleLogRepository,
+    // 22/09/2026 (de gebruiker) — alleen nodig voor loadDoseHistory() hieronder: FCLvNext's eigen
+    // cyclus-log slaat de Bg altijd in mmol/L op (zie BGDataPoint.kt-kdoc), terwijl de AAPS-
+    // bg-reeks (IobCobCalculator.ads) in mg/dl is — profileUtil rekent beide naar dezelfde
+    // eenheid om (mg/dl) zodat elke rij in het lijstje met dezelfde formatter getoond kan worden.
+    private val profileUtil: ProfileUtil
 ) : ViewModel() {
 
     companion object {
@@ -53,10 +62,22 @@ class FclOverviewViewModel(
         /** Zie kdoc bij `refresh()` — hoelang een handmatige bolus nog als "toevallig
          *  samenvallend" (dus optellen) geldt i.p.v. als eigen, latere gebeurtenis. */
         private const val MANUAL_COINCIDENCE_TOLERANCE_MS = 15_000L
+
+        /** Zie kdoc bij `loadDoseHistory()`. */
+        private const val DOSE_HISTORY_LIMIT = 20
+        private const val DOSE_HISTORY_FETCH_MARGIN = 40
+        private const val DOSE_HISTORY_LOOKBACK_MS = 3L * 24 * 60 * 60 * 1000L
+        private const val BG_LOOKUP_MAX_GAP_MS = 10 * 60_000L
     }
 
     private val _deviceState = MutableStateFlow(FclDeviceState())
     val deviceState: StateFlow<FclDeviceState> = _deviceState.asStateFlow()
+
+    private val _doseHistory = MutableStateFlow<List<DoseHistoryEntry>>(emptyList())
+    val doseHistory: StateFlow<List<DoseHistoryEntry>> = _doseHistory.asStateFlow()
+
+    private val _doseHistoryLoading = MutableStateFlow(false)
+    val doseHistoryLoading: StateFlow<Boolean> = _doseHistoryLoading.asStateFlow()
 
     init {
         refresh()
@@ -182,6 +203,111 @@ class FclOverviewViewModel(
             )
         }
     }
+
+    /**
+     * 22/09/2026 (de gebruiker) — "laatste doseringen"-lijstje: klik op de laatste-dosis-tekst
+     * op FclOverviewScreen.kt opent een popup met de laatste [DOSE_HISTORY_LIMIT] doses, elk met
+     * bron-tag en de op dat moment geldende Bg. Bewust NIET meegenomen in refresh() (dat draait
+     * elke 30s, zie LaunchedEffect(now) in FclOverviewScreen.kt) — dit is duidelijk zwaarder werk
+     * (meerdere queries + een BG-zoekactie per rij) en wordt daarom alleen op aanvraag geladen,
+     * als de popup daadwerkelijk geopend wordt.
+     *
+     * Zelfde samenvoeg-regels als de "laatste dosis"-tekst (zie refresh() hierboven), maar dan
+     * over de hele lijst i.p.v. alleen het allerlaatste moment:
+     *  - Een FCLCycleLogEntity-rij (deliveredTotal>0) en de AAPS-SMB-rij die uit diezelfde
+     *    opsplitsing ontstaat (binnen FCL_AAPS_SAME_EVENT_TOLERANCE_MS) tellen als ÉÉN regel —
+     *    FCLvNext's totaal, niet het AAPS-deelbedrag. Een AAPS-SMB-rij die daar NIET binnen valt
+     *    is een eigen, losse gebeurtenis (bijv. een cyclus later gequeued, zie kdoc refresh()).
+     *  - Een handmatige bolus die toevallig binnen MANUAL_COINCIDENCE_TOLERANCE_MS van zo'n
+     *    gebeurtenis valt, wordt ERBIJ OPGETELD (LastDoseSource.COMBINED) i.p.v. als aparte regel
+     *    getoond. Dit gebeurt alleen tussen chronologisch AANGRENZENDE items — een drievoudig
+     *    samenvallen (FCL + AAPS + handmatig, alle drie binnen enkele seconden) is een zo zeldzame
+     *    situatie dat die bewust niet apart behandeld wordt; in dat geval blijven er gewoon twee
+     *    regels staan i.p.v. één.
+     *
+     * Bg-eenheid: FCLCycleLogEntity.glucoseIob.bg staat al in mmol/L (zie BGDataPoint.kt-kdoc),
+     * de AAPS-Bg-reeks (IobCobCalculator.ads) in mg/dl — beide worden hier naar mg/dl herleid
+     * ([DoseHistoryEntry.bgMgdl]) zodat de UI-laag ze allebei met dezelfde
+     * `ProfileUtil.fromMgdlToStringWithUnits()`-aanroep kan tonen, ongeacht de eenheid-instelling
+     * van de gebruiker.
+     */
+    fun loadDoseHistory() {
+        viewModelScope.launch {
+            _doseHistoryLoading.value = true
+            try {
+                val sinceMs = dateUtil.now() - DOSE_HISTORY_LOOKBACK_MS
+                val fclRows = withContext(Dispatchers.IO) {
+                    cycleLogRepository.getRecentDeliveries(DOSE_HISTORY_FETCH_MARGIN)
+                }
+                val boluses = withContext(Dispatchers.IO) {
+                    persistenceLayer.getBolusesFromTime(sinceMs, false)
+                }
+                val smbBoluses = boluses.filter { it.type == BS.Type.SMB }
+                val manualBoluses = boluses.filter { it.type == BS.Type.NORMAL }
+
+                // AAPS-SMB-rijen die al bij een FCL-afgifte horen (zie kdoc hierboven) niet
+                // nogmaals als eigen regel meenemen.
+                val independentSmb = smbBoluses.filterNot { smb ->
+                    fclRows.any { abs(it.timestampMs - smb.timestamp) <= FCL_AAPS_SAME_EVENT_TOLERANCE_MS }
+                }
+
+                val bgReadings = iobCobCalculator.ads.dataLock.withLock {
+                    iobCobCalculator.ads.getBgReadingsDataTableCopy()
+                }
+
+                data class Atomic(val ts: Long, val units: Double, val source: LastDoseSource, val bgMgdl: Double?)
+
+                val fclAtoms = fclRows.map { row ->
+                    Atomic(
+                        ts = row.timestampMs,
+                        units = row.delivery.deliveredTotal,
+                        source = LastDoseSource.FCLVNEXT,
+                        bgMgdl = row.glucoseIob.bg.takeIf { it > 0.0 }
+                            ?.let { profileUtil.fromMmolToUnits(it, GlucoseUnit.MGDL) }
+                    )
+                }
+                val aapsAtoms = independentSmb.map { bs ->
+                    Atomic(bs.timestamp, bs.amount, LastDoseSource.AAPS, nearestBgMgdl(bgReadings, bs.timestamp))
+                }
+                val manualAtoms = manualBoluses.map { bs ->
+                    Atomic(bs.timestamp, bs.amount, LastDoseSource.MANUAL, nearestBgMgdl(bgReadings, bs.timestamp))
+                }
+
+                val sorted = (fclAtoms + aapsAtoms + manualAtoms).sortedByDescending { it.ts }
+                val merged = mutableListOf<Atomic>()
+                var i = 0
+                while (i < sorted.size) {
+                    val current = sorted[i]
+                    val next = sorted.getOrNull(i + 1)
+                    val isManualPair = next != null && (current.source == LastDoseSource.MANUAL) != (next.source == LastDoseSource.MANUAL)
+                    if (next != null && isManualPair && abs(current.ts - next.ts) <= MANUAL_COINCIDENCE_TOLERANCE_MS) {
+                        merged += Atomic(
+                            ts = maxOf(current.ts, next.ts),
+                            units = current.units + next.units,
+                            source = LastDoseSource.COMBINED,
+                            bgMgdl = current.bgMgdl ?: next.bgMgdl
+                        )
+                        i += 2
+                    } else {
+                        merged += current
+                        i += 1
+                    }
+                }
+
+                _doseHistory.value = merged.take(DOSE_HISTORY_LIMIT)
+                    .map { DoseHistoryEntry(it.ts, it.units, it.source, it.bgMgdl) }
+            } finally {
+                _doseHistoryLoading.value = false
+            }
+        }
+    }
+
+    /** Dichtstbijzijnde Bg-meting (mg/dl) binnen [BG_LOOKUP_MAX_GAP_MS] van [targetTs], of null
+     *  als de dichtstbijzijnde meting verder weg ligt dan dat (bijv. sensor was toen niet actief). */
+    private fun nearestBgMgdl(bgReadings: List<GV>, targetTs: Long): Double? {
+        val nearest = bgReadings.minByOrNull { abs(it.timestamp - targetTs) } ?: return null
+        return nearest.value.takeIf { abs(nearest.timestamp - targetTs) <= BG_LOOKUP_MAX_GAP_MS }
+    }
 }
 
 /**
@@ -213,3 +339,17 @@ data class FclDeviceState(
  *  COMBINED (22/09/2026) = een handmatige bolus die toevallig binnen enkele seconden samenviel
  *  met een fcl/aaps-dosis — [FclDeviceState.lastDoseUnits] is dan de SOM van beide. */
 enum class LastDoseSource { FCLVNEXT, AAPS, MANUAL, COMBINED }
+
+/**
+ * 22/09/2026 (de gebruiker) — één regel in het "laatste doseringen"-lijstje (popup bij een klik
+ * op de laatste-dosis-tekst). Zie kdoc bij `FclOverviewViewModel.loadDoseHistory()`.
+ *
+ * @param bgMgdl de op dat moment geldende Bg in mg/dl (altijd mg/dl, ongeacht bron — zie kdoc bij
+ *   `loadDoseHistory()` voor waarom), of null als er geen meting dicht genoeg in de tijd was.
+ */
+data class DoseHistoryEntry(
+    val timestampMs: Long,
+    val units: Double,
+    val source: LastDoseSource,
+    val bgMgdl: Double?
+)
