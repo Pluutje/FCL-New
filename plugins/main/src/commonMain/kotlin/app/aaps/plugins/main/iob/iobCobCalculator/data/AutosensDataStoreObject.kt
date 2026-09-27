@@ -297,31 +297,41 @@ class AutosensDataStoreObject : AutosensDataStore {
         }
         val lastBg = bgReadings[0]
         val newBucketedData = ArrayList<InMemoryGlucoseValue>()
-        var currentTime = bgReadings[0].timestamp
-        val adjustedTime = adjustToReferenceTime(currentTime)
-        // Rounding to the 5-minute reference grid can push adjustedTime a little past the real
-        // newest reading (currentTime) - that is normal, harmless rounding, not "no data yet at
-        // this grid point". Only step back a whole bucket when the overshoot is more than rounding
-        // noise (10/09/2026, analyse gebruiker: an overshoot of only 83ms here threw away one full,
-        // really available 5-minute bucket, so the loop kept running on the previous cycle's data -
-        // seen as "loop runs 5 minutes behind, growing to 10" in the field). IRREGULAR_DATA_SEC is
-        // the existing tolerance this file already uses elsewhere for "still the same reading".
+        // 27/09/2026 (de gebruiker) — mergeconflict fcl-vnext-devc-merge <- dev opgelost door de
+        // dev-kant te nemen. Onze eigen fix hier (10-13/09/2026) loste hetzelfde "lege bucketedData"-
+        // probleem op door currentTime nooit voorbij de echte nieuwste meting te laten lopen, maar
+        // deed dat door de nieuwste bucket soms VAN het 5-min-raster af te trekken (rechtstreeks op
+        // het meetmoment i.p.v. het rastermoment) - dat kan de referenceTime-cache tussen cycli uit
+        // de pas laten lopen (zie de klasse-kdoc hierboven over precies dat risico). De dev-kant
+        // dekt hetzelfde probleem af via de al bestaande firstBucket-logica hieronder (die toen onze
+        // fix geschreven werd nog niet bestond of niet zo gebruikt werd), en houdt daarbij alle
+        // buckets keurig op het raster. Bewust hun oplossing overgenomen i.p.v. de onze, zodat dit
+        // conflict bij een volgende update niet terugkomt.
+        val adjustedTime = adjustToReferenceTime(lastBg.timestamp)
+        // adjustToReferenceTime snaps to the NEAREST grid point, so the newest grid point can land after
+        // the newest reading. Dropping to T-5min for that leaves the newest reading out of the bucketed
+        // data, and everything reading bucketedData[0] - overview, loop, wear - then runs 5 minutes late
+        // for as long as the process lives, because referenceTime survives clone().
         //
-        // BUGFIX (13/09/2026, de gebruiker): a small overshoot is only harmless if we also clamp it
-        // back to the real newest reading here. Leaving currentTime at the inflated adjustedTime
-        // looked safe, but findNewer(currentTime) below has NO tolerance at all: as soon as
-        // currentTime is even 1ms past the newest reading in bgReadings, findNewer returns null on
-        // the very FIRST loop iteration, the loop breaks immediately, and bucketedData ends up an
-        // EMPTY (not null) list - which prepareBucketedData() then reports as "No bucketed data.",
-        // even though bgReadings was full (seen in the field: 408 readings loaded, adjustedTime only
-        // 5 seconds ahead of the newest one, and the whole cycle produced zero buckets). Clamping to
-        // `currentTime` (the real newest reading) instead of `adjustedTime` for a small overshoot
-        // fixes that without losing a bucket the way the "step back a whole bucket" branch above
-        // does - it lines the loop's start up exactly on the reading that is actually there.
-        currentTime =
-            if (adjustedTime - currentTime > T.secs(IRREGULAR_DATA_SEC).msecs()) adjustedTime - T.mins(5).msecs()
-            else minOf(adjustedTime, currentTime)
+        // So keep the grid point and fill it from the newest reading below, the way createBucketedData5min
+        // keeps bgReadings[0]. The limit is IRREGULAR_DATA_SEC, the same "still the same 5 minute slot"
+        // distance isAbout5minData and filledGap use. Up to that much, bucketedData[0] carries a timestamp
+        // ahead of the reading it holds, so actualBg() and isActualBg() read it as up to 30 seconds
+        // fresher than it is. That is the price of not being a full 5 minutes stale.
+        //
+        // A bigger overshoot is a real phase mismatch, not jitter, and still steps back. createBucketedData5min
+        // drops the anchor instead when it is that far out; this path has no such re-anchor.
+        var currentTime =
+            if (adjustedTime - lastBg.timestamp > T.secs(IRREGULAR_DATA_SEC).msecs()) adjustedTime - T.mins(5).msecs()
+            else adjustedTime
         aapsLogger.debug("Adjusted time " + dateUtil.dateAndTimeAndSecondsString(currentTime))
+        // findNewer() and findOlder() cannot bracket a time that is after every reading, so this bucket is
+        // taken from the newest reading and the loop starts one grid point below it.
+        val firstBucket = if (currentTime > lastBg.timestamp) {
+            val bucket = InMemoryGlucoseValue.fromGv(lastBg).copy(timestamp = currentTime)
+            currentTime -= T.mins(5).msecs()
+            bucket
+        } else null
         while (true) {
             // test if current value is older than current time
             val newer = findNewer(currentTime)
@@ -340,6 +350,10 @@ class AutosensDataStoreObject : AutosensDataStore {
             }
             currentTime -= T.mins(5).msecs()
         }
+        // Only when the loop found something to bucket. On its own this bucket would turn a result that
+        // used to be empty into a single point, and GlucoseStatus answers a lone point with delta 0
+        // instead of null, so the APS would run on a made up flat trend instead of declining to run.
+        if (firstBucket != null && newBucketedData.isNotEmpty()) newBucketedData.add(0, firstBucket)
         bucketedData = newBucketedData
     }
 
