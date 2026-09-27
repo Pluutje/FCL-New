@@ -128,7 +128,42 @@ fun OverviewScreen(
             // settings gear, ...), so provide it as the CompositionLocal's value here too.
             content = {
                 CompositionLocalProvider(LocalPluginNavigationRequest provides onNavigate) {
-                    Box(Modifier.fillMaxSize().padding(paddingValues)) { override() }
+                    // 26/09/2026 (de gebruiker) — de override-tak tekende alléén override()
+                    // zelf: de bel/dismiss-UI (NotificationFab/NotificationBottomSheet) zat
+                    // uitsluitend in StandardOverviewScreenContent hieronder, dat nu alleen nog
+                    // de fallback is (zie CrashSafeContent-kdoc). Gevolg: op het alternatieve
+                    // overzichtsscherm was er GEEN manier meer om een notificatie (geen BG,
+                    // pompwaarschuwing, AI-adviseur, update) weg te tikken — de gebruiker moest
+                    // eerst terug naar het oude scherm. notifications/onDismissNotification
+                    // kwamen al binnen als parameter maar werden in deze tak nergens gebruikt.
+                    // Zelfde overlay-patroon als StandardOverviewScreenContent (regels
+                    // 468-497 verderop in dit bestand): FAB rechtsonder, blad bij een tik erop.
+                    var showNotificationSheet by remember { mutableStateOf(false) }
+                    LaunchedEffect(autoShowNotificationSheet) {
+                        if (autoShowNotificationSheet) {
+                            showNotificationSheet = true
+                            onAutoShowConsumed()
+                        }
+                    }
+                    Box(Modifier.fillMaxSize().padding(paddingValues)) {
+                        override()
+                        NotificationFab(
+                            notificationCount = notifications.size,
+                            highestLevel = notifications.minByOrNull { it.level.ordinal }?.level,
+                            onClick = { showNotificationSheet = true },
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(end = 16.dp, bottom = 72.dp + fabBottomOffset)
+                        )
+                    }
+                    if (showNotificationSheet && notifications.isNotEmpty()) {
+                        NotificationBottomSheet(
+                            notifications = notifications,
+                            onDismissSheet = { showNotificationSheet = false },
+                            onDismissNotification = onDismissNotification,
+                            onNotificationActionClick = onNotificationActionClick
+                        )
+                    }
                 }
             },
             fallback = {

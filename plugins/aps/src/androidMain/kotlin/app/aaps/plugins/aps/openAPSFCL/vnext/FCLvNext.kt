@@ -4978,6 +4978,31 @@ private fun updateDowntrendGate(
     val plateauDelta5mAbs = 0.05      // |mmol/5m|
     val plateauConfirmCycles = 2
 
+    // 26/09/2026 (de gebruiker — analyse nacht 20/21-9 en 25/26-9 uit CSV-log 607307):
+    // fallingHard/plateau kijken alleen of de daling/vlakte-drempel triviaal wordt
+    // overschreden, niet hoeveel de Bg nog boven target ligt. Bij een nacht met
+    // aanhoudend hoge Bg (bv. 9-11 mmol/L, ver boven target) sloeg de gate daardoor
+    // meermaals dicht op een ruis-niveau dip in recentSlope/recentDelta5m, terwijl de
+    // Bg zelf nog altijd (ver) boven target stond — dosering werd dan voor niets naar
+    // 0 gezet. Backtest (Python-reimplementatie van deze state machine, 7 nachten uit
+    // log 607307) bevestigt: onder 1.5 mmol/L overschot verandert er NIETS (4 controle-
+    // nachten 19/20, 21/22, 22/23, 24/25-9: exact evenveel genulde cycli als voorheen),
+    // en over de hele week (1944 cycli) zijn er 0 cycli waar deze aanpassing MEER nult
+    // dan voorheen. Van de 78 cycli die nu niet meer onterecht genuld worden, heeft
+    // GEEN ENKELE bg<7.0 mmol/L — het effect blijft dus uitsluitend beperkt tot
+    // cycli die al duidelijk te hoog staan. lockConfirmCycles loopt lineair op tot
+    // +3 (dus tot 5 i.p.v. 2 bevestigde cycli om te LOCKEN) en plateauConfirmCycles
+    // loopt lineair af tot -1 (dus tot 1 i.p.v. 2 bevestigde cycli om te UNLOCKEN),
+    // tussen 1.5 en 4.5 mmol/L overschot: bij een duidelijk te hoge Bg moet de gate
+    // dus meer bewijs hebben om te sluiten, en minder bewijs om weer open te gaan.
+    val downtrendDeltaLow = 1.5
+    val downtrendDeltaHigh = 4.5
+    val downtrendDeltaFactor =
+        ((ctx.deltaToTarget - downtrendDeltaLow) / (downtrendDeltaHigh - downtrendDeltaLow)).coerceIn(0.0, 1.0)
+    val effectiveLockConfirmCycles = lockConfirmCycles + (downtrendDeltaFactor * 3).roundToInt()
+    val effectivePlateauConfirmCycles =
+        (plateauConfirmCycles - (downtrendDeltaFactor * 1).roundToInt()).coerceAtLeast(1)
+
     val reliable = ctx.consistency >= minCons
 
     // We baseren daling op fast lane:
@@ -5008,7 +5033,7 @@ private fun updateDowntrendGate(
         DowntrendLock.OFF -> {
             if (fallingHard) {
                 downtrendConfirm++
-                if (downtrendConfirm >= lockConfirmCycles) {
+                if (downtrendConfirm >= effectiveLockConfirmCycles) {
                     downtrendLock = DowntrendLock.LOCKED
                     plateauConfirm = 0
                     return DowntrendGate(
@@ -5045,7 +5070,7 @@ private fun updateDowntrendGate(
 
             if (plateau) {
                 plateauConfirm++
-                if (plateauConfirm >= plateauConfirmCycles) {
+                if (plateauConfirm >= effectivePlateauConfirmCycles) {
                     downtrendLock = DowntrendLock.OFF
                     downtrendConfirm = 0
                     plateauConfirm = 0
@@ -5204,7 +5229,7 @@ class FCLvNext(
     // "vNN-jjjj-mm-dd-uumm" (aanmaaktijdstip, geen omschrijving; die van
     // eerdere versies raakten toch achter). Alleen als het écht relevant
     // is een korte omschrijving toevoegen.
-    private val FCL_CODE_VERSION = "v129-2026-09-24-1610"
+    private val FCL_CODE_VERSION = "v130-2026-09-26-1009"
 
     // ── Restart-detectie (16/07/2026) ─────────────────────────────────
     // true op precies de EERSTE cyclus na het (her)starten van dit class-

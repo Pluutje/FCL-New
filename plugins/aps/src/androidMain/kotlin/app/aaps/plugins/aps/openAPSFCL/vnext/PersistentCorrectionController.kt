@@ -11,9 +11,9 @@ import kotlin.math.min
  * - Start cooldown voor N cycli (1-2) na elke dosis
  *
  * AANPASSING: stableSlopeAbs verruimd zodat ook langzaam dalende BG
- * die persistent hoog blijft wordt herkend. Plus: naarmate BG langer
- * boven target blijft (persistentCounter groeit), wordt de dosis
- * 20-30% groter — maar nooit meer dan maxBolusFraction * maxBolusU.
+ * die persistent hoog blijft wordt herkend. Plus: naarmate de episode
+ * langer duurt (episodeCycles groeit, zie kdoc bij dat veld), wordt de
+ * dosis 20-30% groter — maar nooit meer dan maxBolusFraction * maxBolusU.
  */
 class PersistentCorrectionController(
     private val cooldownCycles: Int = 2,
@@ -23,6 +23,29 @@ class PersistentCorrectionController(
     private var lastFireTs: Long = 0L
     private var persistentCounter: Int = 0
 
+    // 26/09/2026 (de gebruiker — analyse persist_escalation uit CSV-log 607307):
+    // apart van persistentCounter, die met opzet ruizig is (zakt al bij 1
+    // afwijkende cyclus, zie kdoc bij persistentCounter++ hieronder) en tijdens
+    // elke cooldown bovendien STILSTAAT (de cooldown-early-return hierboven raakt
+    // persistentCounter niet aan). Omdat escalationFactor tot 26/09/2026 direct op
+    // persistentCounter leunde, kwam een aaneengesloten plateau van uren nooit
+    // verder dan ~+10%: elke cooldown bevriest de opbouw, en elke ruis-cyclus erna
+    // zet ~1 cyclus bevestiging weer terug — per saldo netto nauwelijks netto groei.
+    // episodeCycles is de vervanger: hij groeit ELKE cyclus door (óók tijdens
+    // cooldown) zolang persistentCounter minstens confirmCycles is (dus zolang de
+    // episode ECHT bevestigd is/blijft), en reset alleen naar 0 wanneer
+    // persistentCounter volledig tot 0 terugzakt (een echt, meerdere cycli durend
+    // verdwijnen van de candidacy — een oprecht signaal dat het plateau voorbij
+    // is). Bij tussenwaarden (aan het opbouwen of licht aan het afbouwen, maar nog
+    // niet terug op 0) blijft episodeCycles gewoon staan — één ruis-cyclus kan het
+    // dus niet meer terugzetten. Backtest (Python-reimplementatie, volledige
+    // logweek 607307): exact dezelfde vuurmomenten/dosisbasis als voorheen (0
+    // regressies, escalatie gaat nooit omlaag t.o.v. voorheen), en de laagste
+    // Bg waarbij de escalatie hoger uitvalt dan voorheen is 6.7 mmol/L — bij de
+    // 3 controlenachten met bg_mean 5.9-6.2 blijft de escalatie exact zoals
+    // voorheen (1.0x, geen enkele wijziging).
+    private var episodeCycles: Int = 0
+
     data class Result(
         val active: Boolean,
         val fired: Boolean,
@@ -30,7 +53,8 @@ class PersistentCorrectionController(
         val cooldownLeft: Int,
         val reason: String,
         val persistentCounter: Int = 0,
-        val escalationFactor: Double = 1.0
+        val escalationFactor: Double = 1.0,
+        val episodeCycles: Int = 0
     )
 
     fun tickAndMaybeFire(
@@ -68,16 +92,20 @@ class PersistentCorrectionController(
         overrideCandidate: Boolean = false
     ): Result {
 
-        // Cooldown countdown
+        // Cooldown countdown — episodeCycles blijft meegroeien tijdens cooldown
+        // (zie kdoc bij het veld): een plateau dat al bevestigd was, blijft dat
+        // ook tijdens de verplichte 1-2 cycli pauze na elke dosis.
         if (cooldownLeft > 0) {
             cooldownLeft -= 1
+            if (persistentCounter >= confirmCycles) episodeCycles++
             return Result(
                 active = true,
                 fired = false,
                 doseU = 0.0,
                 cooldownLeft = cooldownLeft,
                 reason = "PERSIST: cooldown ($cooldownLeft left)",
-                persistentCounter = persistentCounter
+                persistentCounter = persistentCounter,
+                episodeCycles = episodeCycles
             )
         }
 
@@ -113,6 +141,14 @@ class PersistentCorrectionController(
             persistentCounter = (persistentCounter - 1).coerceAtLeast(0)
         }
 
+        // episodeCycles: zie kdoc bij het veld. Groeit door zolang bevestigd
+        // (>=confirmCycles), reset alleen bij een echte, volledige terugval naar 0.
+        if (persistentCounter >= confirmCycles) {
+            episodeCycles++
+        } else if (persistentCounter == 0) {
+            episodeCycles = 0
+        }
+
         val persistentConfirmed = persistentCounter >= confirmCycles
 
         if (!persistentConfirmed) {
@@ -121,7 +157,9 @@ class PersistentCorrectionController(
                 fired = false,
                 doseU = 0.0,
                 cooldownLeft = 0,
-                reason = "PERSIST: building (${persistentCounter}/${confirmCycles})"
+                reason = "PERSIST: building (${persistentCounter}/${confirmCycles})",
+                persistentCounter = persistentCounter,
+                episodeCycles = episodeCycles
             )
         }
 
@@ -134,12 +172,14 @@ class PersistentCorrectionController(
         val baseRaw = minDoseU + (maxBolusU * maxBolusFraction - minDoseU) *
             (0.65 * deltaFactor + 0.35 * iobFactor)
 
-        // Opschaling: elke 2 extra bevestigde cycli na confirmCycles +10%, max +30%
-        // persistentCounter=2 (net bevestigd) → factor 1.0
-        // persistentCounter=4 → factor 1.10
-        // persistentCounter=6 → factor 1.20
-        // persistentCounter=8+ → factor 1.30 (max)
-        val extraCycles = (persistentCounter - confirmCycles).coerceAtLeast(0)
+        // Opschaling: elke 2 extra cycli van de episode na confirmCycles +10%, max +30%
+        // episodeCycles=2 (net bevestigd) → factor 1.0
+        // episodeCycles=4 → factor 1.10
+        // episodeCycles=6 → factor 1.20
+        // episodeCycles=8+ → factor 1.30 (max)
+        // 26/09/2026 (de gebruiker): was persistentCounter i.p.v. episodeCycles —
+        // zie kdoc bij het veld voor waarom dat de opschaling structureel afkapte.
+        val extraCycles = (episodeCycles - confirmCycles).coerceAtLeast(0)
         val escalationFactor = (1.0 + (extraCycles / 2) * 0.10).coerceAtMost(1.30)
 
         val dose = (baseRaw * escalationFactor)
@@ -147,7 +187,11 @@ class PersistentCorrectionController(
             .coerceAtMost(maxBolusU * maxBolusFraction)
 
         if (dose < minDoseU) {
-            return Result(true, false, 0.0, 0, "PERSIST: computed too small")
+            return Result(
+                active = true, fired = false, doseU = 0.0, cooldownLeft = 0,
+                reason = "PERSIST: computed too small",
+                persistentCounter = persistentCounter, episodeCycles = episodeCycles
+            )
         }
 
         lastFireTs = tsMillis
@@ -161,6 +205,7 @@ class PersistentCorrectionController(
             reason = "PERSIST: fire dose=${"%.2f".format(dose)}U delta=${"%.2f".format(deltaToTarget)} " +
                 "iobR=${"%.2f".format(iobRatio)} esc=${"%+.0f".format((escalationFactor - 1.0) * 100)}%",
             persistentCounter = persistentCounter,
+            episodeCycles = episodeCycles,
             escalationFactor = escalationFactor
         )
     }
