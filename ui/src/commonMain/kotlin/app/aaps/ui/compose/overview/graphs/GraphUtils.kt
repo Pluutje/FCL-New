@@ -5,9 +5,12 @@ import androidx.compose.foundation.shape.GenericShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.aaps.core.interfaces.overview.graph.SeriesType
@@ -330,6 +333,171 @@ class NowLine(
 fun rememberNowLine(minTimestamp: Long, nowTimestamp: Long, color: Color): NowLine {
     return remember(minTimestamp, nowTimestamp, color) {
         NowLine(nowX = timestampToX(nowTimestamp, minTimestamp), color = color)
+    }
+}
+
+/**
+ * 27/09/2026 (de gebruiker) — optionele decoratie: een balk bovenin de BG-grafiek die het tijdvak
+ * van een actieve FCL "Tijdelijke aanpassing" (Override) toont, met de vulling gekoppeld aan de
+ * op dat moment geldende sterkte (1.0 = volle ingestelde kracht, aflopend naar 0.0 tegen het einde
+ * van de duur) plus driehoekjes op de tijdstippen waarop een extra portie is afgeleverd.
+ *
+ * Bewust op pure primitieven (Long/Double/Color) i.p.v. een FCL-specifiek type: dit bestand
+ * (ui-module) hoort geen afhankelijkheid te krijgen van plugins:aps (zie CLAUDE.md over nieuwe
+ * inter-module dependencies) — de aanroeper (FclOverviewScreen.kt) rekent zelf FclTempOverride-
+ * Settings.activeStartMs()/getDurationMinutes()/TAPER_START_FRACTION/portionDeliveryLog() om naar
+ * deze spec. [overrideStrengthFraction] hieronder is daarom een kleine, bewust gedupliceerde kopie
+ * van FclTempOverrideSettings.strengthFraction() — zelfde argument als bij FclTrustedBuild.kt/
+ * TrustedBuild.kt (een paar regels code dupliceren is goedkoper dan een nieuwe module-afhankelijkheid).
+ */
+data class OverrideBandSpec(
+    val startMs: Long,
+    val durationMs: Long,
+    val taperStartFraction: Double,
+    val color: Color,
+    val deliveryTimestampsMs: List<Long> = emptyList()
+)
+
+/**
+ * Zelfde vlak+kwadratisch-aflopende curve als FclTempOverrideSettings.strengthFraction() —
+ * zie kdoc bij [OverrideBandSpec] voor waarom dit hier gedupliceerd is i.p.v. gedeeld.
+ * 1.0 = volle sterkte, 0.0 = neutraal (taper volledig afgerond).
+ */
+private fun overrideStrengthFraction(elapsedMs: Long, durationMs: Long, taperStartFraction: Double): Double {
+    if (durationMs <= 0L) return 0.0
+    val flatEndMs = (durationMs * taperStartFraction).toLong()
+    if (elapsedMs <= flatEndMs) return 1.0
+    val taperDurMs = durationMs - flatEndMs
+    val taperFrac = if (taperDurMs <= 0L) 1.0
+        else ((elapsedMs - flatEndMs).toDouble() / taperDurMs).coerceIn(0.0, 1.0)
+    return (1.0 - taperFrac) * (1.0 - taperFrac)
+}
+
+/**
+ * Draws [OverrideBandSpec] as a Vico decoration: a thin band along the top of the chart's plot
+ * area spanning [startX]..[startX + durationMs in minutes], filled in [SEGMENTS] flat-alpha strips
+ * (rather than a single linear gradient) so the flat-then-quadratic-ease-out strength curve is
+ * followed accurately instead of approximated by a straight fade. Delivery timestamps get a small
+ * triangle hanging from the band's bottom edge, same color.
+ *
+ * Coordinate math mirrors [NowLine] above (same canvasX = layerBounds.left + startPadding +
+ * xSpacing * ((x - minX) / xStep) - scroll transform) — kept in this class rather than factored
+ * out, since [NowLine] is small enough that a shared helper would only add indirection for one
+ * call site each.
+ */
+class OverrideBandDecoration(
+    private val startX: Double,
+    private val durationMs: Long,
+    private val taperStartFraction: Double,
+    private val color: Color,
+    private val deliveryX: List<Double>,
+    private val barHeightPx: Float,
+    private val triangleSizePx: Float
+) : Decoration {
+
+    override fun drawOverLayers(context: CartesianDrawingContext) {
+        with(context) {
+            val xStep = ranges.xStep
+            if (xStep == 0.0 || durationMs <= 0L) return
+
+            fun xToCanvas(x: Double): Float =
+                layerBounds.left +
+                    layerDimensions.startPadding +
+                    layerDimensions.xSpacing * ((x - ranges.minX) / xStep).toFloat() -
+                    scroll
+
+            val endX = startX + durationMs / 60000.0
+            val canvasStart = xToCanvas(startX)
+            val canvasEnd = xToCanvas(endX)
+            // Volledig buiten beeld: niets te tekenen.
+            if (canvasEnd < layerBounds.left || canvasStart > layerBounds.right) return
+
+            val top = layerBounds.top
+            val bottom = top + barHeightPx
+
+            with(mutableDrawScope) {
+                for (i in 0 until SEGMENTS) {
+                    val fracA = i.toDouble() / SEGMENTS
+                    val fracB = (i + 1).toDouble() / SEGMENTS
+                    val segLeft = xToCanvas(startX + fracA * (endX - startX))
+                    val segRight = xToCanvas(startX + fracB * (endX - startX))
+                    if (segRight < layerBounds.left || segLeft > layerBounds.right) continue
+                    val clippedLeft = segLeft.coerceIn(layerBounds.left, layerBounds.right)
+                    val clippedRight = segRight.coerceIn(layerBounds.left, layerBounds.right)
+                    if (clippedRight <= clippedLeft) continue
+                    val elapsedMs = (((fracA + fracB) / 2.0) * durationMs).toLong()
+                    val strength = overrideStrengthFraction(elapsedMs, durationMs, taperStartFraction)
+                    drawRect(
+                        color = color.copy(alpha = (strength * MAX_ALPHA).toFloat().coerceIn(0f, 1f)),
+                        topLeft = Offset(clippedLeft, top),
+                        size = Size(clippedRight - clippedLeft + OVERDRAW_PX, bottom - top)
+                    )
+                }
+
+                for (dx in deliveryX) {
+                    val cx = xToCanvas(dx)
+                    if (cx < layerBounds.left - triangleSizePx || cx > layerBounds.right + triangleSizePx) continue
+                    val path = Path().apply {
+                        moveTo(cx - triangleSizePx / 2f, bottom)
+                        lineTo(cx + triangleSizePx / 2f, bottom)
+                        lineTo(cx, bottom + triangleSizePx)
+                        close()
+                    }
+                    drawPath(path, color = color)
+                }
+            }
+        }
+    }
+
+    override fun equals(other: Any?): Boolean =
+        this === other ||
+            other is OverrideBandDecoration &&
+            startX == other.startX &&
+            durationMs == other.durationMs &&
+            taperStartFraction == other.taperStartFraction &&
+            color == other.color &&
+            deliveryX == other.deliveryX &&
+            barHeightPx == other.barHeightPx &&
+            triangleSizePx == other.triangleSizePx
+
+    override fun hashCode(): Int {
+        var result = startX.hashCode()
+        result = 31 * result + durationMs.hashCode()
+        result = 31 * result + taperStartFraction.hashCode()
+        result = 31 * result + color.hashCode()
+        result = 31 * result + deliveryX.hashCode()
+        return result
+    }
+
+    companion object {
+        private const val SEGMENTS = 24
+        private const val MAX_ALPHA = 0.85
+        private const val OVERDRAW_PX = 0.75f
+    }
+}
+
+/**
+ * Remember an [OverrideBandDecoration] for [spec], or null if [spec] is null (no active override
+ * — the standard AAPS overview never passes a spec here, so it never pays for this at all).
+ * barHeight/triangleSize are fixed dp sizes converted to px once via [LocalDensity], matching how
+ * the rest of this dashboard sizes its small decorative elements.
+ */
+@Composable
+fun rememberOverrideBandDecoration(minTimestamp: Long, spec: OverrideBandSpec?): OverrideBandDecoration? {
+    if (spec == null) return null
+    val density = LocalDensity.current
+    return remember(minTimestamp, spec, density) {
+        val barHeightPx = with(density) { 8.dp.toPx() }
+        val triangleSizePx = with(density) { 10.dp.toPx() }
+        OverrideBandDecoration(
+            startX = timestampToX(spec.startMs, minTimestamp),
+            durationMs = spec.durationMs,
+            taperStartFraction = spec.taperStartFraction,
+            color = spec.color,
+            deliveryX = spec.deliveryTimestampsMs.map { timestampToX(it, minTimestamp) },
+            barHeightPx = barHeightPx,
+            triangleSizePx = triangleSizePx
+        )
     }
 }
 

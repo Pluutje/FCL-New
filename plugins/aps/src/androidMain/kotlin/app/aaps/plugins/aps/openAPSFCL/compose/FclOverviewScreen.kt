@@ -100,6 +100,7 @@ import app.aaps.ui.compose.overview.graphs.GraphViewModel
 import app.aaps.ui.compose.overview.graphs.INTERACTION_GRACE_MS
 import app.aaps.ui.compose.overview.graphs.MIN_GRAPH_ZOOM_MINUTES
 import app.aaps.ui.compose.overview.graphs.NiceScale
+import app.aaps.ui.compose.overview.graphs.OverrideBandSpec
 import app.aaps.ui.compose.overview.graphs.SecondaryGraphCompose
 import app.aaps.ui.compose.overview.graphs.timestampToX
 import com.patrykandpatrick.vico.compose.cartesian.Scroll
@@ -234,10 +235,25 @@ fun FclOverviewScreen(
     // "Actief" wanneer de lopende override via een preset is gestart (null bij een handmatige
     // start met de percentage/duur-sliders zelf, dan blijft "Actief" de fallback hieronder).
     var overridePresetName by remember { mutableStateOf(FclTempOverrideSettings.activePresetName(ctx)) }
+    // 27/09/2026 (de gebruiker) — sterkte-balk op de BG-grafiek: null zolang er geen override
+    // actief is (dan toont BgGraphCompose de decoratie gewoon niet, zie overrideBand-param
+    // daar), anders het tijdvak + de sterkte-curve + de afleveringsmomenten voor de driehoekjes.
+    // Kleur = DashOverrideActiveBorder, dezelfde paarse kleur als de "Override"-knop hieronder
+    // in actieve staat (expliciet gevraagd: "de kleuren mogen gelijk zijn aan de knop").
+    var overrideBandSpec by remember { mutableStateOf<OverrideBandSpec?>(null) }
     LaunchedEffect(Unit) {
         while (true) {
             overrideStatus = FclTempOverrideSettings.status(ctx, System.currentTimeMillis())
             overridePresetName = FclTempOverrideSettings.activePresetName(ctx)
+            overrideBandSpec = FclTempOverrideSettings.activeStartMs(ctx)?.let { startMs ->
+                OverrideBandSpec(
+                    startMs = startMs,
+                    durationMs = FclTempOverrideSettings.getDurationMinutes(ctx) * 60_000L,
+                    taperStartFraction = FclTempOverrideSettings.TAPER_START_FRACTION,
+                    color = DashOverrideActiveBorder,
+                    deliveryTimestampsMs = FclTempOverrideSettings.portionDeliveryLog(ctx).map { it.timestampMs }
+                )
+            }
             delay(15_000L)
         }
     }
@@ -484,6 +500,7 @@ fun FclOverviewScreen(
                 yRangeOverride = ::fclBgYRange,
                 inRangeColorOverride = DashBgInRangeColor,
                 highColorOverride = DashBgHighColor,
+                overrideBand = overrideBandSpec,
                 modifier = graphModifier
             )
         }

@@ -68,8 +68,13 @@ object FclTempOverrideSettings {
     const val MAX_DURATION_MIN = 720
     const val DEFAULT_DURATION_MIN = 120
 
-    /** Op dit punt (fractie van de totale duur) begint de vloeiende terugloop naar 100%. */
-    private const val TAPER_START_FRACTION = 0.75
+    /**
+     * Op dit punt (fractie van de totale duur) begint de vloeiende terugloop naar 100%.
+     * NIET meer private sinds 27/09/2026 (de gebruiker — sterkte-balk op de BG-grafiek): de UI
+     * (FclOverviewScreen.kt) geeft deze waarde door aan BgGraphCompose.kt's OverrideBandSpec, zodat
+     * de balk exact dezelfde taper-vorm volgt als de dosis zelf, i.p.v. een losse aanname.
+     */
+    const val TAPER_START_FRACTION = 0.75
 
     /** Eindstand voor deze cyclus, klaar om zowel in FCLvNext.kt als in de CSV-log gebruikt te worden. */
     data class Status(
@@ -103,6 +108,23 @@ object FclTempOverrideSettings {
      * duur. Overschrijft een eventueel al actieve override — er is maar één
      * override tegelijk, opnieuw starten zet de klok (en het percentage)
      * simpelweg opnieuw.
+     *
+     * BUGFIX (27/09/2026, de gebruiker: "als ik via de handmatige optie op
+     * start klik activeert hij in mijn geval de bovenste preset") — dit was
+     * geen echte activatie van een preset, maar een stale-state-bug: noch
+     * stop() noch de auto-expire in status() ruimt KEY_ACTIVE_PRESET_ID/
+     * KEY_ACTIVE_PORTIONS_JSON/KEY_ACTIVE_EXTRA_START_MS op als een override
+     * eindigt, dus die bleven gewoon staan van de LAATST gebruikte preset.
+     * Zonder deze opruiming las activePresetName() bij een puur handmatige
+     * start alsnog de naam van dat oude preset uit (leek dus alsof die
+     * geactiveerd was), en kon nextDuePortionRequest() zelfs de nog
+     * openstaande porties van dat oude preset-schema blijven afleveren
+     * BOVENOP het net gestarte handmatige percentage. Nu ruimt start() —
+     * net als de "geen porties"-tak in startWithPreset() hieronder al deed —
+     * alle preset/portie-staat zelf expliciet op, zodat een handmatige start
+     * altijd een schone lei is. startWithPreset() roept deze functie als
+     * eerste stap aan en overschrijft KEY_ACTIVE_PRESET_ID e.a. daarna zelf
+     * weer met de juiste waarden — die volgorde blijft dus intact.
      */
     fun start(context: Context, percentage: Int, durationMinutes: Int) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -111,6 +133,14 @@ object FclTempOverrideSettings {
             .putInt(KEY_DURATION_MIN, durationMinutes.coerceIn(MIN_DURATION_MIN, MAX_DURATION_MIN))
             .putBoolean(KEY_ACTIVE, true)
             .putLong(KEY_START_MS, System.currentTimeMillis())
+            .remove(KEY_ACTIVE_PRESET_ID)
+            .remove(KEY_ACTIVE_PORTIONS_JSON)
+            .remove(KEY_ACTIVE_EXTRA_START_MS)
+            .remove(KEY_ACTIVE_EXTRA_IS_POSITIVE)
+            .remove(KEY_LOW_COMMIT_STREAK_START_MS)
+            .remove(KEY_PORTION_DELIVERY_LOG_JSON)
+            .putBoolean(KEY_PAUSED, false)
+            .remove(KEY_PAUSE_STARTED_MS)
             .apply()
     }
 
@@ -152,19 +182,13 @@ object FclTempOverrideSettings {
         }
 
         val targetFrac = targetPct / 100.0
-        val flatEndMs = (durationMs * TAPER_START_FRACTION).toLong()
-
-        val mul = if (elapsedMs <= flatEndMs) {
-            targetFrac
-        } else {
-            val taperDurMs = durationMs - flatEndMs
-            val taperFrac = if (taperDurMs <= 0L) 1.0
-                else ((elapsedMs - flatEndMs).toDouble() / taperDurMs).coerceIn(0.0, 1.0)
-            // Kwadratische ease-out: landt vloeiend (afgeleide 0) op 1.0 bij taperFrac=1.0,
-            // in plaats van abrupt te stoppen.
-            val eased = (1.0 - taperFrac) * (1.0 - taperFrac)
-            1.0 + (targetFrac - 1.0) * eased
-        }
+        // 27/09/2026 (de gebruiker) — de "hoe sterk staat de override op dit moment"-berekening
+        // (eased hieronder) is verplaatst naar de publieke, pure strengthFraction() zodat de UI
+        // (de sterkte-balk op de BG-grafiek, zie GraphUtils.kt's OverrideBandDecoration in de
+        // ui-module) exact dezelfde curve kan tekenen voor WILLEKEURIGE momenten binnen de
+        // override-duur, niet alleen voor "nu". Zelfde formule als voorheen, nu op één plek.
+        val eased = strengthFraction(elapsedMs, durationMs)
+        val mul = 1.0 + (targetFrac - 1.0) * eased
 
         val remainingMinutes = ((durationMs - elapsedMs) / 60_000L).toInt().coerceAtLeast(0)
         return Status(active = true, targetPct = targetPct, effectiveMul = mul, remainingMinutes = remainingMinutes)
@@ -172,6 +196,31 @@ object FclTempOverrideSettings {
 
     /** Korte helper voor de FCLvNext.kt-hook: alleen de multiplier, 1.0 als de override niet actief is. */
     fun effectiveMultiplier(context: Context, nowMs: Long): Double = status(context, nowMs).effectiveMul
+
+    /**
+     * Pure versie van de vlak/taper-curve hierboven: 1.0 (volle ingestelde sterkte) tijdens de
+     * eerste [TAPER_START_FRACTION] van de duur, daarna kwadratisch ease-out naar 0.0 (neutraal)
+     * bij het einde van de duur. Werkt voor willekeurige [elapsedMs] (niet alleen "nu sinds
+     * start"), zodat de UI hiermee een curve over de HELE override-duur kan tekenen — zie kdoc
+     * hierboven bij de aanroep in status().
+     */
+    fun strengthFraction(elapsedMs: Long, durationMs: Long): Double {
+        val flatEndMs = (durationMs * TAPER_START_FRACTION).toLong()
+        if (elapsedMs <= flatEndMs) return 1.0
+        val taperDurMs = durationMs - flatEndMs
+        val taperFrac = if (taperDurMs <= 0L) 1.0
+            else ((elapsedMs - flatEndMs).toDouble() / taperDurMs).coerceIn(0.0, 1.0)
+        // Kwadratische ease-out: landt vloeiend (afgeleide 0) op 0.0 bij taperFrac=1.0,
+        // in plaats van abrupt te stoppen.
+        return (1.0 - taperFrac) * (1.0 - taperFrac)
+    }
+
+    /** Starttijd (ms) van de actieve percentage/duur-override, of null als er geen actieve override is. Voor de sterkte-balk op de BG-grafiek (zie FclOverviewScreen.kt). */
+    fun activeStartMs(context: Context): Long? {
+        if (!isActiveRaw(context)) return null
+        val ms = getStartTimeMs(context)
+        return if (ms > 0L) ms else null
+    }
 
     // ═══════════════════════════════════════════════════════════════════
     // PRESETS + EXTRA-INSULINE-PORTIES (24/09/2026, de gebruiker)
@@ -281,6 +330,8 @@ object FclTempOverrideSettings {
     private const val KEY_LOW_COMMIT_STREAK_START_MS = "low_commit_streak_start_ms"
     private const val KEY_PAUSED = "paused"
     private const val KEY_PAUSE_STARTED_MS = "pause_started_ms"
+    /** 27/09/2026 (de gebruiker — sterkte-balk op de BG-grafiek): logje van afleveringsmomenten, zie [PortionDelivery]. */
+    private const val KEY_PORTION_DELIVERY_LOG_JSON = "portion_delivery_log_json"
 
     const val PRESET_COUNT = 3
     const val MAX_PORTION_COUNT = 3
@@ -611,8 +662,13 @@ object FclTempOverrideSettings {
      * dit blok). Verlaagt |remainingU| met |deliveredU|, richting 0 maar
      * nooit voorbij (en nooit van teken wisselend). Een eventueel restant
      * (aangevraagd - geleverd) blijft gewoon staan voor de volgende cyclus.
+     *
+     * 27/09/2026 (de gebruiker — sterkte-balk op de BG-grafiek) — logt daarnaast, als er
+     * daadwerkelijk iets is afgeleverd (deliveredU != 0.0), een [PortionDelivery]-item met
+     * [nowMs] en het geleverde bedrag. Puur diagnostisch/UI (de driehoekjes op de balk in
+     * BgGraphCompose.kt) — beïnvloedt remainingU/erosie op geen enkele manier.
      */
-    fun applyPortionDelivery(context: Context, portionId: Int, deliveredU: Double) {
+    fun applyPortionDelivery(context: Context, portionId: Int, deliveredU: Double, nowMs: Long) {
         val updated = getActivePortions(context).map { p ->
             if (p.id != portionId) return@map p
             val newRemaining = if (p.remainingU >= 0.0)
@@ -622,6 +678,39 @@ object FclTempOverrideSettings {
             p.copy(remainingU = if (kotlin.math.abs(newRemaining) < PORTION_EPS_U) 0.0 else newRemaining)
         }
         saveActivePortions(context, updated)
+        if (kotlin.math.abs(deliveredU) >= PORTION_EPS_U) {
+            appendPortionDelivery(context, PortionDelivery(timestampMs = nowMs, amountU = deliveredU))
+        }
+    }
+
+    /** Eén moment waarop een deel van een portie daadwerkelijk is afgeleverd — puur voor de status-UI/sterkte-balk, zie [applyPortionDelivery]. */
+    data class PortionDelivery(val timestampMs: Long, val amountU: Double)
+
+    /** Publieke, alleen-lezen kijk op de afleveringsmomenten van het actieve schema — voor de sterkte-balk op de BG-grafiek (zie FclOverviewScreen.kt). */
+    fun portionDeliveryLog(context: Context): List<PortionDelivery> {
+        val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_PORTION_DELIVERY_LOG_JSON, null) ?: return emptyList()
+        return try {
+            val arr = JSONArray(raw)
+            (0 until arr.length()).map { i ->
+                val obj = arr.getJSONObject(i)
+                PortionDelivery(timestampMs = obj.optLong("ts", 0L), amountU = obj.optDouble("amountU", 0.0))
+            }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun appendPortionDelivery(context: Context, entry: PortionDelivery) {
+        val log = portionDeliveryLog(context) + entry
+        val arr = JSONArray()
+        log.forEach { d ->
+            arr.put(JSONObject().apply { put("ts", d.timestampMs); put("amountU", d.amountU) })
+        }
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_PORTION_DELIVERY_LOG_JSON, arr.toString())
+            .apply()
     }
 
     /** True als er nog minstens 1 portie met openstaand remainingU in het actieve schema staat. */

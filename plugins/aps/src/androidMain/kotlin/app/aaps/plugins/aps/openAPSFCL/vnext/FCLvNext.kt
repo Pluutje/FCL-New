@@ -5229,7 +5229,7 @@ class FCLvNext(
     // "vNN-jjjj-mm-dd-uumm" (aanmaaktijdstip, geen omschrijving; die van
     // eerdere versies raakten toch achter). Alleen als het écht relevant
     // is een korte omschrijving toevoegen.
-    private val FCL_CODE_VERSION = "v130-2026-09-26-1009"
+    private val FCL_CODE_VERSION = "v132-2026-09-27-1900"
 
     // ── Restart-detectie (16/07/2026) ─────────────────────────────────
     // true op precies de EERSTE cyclus na het (her)starten van dit class-
@@ -11338,7 +11338,7 @@ class FCLvNext(
                 rawDelta.coerceIn(0.0, portionRequestAmount)
             else
                 rawDelta.coerceIn(portionRequestAmount, 0.0)
-            FclTempOverrideSettings.applyPortionDelivery(context, settlePortionId, portionDeliveredThisCycle)
+            FclTempOverrideSettings.applyPortionDelivery(context, settlePortionId, portionDeliveredThisCycle, now.millis)
             if (kotlin.math.abs(portionDeliveredThisCycle - portionRequestAmount) > 0.001) {
                 status.append(
                     "PRESET PORTIE AFREKENING: ${"%.2f".format(portionDeliveredThisCycle)}U geleverd van " +

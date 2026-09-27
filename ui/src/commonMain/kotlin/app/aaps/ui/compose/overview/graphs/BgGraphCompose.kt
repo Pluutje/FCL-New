@@ -130,6 +130,11 @@ fun BgGraphCompose(
     // null (standaard) laat het standaard AAPS-hoofdscherm exact ongewijzigd.
     inRangeColorOverride: Color? = null,
     highColorOverride: Color? = null,
+    // 27/09/2026 (de gebruiker) — optionele sterkte-balk bovenin de grafiek voor een actieve FCL
+    // "Tijdelijke aanpassing" (Override), zie kdoc bij OverrideBandSpec/OverrideBandDecoration in
+    // GraphUtils.kt. Null (standaard) laat het standaard AAPS-hoofdscherm ongewijzigd — zelfde
+    // opt-in patroon als yRangeOverride/inRangeColorOverride/highColorOverride hierboven.
+    overrideBand: OverrideBandSpec? = null,
     modifier: Modifier = Modifier
 ) {
     val dateUtil = LocalDateUtil.current
@@ -582,6 +587,7 @@ fun BgGraphCompose(
 
     val nowLineColor = MaterialTheme.colorScheme.onSurface
     val nowLine = rememberNowLine(minTimestamp, nowTimestamp, nowLineColor)
+    val overrideBandDecoration = rememberOverrideBandDecoration(minTimestamp, overrideBand)
 
     // In-range belt — translucent band between lowMark and highMark on the BG axis
     val lowMark = chartConfig.lowMark
@@ -594,7 +600,9 @@ fun BgGraphCompose(
         )
     }
 
-    val decorations = remember(inRangeBox, nowLine) { listOf(inRangeBox, nowLine) }
+    val decorations = remember(inRangeBox, nowLine, overrideBandDecoration) {
+        listOfNotNull(inRangeBox, nowLine, overrideBandDecoration)
+    }
 
     // =========================================================================
     // Range providers — hoisted out of rememberCartesianChart so keys are re-evaluated on recomposition
