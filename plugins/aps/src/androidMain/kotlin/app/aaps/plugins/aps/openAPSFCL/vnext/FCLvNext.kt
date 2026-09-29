@@ -4964,10 +4964,6 @@ private fun updateDowntrendGate(
     // --- Drempels (startwaarden; later eventueel in config) ---
     val minCons = 0.45
 
-    // “dipje” → pauze (1 cycle), maar niet locken
-    val pauseSlopeHr = -0.25          // mmol/L/h
-    val pauseDelta5m = -0.10          // mmol/5m
-
     // “echte daling ingezet” → LOCKED na confirm cycles
     val lockSlopeHr = -0.60           // mmol/L/h
     val lockDelta5m = -0.20           // mmol/5m
@@ -5002,6 +4998,24 @@ private fun updateDowntrendGate(
     val effectiveLockConfirmCycles = lockConfirmCycles + (downtrendDeltaFactor * 3).roundToInt()
     val effectivePlateauConfirmCycles =
         (plateauConfirmCycles - (downtrendDeltaFactor * 1).roundToInt()).coerceAtLeast(1)
+
+    // 29/09/2026 (de gebruiker — analyse nacht 27/9 uit CSV-log 607307, ontbijt-
+    // voorstel): “dipje” → pauze (1 cycle) gebruikte tot nu toe een VASTE drempel
+    // (-0,25 mmol/u / -0,10 mmol/5min), ongeacht hoe ver de Bg al boven target
+    // stond. Bij een nacht die al duidelijk te hoog hing (bijv. 9-11 mmol/L) werd
+    // een kleine nachtdosis daardoor herhaaldelijk op 0 gezet door pure ruis in
+    // recentSlope/recentDelta5m rond een in werkelijkheid stabiel-hoog plateau —
+    // dezelfde soort ruis die downtrendDeltaFactor hierboven al (voor de LOCK/
+    // UNLOCK-confirm-cycli) verzacht. Zelfde downtrendDeltaFactor hier hergebruikt:
+    // bij <=1,5 mmol overschot blijft de pauze-drempel exact zoals voorheen
+    // (-0,25/-0,10, dicht bij target dus onveranderd voorzichtig), oplopend tot
+    // -0,60/-0,20 (net zo streng als een echte LOCK) bij 4,5+ mmol overschot.
+    // Backtest (volledige week 607307): 25 van de 158 nacht-pauzes vervallen,
+    // geconcentreerd op de nachten die al duidelijk te hoog stonden (23,24,25,
+    // 26,28-9) — op de rustige nachten (22,27-9, overschot steeds <=1,5 mmol)
+    // verandert er niets.
+    val pauseSlopeHr = -0.25 - downtrendDeltaFactor * 0.35   // mmol/L/h: -0,25 .. -0,60
+    val pauseDelta5m = -0.10 - downtrendDeltaFactor * 0.10   // mmol/5m:  -0,10 .. -0,20
 
     val reliable = ctx.consistency >= minCons
 
@@ -5229,7 +5243,7 @@ class FCLvNext(
     // "vNN-jjjj-mm-dd-uumm" (aanmaaktijdstip, geen omschrijving; die van
     // eerdere versies raakten toch achter). Alleen als het écht relevant
     // is een korte omschrijving toevoegen.
-    private val FCL_CODE_VERSION = "v132-2026-09-27-1900"
+    private val FCL_CODE_VERSION = "v133-2026-09-29-2140"
 
     // ── Restart-detectie (16/07/2026) ─────────────────────────────────
     // true op precies de EERSTE cyclus na het (her)starten van dit class-
@@ -7884,6 +7898,11 @@ class FCLvNext(
             iobRatio = ctx.iobRatio,
 
             maxBolusU = config.maxSMB,
+
+            // 29/09/2026 (de gebruiker) — voor de plateau-na-piek-poort in
+            // PersistentCorrectionController, zie kdoc daar bij plateauConfirm.
+            recentSlope = ctx.recentSlope,
+            recentDelta5m = ctx.recentDelta5m,
 
             minDeltaToTarget = effectiveMinDelta,
             stableSlopeAbs = config.persistentSlopeAbs,
@@ -11153,6 +11172,19 @@ class FCLvNext(
             iob = ctx.input.currentIOB,
             iobRatio = ctx.iobRatio,
             maxBolusU = config.maxSMB,
+
+            // 29/09/2026 (de gebruiker) — recentSlope/recentDelta5m MOETEN hier
+            // expliciet meegegeven worden: zonder waarde vallen ze terug op de
+            // defaults (0.0/0.0), en 0.0/0.0 voldoet toevallig altijd aan de nieuwe
+            // plateau-poort in PersistentCorrectionController (recentSlope<=
+            // plateauSlopeAbs EN |recentDelta5m|<=plateauDelta5mAbs zijn dan allebei
+            // triviaal waar). plateauSlopeAbs hieronder blijft daarom net als
+            // stableSlopeAbs op -999 gezet: deze instantie mag bewust ALLEEN via
+            // overrideCandidate vuren (zie kdoc daar), de nieuwe plateau-poort is
+            // niet voor deze (stijgend-BG-)instantie bedoeld.
+            recentSlope = ctx.recentSlope,
+            recentDelta5m = ctx.recentDelta5m,
+            plateauSlopeAbs = -999.0,
 
             minDeltaToTarget = 3.0,
             stableSlopeAbs = -999.0,   // schakelt het ingebouwde vlak/dalend-pad uit; alleen overrideCandidate telt
