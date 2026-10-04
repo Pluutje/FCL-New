@@ -705,8 +705,15 @@ private fun OverrideStatusBottomSheet(
                     // dat expliciet getoond i.p.v. alleen "gegeven"/"gepland".
                     val fullyDone = kotlin.math.abs(p.remainingU) < 0.005
                     val untouched = kotlin.math.abs(p.remainingU - p.amountU) < 0.005
+                    // 04/10/2026: remainingU=0 betekent niet altijd "gegeven" — een portie die door de
+                    // afbouw of erosie is geschrapt, stond ook op 0. deliveredU maakt het verschil.
+                    val deliveredAbs = kotlin.math.abs(p.deliveredU)
+                    val givenFully = deliveredAbs >= kotlin.math.abs(p.amountU) - 0.005
                     val (statusText, statusColor) = when {
-                        fullyDone -> "✓ gegeven" to MaterialTheme.colorScheme.primary
+                        fullyDone && givenFully -> "✓ gegeven" to MaterialTheme.colorScheme.primary
+                        fullyDone && deliveredAbs >= 0.005 ->
+                            "◐ deels gegeven ${"%+.2f".format(p.deliveredU)} E" to MaterialTheme.colorScheme.tertiary
+                        fullyDone -> "✗ vervallen (niet gegeven)" to MaterialTheme.colorScheme.error
                         untouched -> "⏳ gepland" to MaterialTheme.colorScheme.onSurfaceVariant
                         else -> "◐ nog ${"%+.2f".format(p.remainingU)} E" to MaterialTheme.colorScheme.tertiary
                     }
@@ -715,7 +722,7 @@ private fun OverrideStatusBottomSheet(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            "${"%+.2f".format(p.amountU)} E om $scheduledText",
+                            "${"%+.2f".format(p.amountU)} E om $scheduledText" + if (p.alwaysGive) " · altijd" else "",
                             style = MaterialTheme.typography.bodyMedium
                         )
                         Text(

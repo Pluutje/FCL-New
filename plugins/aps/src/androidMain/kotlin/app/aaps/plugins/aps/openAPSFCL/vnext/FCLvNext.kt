@@ -2593,6 +2593,43 @@ private const val MEAL_COMPENSATION_SLOPE_FULL = 2.0
 private const val MEAL_COMPENSATION_FACTOR_AT_MIN = 0.80
 private const val MEAL_COMPENSATION_FACTOR_FULL = 0.55
 
+// ── Verlengde maaltijd-compensatie + lagere bg-poort (03/10/2026, de gebruiker) ──
+// AANLEIDING: ontbijt 3/10, 10:33 — bevestigde maaltijd (CONFIRMED), recentSlope
+// 3,30 mmol/u (al ruim boven MEAL_COMPENSATION_SLOPE_FULL), bgNow 6,6 mmol. Twee
+// aparte problemen vielen hier samen:
+// (1) de bg-poort hieronder in hypoProtection() eiste bgNow>=7,0 (of iobRatio<0,10)
+//     voordat ENIGE compensatie gold — bij 6,6 kreeg deze cyclus dus compensatie-
+//     factor 1,0 (geen compensatie), ondanks de eigen kdoc bij die poort die stelt
+//     dat "de eerste, grootste commit van een maaltijd vrijwel altijd bij bgNow
+//     6-6,5 valt" — exact het bereik dat de poort op 7,0 zelf mist.
+// (2) de bestaande slope-ramp stopt bij SLOPE_FULL (2,0): een nóg sterkere,
+//     onmiskenbaardere stijging (hier 3,30) kreeg niet meer vertrouwen dan een
+//     net-over-de-drempel stijging van 2,0.
+// Samen produceerde dit (teruggerekend met effectiveISF=4,50, commitDoseFinal
+// 2,86U) een projectie van -1,93 mmol (gelogd/afgekapt als 0,0) bij een bg die
+// op dat moment juist AAN HET STIJGEN was (slope +1,91, recentDelta5m +0,28) —
+// hypo_active sloeg aan en wapende de post-hypo-rem, die vervolgens de volgende
+// cyclus (10:33) de dosis hard afkapte naar het vaste kleine plafond.
+// FIX: bg-poort omlaag van 7,0 naar MEAL_COMPENSATION_BG_GATE (6,0, binnen het
+// bereik dat de eigen kdoc van de poort noemt), plus een tweede, voortzettende
+// ramp van SLOPE_FULL (2,0) tot MEAL_COMPENSATION_SLOPE_STRONG (4,0): de factor
+// zakt daar verder door van FACTOR_FULL (0,55) naar MEAL_COMPENSATION_FACTOR_STRONG
+// (0,35) — dezelfde "hoe sterker het bewijs, hoe meer ruimte"-opbouw als elders
+// (persist-plateausterkte, downtrend-pauzedrempel, burstcap-reacquire). Boven
+// SLOPE_STRONG blijft de factor op 0,35 — geen onbegrensde verruiming.
+// BACKTEST (volle week, beide gebruikers): 4 (Ecko, incl. dit ontbijt) resp. 6
+// (Rick) cycli waar hypo_active hierdoor van true naar false omslaat — in ALLE
+// gevallen betrof het een al CONFIRMED maaltijd met recentSlope>=2,0 (dus
+// onmiskenbaar nog stijgend bewijs). Laagste werkelijke bg binnen 90 min na
+// zo'n moment: 6,3 mmol (Ecko), 4,9 mmol (Rick) — geen van beide gevallen kwam
+// in de buurt van een echte hypo, en geen van Rick's eigen bekende incidenten
+// (26/9 23:34-23:50 crash, 28/9 dip naar 3,9) viel onder deze verruiming: daar
+// was bgNow/iobRatio/recentSlope op de kritieke momenten zelf niet gelijktijdig
+// "CONFIRMED + duidelijk stijgend", dus deze fix raakt die situaties niet.
+private const val MEAL_COMPENSATION_BG_GATE = 6.0
+private const val MEAL_COMPENSATION_SLOPE_STRONG = 4.0
+private const val MEAL_COMPENSATION_FACTOR_STRONG = 0.35
+
 private fun hypoProtection(
     ctx: FCLvNextContext,
     plannedDoseU: Double,
@@ -2637,7 +2674,33 @@ private fun hypoProtection(
         // vloer gewoon volledig beschermd (vEff blijft dan ongewijzigd
         // negatief). Raakt uitsluitend de vroege-episode/laag-IOB-situatie;
         // bij hogere IOB of een reeds dalende BG verandert er niets.
-        val vEff = if (ctx.iobRatio < 0.10 && ctx.recentDelta5m >= 0.0)
+        //
+        // VERBREED (03/10/2026, de gebruiker) — "recentDelta5m>=0.0" ving alleen
+        // het geval waarin BG al niet meer daalt. AANLEIDING: ontbijt 3/10,
+        // 08:43-09:38 — bg 5,8->5,3 mmol (dus NAAR target toe, niet weg ervan),
+        // iobRatio vrijwel 0 (0,00-0,01), recentDelta5m een heel rustige -0,03
+        // tot -0,10 mmol/5min. De vloer gold hier niet (recentDelta5m<0,0), dus
+        // de volle worst-case-extrapolatie liep door tot 4,2 mmol over 90 min —
+        // terwijl de bg in werkelijkheid gewoon afvlakte en vanaf 09:08 stabiel
+        // op 5,3-5,4 mmol bleef staan (exact op target). De gebruiker wees er
+        // terecht op dat dit geen enkel hypo-risico is: op target uitkomen met
+        // vrijwel geen IOB is precies wat een goed algoritme moet doen, geen
+        // signaal om voorzichtig te worden.
+        // Backtest (volle week, beide gebruikers): verbreden van de drempel naar
+        // recentDelta5m>=-0.15 (een rustige, bijna uitgewerkte daling, geen harde
+        // val) verwijdert 144 (Ecko) resp. 128 (Rick) van zulke valse
+        // hypo_active-momenten per week — en bij GEEN van die momenten stond er
+        // een relevante gewenste dosis (desired_dose_pre_guards>0,05U) op het
+        // spel: deze verbreding verandert dus in de praktijk nooit een
+        // daadwerkelijke doseerbeslissing, alleen de (onterechte) diagnostische
+        // hypo_active-vlag en wat daarvan afhangt (zoals het ten onrechte wapenen
+        // van de post-hypo-rem bij een verder normale, veilige ochtend).
+        // Een echte, waargenomen daling (recentDelta5m<-0,15) blijft volledig
+        // onaangeroerd — en de kwadratische versnellingsterm (0,5*a*tHr²)
+        // verderop in trendBgAt() blijft ook bij deze vloer intact, dus een
+        // daadwerkelijk versnellende daling (bijv. door inspanning) wordt nog
+        // steeds gesignaleerd.
+        val vEff = if (ctx.iobRatio < 0.10 && ctx.recentDelta5m >= -0.15)
             maxOf(vEffRaw, 0.0)
         else
             vEffRaw
@@ -2706,12 +2769,22 @@ private fun hypoProtection(
     val mealCompensationFactor = if (
         mealSignal?.state == MealState.CONFIRMED &&
         ctx.recentSlope >= MEAL_COMPENSATION_SLOPE_MIN &&
-        (ctx.input.bgNow >= 7.0 || ctx.iobRatio < 0.10)
+        (ctx.input.bgNow >= MEAL_COMPENSATION_BG_GATE || ctx.iobRatio < 0.10)
     ) {
         val slopeFrac = ((ctx.recentSlope - MEAL_COMPENSATION_SLOPE_MIN) /
             (MEAL_COMPENSATION_SLOPE_FULL - MEAL_COMPENSATION_SLOPE_MIN)).coerceIn(0.0, 1.0)
-        MEAL_COMPENSATION_FACTOR_AT_MIN +
+        val baseFactor = MEAL_COMPENSATION_FACTOR_AT_MIN +
             slopeFrac * (MEAL_COMPENSATION_FACTOR_FULL - MEAL_COMPENSATION_FACTOR_AT_MIN)
+        // Zie kdoc bij MEAL_COMPENSATION_BG_GATE/SLOPE_STRONG hierboven: voortzettende
+        // ramp voorbij SLOPE_FULL i.p.v. daar te stoppen bij 0,55.
+        if (ctx.recentSlope > MEAL_COMPENSATION_SLOPE_FULL) {
+            val strongFrac = ((ctx.recentSlope - MEAL_COMPENSATION_SLOPE_FULL) /
+                (MEAL_COMPENSATION_SLOPE_STRONG - MEAL_COMPENSATION_SLOPE_FULL)).coerceIn(0.0, 1.0)
+            MEAL_COMPENSATION_FACTOR_FULL +
+                strongFrac * (MEAL_COMPENSATION_FACTOR_STRONG - MEAL_COMPENSATION_FACTOR_FULL)
+        } else {
+            baseFactor
+        }
     } else 1.0
 
     fun insulinActionFrac(min: Int): Double = when {
@@ -5243,7 +5316,7 @@ class FCLvNext(
     // "vNN-jjjj-mm-dd-uumm" (aanmaaktijdstip, geen omschrijving; die van
     // eerdere versies raakten toch achter). Alleen als het écht relevant
     // is een korte omschrijving toevoegen.
-    private val FCL_CODE_VERSION = "v133-2026-09-29-2140"
+    private val FCL_CODE_VERSION = "v135-2026-10-04-1500"
 
     // ── Restart-detectie (16/07/2026) ─────────────────────────────────
     // true op precies de EERSTE cyclus na het (her)starten van dit class-
@@ -10730,18 +10803,62 @@ class FCLvNext(
                 val midOrHigher = (zoneEnum == BgZone.MID || zoneEnum == BgZone.HIGH || zoneEnum == BgZone.EXTREME)
                 if (risingAgain && midOrHigher && ctx.deltaToTarget >= 1.0) {
 
+                    // ── DYNAMISCHE REACQUIRE-CAP (03/10/2026, de gebruiker) ──────────
+                    // AANLEIDING: Ecko's maaltijd 2/10 20:33 (avondeten mosterdsoep +
+                    // broodje ham-kaas) — tussen 19:09-19:18 wilde de commit-engine
+                    // zelf 2,04/2,30/0,63U geven (iobRatio nog maar 0,32-0,41, BG
+                    // 8,4-9,4, dus geen enkele reden tot terughoudendheid), maar deze
+                    // reacquire hield de dosis vast op een hard plafond van 0,35U, los
+                    // van hoe sterk de stijging was of hoe ver BG al van target zat.
+                    // Dat paste niet bij de rode draad "hoe verder van target, hoe
+                    // groter de correctie" die elders (persist-plateau-sterkte,
+                    // downtrend-pauzedrempel) al wordt toegepast.
+                    // FIX: het plafond loopt nu op van 0,35U (bij een twijfelachtige
+                    // stijging) tot 0,80U (bij een duidelijke, aanhoudende stijging
+                    // ver boven target) — ALLEEN in de vroege fase van een maaltijd,
+                    // vóór de piekrem actief is (!postPeak.suppress) en zolang IOB nog
+                    // ruim onder de brandgrens zit (iobRatio<0,55). Dat is precies het
+                    // gat dat Ecko's maaltijd blootlegde: de rem had op die momenten
+                    // nog niet ingegrepen, dus verruimen hier raakt NIET de latere,
+                    // bewust voorzichtige fase (waar de rem al wel aanstaat).
+                    // VEILIGHEIDSVANGNET: niet verruimen als de bloedsuiker deze
+                    // cyclus zelf al aan het afvlakken/dalen is (ctx.acceleration<=0),
+                    // ook als de officiële hypo-vlag nog niet aanslaat — backtest
+                    // (Rick, 28/9 08:49) liet zien dat de bestaande hypo-voorspelling
+                    // (hypo_projected_bg stond toen op 10,2) een latere crash naar
+                    // 3,9 mmol 45 minuten later niet had voorzien.
+                    // BACKTEST (volle week, beide gebruikers, CSV's 30/9 en 3/10):
+                    // Ecko +6,2U/week verdeeld over 40 momenten (laagste BG binnen
+                    // 90min nadien over alle momenten: 5,2 mmol, geen hypo-risico).
+                    // Rick +7,1U/week over 33 momenten (laagste BG binnen 90min: 3,9
+                    // mmol bij het vangnet-geval hierboven — vandaar het vangnet).
+                    // Rick's eigen 26/9 23:34-23:50-crash viel volledig BUITEN deze
+                    // verruiming: op die momenten was iobRatio al >=0,55 en/of de rem
+                    // al actief, dus dit raakt niet het mechanisme dat zijn jojo
+                    // veroorzaakte.
+                    val prebrakeLowIob = ctx.iobRatio < 0.55 && !postPeak.suppress
+                    val notAlreadyTurning = ctx.acceleration > 0.0
+                    val reacquireCeiling = if (prebrakeLowIob && notAlreadyTurning) {
+                        val riseStrength = smooth01((ctx.recentSlope - 0.30) / (3.0 - 0.30))
+                        val deltaStrength = smooth01((ctx.deltaToTarget - 1.0) / (5.0 - 1.0))
+                        0.35 + 0.45 * riseStrength * deltaStrength
+                    } else {
+                        0.35
+                    }
+
                     // Sta beperkte her-acquire toe ondanks burstcap
                     val reacquire =
                         (0.25 * config.maxSMB)
                             .coerceAtLeast(0.10)
-                            .coerceAtMost(0.35)
+                            .coerceAtMost(reacquireCeiling)
 
                     val before = commandedDose
                     commandedDose = minOf(commandedDose, reacquire)
 
                     status.append(
                         "BURSTCAP REACQUIRE: risingAgain → " +
-                            "${"%.2f".format(before)}→${"%.2f".format(commandedDose)}U\n"
+                            "${"%.2f".format(before)}→${"%.2f".format(commandedDose)}U " +
+                            "(plafond=${"%.2f".format(reacquireCeiling)})\n"
                     )
 
                 } else {
@@ -11240,7 +11357,10 @@ class FCLvNext(
         var portionRequestBeforeDose = 0.0
         var portionRequestAmount = 0.0
         var portionRequestId: Int? = null
-        if (portionRequest != null) {
+        // 04/10/2026 (de gebruiker): een "altijd geven"-portie wordt NIET hier opgeteld maar pas
+        // NA de down-trend-gate hieronder, zodat die gate hem niet op 0 zet. De absolute cap en de
+        // herstart-blokkade gelden nog wel (veiligheid); een restant blijft dan open voor de volgende cyclus.
+        if (portionRequest != null && !portionRequest.alwaysGive) {
             portionRequestBeforeDose = commandedDose
             portionRequestAmount = portionRequest.requestU
             portionRequestId = portionRequest.portionId
@@ -11259,7 +11379,7 @@ class FCLvNext(
         // gecorrigeerde asymmetrie (24/09/2026).
         if (FclTempOverrideSettings.isActiveRaw(context) &&
             FclTempOverrideSettings.isActiveExtraPositive(context) &&
-            FclTempOverrideSettings.hasPendingPortions(context)
+            FclTempOverrideSettings.hasPendingAdaptivePortions(context)
         ) {
             val shouldTaperPortions = FclTempOverrideSettings.recordCommitAndShouldTaper(context, commitFraction, now.millis)
             if (shouldTaperPortions) {
@@ -11284,6 +11404,28 @@ class FCLvNext(
             status.append("DOWNTREND LOCKED (no-meal): commandedDose forced to 0\n")
             commandedDose = 0.0
             earlyConfirmDone = false
+        }
+
+        // "Altijd geven"-portie (04/10/2026): op het ingestelde tijdstip erbij, ook als de BG daalt of
+        // de down-trend-gate de basisdosis op 0 zette. Enige uitzondering: BG onder
+        // ALWAYS_GIVE_MIN_BG_MMOL — dan wacht de portie (blijft open) tot de BG weer hoger is.
+        if (portionRequest != null && portionRequest.alwaysGive) {
+            if (ctx.input.bgNow >= FclTempOverrideSettings.ALWAYS_GIVE_MIN_BG_MMOL) {
+                portionRequestBeforeDose = commandedDose
+                portionRequestAmount = portionRequest.requestU
+                portionRequestId = portionRequest.portionId
+                commandedDose = (commandedDose + portionRequestAmount).coerceAtLeast(0.0)
+                status.append(
+                    "PRESET PORTIE ALTIJD-GEVEN AANVRAAG: ${"%+.2f".format(portionRequestAmount)}U " +
+                        "(${"%.2f".format(portionRequestBeforeDose)}→${"%.2f".format(commandedDose)}U, " +
+                        "portionId=$portionRequestId)\n"
+                )
+            } else {
+                status.append(
+                    "PRESET PORTIE ALTIJD-GEVEN WACHT: BG ${"%.1f".format(ctx.input.bgNow)} < " +
+                        "${"%.1f".format(FclTempOverrideSettings.ALWAYS_GIVE_MIN_BG_MMOL)} mmol — portie blijft open\n"
+                )
+            }
         }
 
         // ─────────────────────────────────────────────

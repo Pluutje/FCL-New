@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Divider
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -482,6 +483,15 @@ private fun PresetRow(
             }
         }
 
+        if (preset.note.isNotBlank()) {
+            Text(
+                preset.note,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 4.dp, top = 2.dp)
+            )
+        }
+
         AnimatedVisibility(visible = detailsExpanded, enter = expandVertically(), exit = shrinkVertically()) {
             if (configured) {
                 PresetInfoTable(preset, modifier = Modifier.padding(top = 2.dp, start = 4.dp))
@@ -531,6 +541,11 @@ private fun PresetEditor(
         mutableStateOf((0 until FclTempOverrideSettings.MAX_PORTION_COUNT).map { i -> preset.portionDelaysMin.getOrElse(i) { 0 }.coerceIn(0, preset.durationMinutes) })
     }
 
+    var note by remember(preset.id) { mutableStateOf(preset.note) }
+    var portionAlways by remember(preset.id) {
+        mutableStateOf((0 until FclTempOverrideSettings.MAX_PORTION_COUNT).map { i -> preset.portionAlwaysGive.getOrElse(i) { false } })
+    }
+
     val amountStepF = FclTempOverrideSettings.EXTRA_INSULIN_STEP_U.toFloat()
 
     Column(
@@ -543,6 +558,14 @@ private fun PresetEditor(
             value = name,
             onValueChange = { name = it },
             label = { Text("Naam") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        OutlinedTextField(
+            value = note,
+            onValueChange = { note = it },
+            label = { Text("Extra tekst onder de knop (optioneel)") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
@@ -622,6 +645,23 @@ private fun PresetEditor(
                 valueRange = 0f..durationMin.toFloat(),
                 step = FclTempOverrideSettings.PORTION_DELAY_STEP_MIN.toFloat()
             )
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(
+                    checked = portionAlways.getOrElse(i) { false },
+                    onCheckedChange = { checked ->
+                        portionAlways = portionAlways.toMutableList().also {
+                            while (it.size <= i) it.add(false)
+                            it[i] = checked
+                        }
+                    }
+                )
+                Text(
+                    "Altijd geven op dit tijdstip (ook als de BG daalt; alleen uitgesteld bij BG onder " +
+                        "${"%.1f".format(FclTempOverrideSettings.ALWAYS_GIVE_MIN_BG_MMOL)})",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -634,7 +674,9 @@ private fun PresetEditor(
                             durationMinutes = durationMin,
                             portionCount = portionCount,
                             portionAmountsU = portionAmounts,
-                            portionDelaysMin = portionDelays
+                            portionDelaysMin = portionDelays,
+                            portionAlwaysGive = portionAlways,
+                            note = note.trim()
                         )
                     )
                 },

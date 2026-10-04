@@ -364,11 +364,32 @@ object FclTempOverrideSettings {
         val id: Int,
         val delayMinutes: Int,
         val amountU: Double,
-        val remainingU: Double = amountU
+        val remainingU: Double = amountU,
+        /**
+         * 04/10/2026 (de gebruiker): true = "altijd geven". Deze portie wordt op de ingestelde tijd
+         * gegeven, ook als de BG daalt of het algoritme zelf geen aanleiding ziet. Hij vervalt nooit
+         * door de afbouwregel en de down-trend-gate houdt hem niet tegen. Alleen een echte lage BG
+         * (zie ALWAYS_GIVE_MIN_BG_MMOL) stelt hem uit.
+         */
+        val alwaysGive: Boolean = false,
+        /** Totaal al echt gegeven van deze portie (zelfde teken als amountU). Voor de status-UI: onderscheid "gegeven" en "vervallen". */
+        val deliveredU: Double = 0.0
     )
 
     /** Eén concreet verzoek om nu, dit cyclus, requestU bij commandedDose op te tellen — dit IS de (eventueel al door erodeOutstandingPortions() verlaagde) remainingU van de betreffende portie op het moment van de aanvraag, zie nextDuePortionRequest(). */
-    data class PortionRequest(val portionId: Int, val requestU: Double)
+    data class PortionRequest(val portionId: Int, val requestU: Double, val alwaysGive: Boolean = false)
+
+    /**
+     * Een "altijd geven"-portie wordt uitgesteld (niet geschrapt) zolang de BG onder deze waarde zit.
+     * Dit is de enige rem op zo'n portie: een prebolus bij een BG onder 4,0 is niet veilig.
+     */
+    const val ALWAYS_GIVE_MIN_BG_MMOL = 4.0
+
+    /**
+     * Zo lang na de start van een preset telt de afbouwregel (commit laag) nog niet mee. Een preset
+     * die voor de maaltijd wordt gestart, moet kunnen wachten tot de stijging begint.
+     */
+    const val LOW_COMMIT_GRACE_MINUTES = 45
 
     /**
      * Eén door de gebruiker benoemd en ingesteld preset (vast slot 0/1/2).
@@ -384,7 +405,11 @@ object FclTempOverrideSettings {
         val durationMinutes: Int = DEFAULT_DURATION_MIN,
         val portionCount: Int = 1,
         val portionAmountsU: List<Double> = List(MAX_PORTION_COUNT) { 0.0 },
-        val portionDelaysMin: List<Int> = List(MAX_PORTION_COUNT) { 0 }
+        val portionDelaysMin: List<Int> = List(MAX_PORTION_COUNT) { 0 },
+        /** Per portie: "altijd geven" (standaard uit), zie [OverridePortion.alwaysGive]. */
+        val portionAlwaysGive: List<Boolean> = List(MAX_PORTION_COUNT) { false },
+        /** Vrije tekstregel onder de preset-knop (extra uitleg voor de gebruiker). Mag leeg zijn. */
+        val note: String = ""
     ) {
         /** Som van de daadwerkelijk actieve (eerste [portionCount]) porties — voor UI-samenvatting en het teken (+/-). */
         val totalExtraInsulinU: Double get() = portionAmountsU.take(portionCount).sum()
@@ -407,6 +432,8 @@ object FclTempOverrideSettings {
         put("portionCount", portionCount)
         put("portionAmountsU", JSONArray(portionAmountsU))
         put("portionDelaysMin", JSONArray(portionDelaysMin))
+        put("portionAlwaysGive", JSONArray(portionAlwaysGive))
+        put("note", note)
     }
 
     private fun presetFromJson(obj: JSONObject, fallbackId: Int): OverridePreset {
@@ -430,7 +457,11 @@ object FclTempOverrideSettings {
             durationMinutes = obj.optInt("durationMinutes", DEFAULT_DURATION_MIN).coerceIn(MIN_DURATION_MIN, MAX_DURATION_MIN),
             portionCount = obj.optInt("portionCount", 1).coerceIn(1, MAX_PORTION_COUNT),
             portionAmountsU = doubleList("portionAmountsU").map { it.coerceIn(MIN_EXTRA_INSULIN_U, MAX_EXTRA_INSULIN_U) },
-            portionDelaysMin = intList("portionDelaysMin").map { it.coerceAtLeast(0) }
+            portionDelaysMin = intList("portionDelaysMin").map { it.coerceAtLeast(0) },
+            portionAlwaysGive = (0 until MAX_PORTION_COUNT).map { i ->
+                obj.optJSONArray("portionAlwaysGive")?.optBoolean(i, false) ?: false
+            },
+            note = obj.optString("note", "")
         )
     }
 
@@ -482,7 +513,8 @@ object FclTempOverrideSettings {
                 OverridePortion(
                     id = i,
                     delayMinutes = preset.portionDelaysMin.getOrElse(i) { 0 },
-                    amountU = preset.portionAmountsU.getOrElse(i) { 0.0 }
+                    amountU = preset.portionAmountsU.getOrElse(i) { 0.0 },
+                    alwaysGive = preset.portionAlwaysGive.getOrElse(i) { false }
                 )
             }
             .filter { it.amountU != 0.0 }
@@ -507,6 +539,8 @@ object FclTempOverrideSettings {
                     put("delayMinutes", p.delayMinutes)
                     put("amountU", p.amountU)
                     put("remainingU", p.remainingU)
+                    put("alwaysGive", p.alwaysGive)
+                    put("deliveredU", p.deliveredU)
                 }
             )
         }
@@ -546,7 +580,11 @@ object FclTempOverrideSettings {
                     // "helemaal open" (delivered=false) of "helemaal klaar" (delivered=true), zodat een
                     // schema dat al liep tijdens de update niet ineens dubbel afgeleverd wordt.
                     remainingU = if (obj.has("remainingU")) obj.optDouble("remainingU", amountU)
-                        else if (obj.optBoolean("delivered", false)) 0.0 else amountU
+                        else if (obj.optBoolean("delivered", false)) 0.0 else amountU,
+                    alwaysGive = obj.optBoolean("alwaysGive", false),
+                    // Oud schema zonder deliveredU: wat niet meer open staat telt als gegeven.
+                    deliveredU = if (obj.has("deliveredU")) obj.optDouble("deliveredU", 0.0)
+                        else amountU - (if (obj.has("remainingU")) obj.optDouble("remainingU", amountU) else amountU)
                 )
             }
         } catch (e: Exception) {
@@ -572,6 +610,8 @@ object FclTempOverrideSettings {
                     put("delayMinutes", p.delayMinutes)
                     put("amountU", p.amountU)
                     put("remainingU", p.remainingU)
+                    put("alwaysGive", p.alwaysGive)
+                    put("deliveredU", p.deliveredU)
                 }
             )
         }
@@ -652,7 +692,7 @@ object FclTempOverrideSettings {
             .filter { it.remainingU != 0.0 }
             .filter { nowMs - startMs >= it.delayMinutes * 60_000L }
             .minByOrNull { it.delayMinutes } ?: return null
-        return PortionRequest(portionId = due.id, requestU = due.remainingU)
+        return PortionRequest(portionId = due.id, requestU = due.remainingU, alwaysGive = due.alwaysGive)
     }
 
     /**
@@ -675,7 +715,10 @@ object FclTempOverrideSettings {
                 (p.remainingU - deliveredU).coerceAtLeast(0.0)
             else
                 (p.remainingU - deliveredU).coerceAtMost(0.0)
-            p.copy(remainingU = if (kotlin.math.abs(newRemaining) < PORTION_EPS_U) 0.0 else newRemaining)
+            p.copy(
+                remainingU = if (kotlin.math.abs(newRemaining) < PORTION_EPS_U) 0.0 else newRemaining,
+                deliveredU = p.deliveredU + deliveredU
+            )
         }
         saveActivePortions(context, updated)
         if (kotlin.math.abs(deliveredU) >= PORTION_EPS_U) {
@@ -717,6 +760,10 @@ object FclTempOverrideSettings {
     fun hasPendingPortions(context: Context): Boolean =
         getActivePortions(context).any { it.remainingU != 0.0 }
 
+    /** True als er nog een openstaande portie is die NIET "altijd geven" is — alleen die kan door de afbouwregel vervallen. */
+    fun hasPendingAdaptivePortions(context: Context): Boolean =
+        getActivePortions(context).any { it.remainingU != 0.0 && !it.alwaysGive }
+
     /** True als de SOM van het actieve schema (indien aanwezig) POSITIEF is — alleen dan geldt de afbouw hieronder. */
     fun isActiveExtraPositive(context: Context): Boolean =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -733,6 +780,11 @@ object FclTempOverrideSettings {
      */
     fun recordCommitAndShouldTaper(context: Context, commitFraction: Double, nowMs: Long): Boolean {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        // 04/10/2026: de eerste LOW_COMMIT_GRACE_MINUTES na de start telt de afbouw nog niet mee.
+        // Een preset die voor de maaltijd wordt gestart (BG nog vlak of dalend) kreeg zo na 20 min
+        // al al zijn porties geschrapt voordat de stijging begon.
+        val extraStartMs = prefs.getLong(KEY_ACTIVE_EXTRA_START_MS, 0L)
+        if (extraStartMs > 0L && nowMs - extraStartMs < LOW_COMMIT_GRACE_MINUTES * 60_000L) return false
         if (commitFraction >= LOW_COMMIT_THRESHOLD) {
             if (prefs.contains(KEY_LOW_COMMIT_STREAK_START_MS)) {
                 prefs.edit().remove(KEY_LOW_COMMIT_STREAK_START_MS).apply()
@@ -749,7 +801,7 @@ object FclTempOverrideSettings {
 
     /** Laat alle nog openstaande porties vervallen (afbouw-trigger, alleen voor positieve schema's — zie kdoc bovenaan dit blok). */
     fun cancelRemainingPortions(context: Context) {
-        val remaining = getActivePortions(context).map { if (it.remainingU != 0.0) it.copy(remainingU = 0.0) else it }
+        val remaining = getActivePortions(context).map { if (it.remainingU != 0.0 && !it.alwaysGive) it.copy(remainingU = 0.0) else it }
         saveActivePortions(context, remaining)
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()

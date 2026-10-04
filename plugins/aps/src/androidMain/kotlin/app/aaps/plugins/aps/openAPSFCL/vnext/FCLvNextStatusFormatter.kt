@@ -103,7 +103,7 @@ data class FclUiSnapshot(
  * FCLvNext.kt, zoals voorheen. Versions.versionCode in buildSrc NIET meer
  * aanraken.
  */
-const val FCL_STATUS_VERSION = 133
+const val FCL_STATUS_VERSION = 135
 
 class FCLvNextStatusFormatter(
     private val prefs: Preferences,
@@ -113,6 +113,7 @@ class FCLvNextStatusFormatter(
     // ── Label-helpers ─────────────────────────────────────────────────────────
 
     private fun nightResponsLabel(key: String): String = FclStrings.get(context).nightStyleLabel(key)
+
 
 
     // ── Sectie 1: Situatie ─────────────────────
