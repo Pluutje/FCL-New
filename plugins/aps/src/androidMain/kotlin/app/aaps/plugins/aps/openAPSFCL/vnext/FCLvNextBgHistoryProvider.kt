@@ -72,6 +72,7 @@ class FCLvNextBgHistoryProvider(
     private val recentBufferLock = Any()
     private val recentBuffer = mutableListOf<BgPoint>()
     private val RECENT_BUFFER_RETENTION_MS = 40L * 60_000L // 40 min, ruim boven de 25 min die FCLvNext nodig heeft
+    private val NEWER_POINT_TOLERANCE_MS = 90_000L // een buffer-punt telt pas als "nieuwer" als het >90 s na het nieuwste AAPS-punt ligt (voorkomt dubbele punten)
 
     /**
      * Registreer de actuele meting (zoals determine_basal() die toch al
@@ -101,7 +102,22 @@ class FCLvNextBgHistoryProvider(
     fun getLastHoursResilient(hoursBack: Int): List<BgPoint> {
         val fromAaps = getLastHours(hoursBack)
         val bufferSnapshot = synchronized(recentBufferLock) { recentBuffer.toList() }
-        if (bufferSnapshot.size <= fromAaps.size) return fromAaps
+        if (bufferSnapshot.size <= fromAaps.size) {
+            // 05/10/2026 — BEVROREN-BG-FIX (Gijs' log 4a3555, 4/10 21:11-22:28 en 5/10 19:09-19:44).
+            // Tot nu toe werd de eigen buffer alleen gebruikt als die MEER punten had dan AAPS. Maar
+            // getLastHours() laat een filledGap-bucket vallen als het vorige ECHTE (niet-gevulde) punt
+            // meer dan MAX_GAP_MINUTES terug ligt. Als de metingen van de sensor een tijd lang >30 s naast
+            // het 5-minutenraster van AAPS vallen, is geen enkele nieuwe bucket een "echte treffer" meer:
+            // alle nieuwe buckets zijn filledGap en worden weggegooid. Dan eindigt de lijst bij het
+            // laatste echte raster-punt (bijv. 8,5 om 21:11), terwijl glucose_status (en het horloge) wel
+            // verse waarden hebben. De buffer had die verse punten wel, maar was korter dan de AAPS-lijst
+            // en werd dus genegeerd: slope, delta en bgNow bleven 40-77 min lang bevroren, en de eerste echte
+            // treffer daarna gaf een plotselinge sprong (8,5 -> 3,5; 11,4 -> 16,2).
+            // Oplossing: voeg de buffer-punten die NIEUWER zijn dan het nieuwste AAPS-punt altijd toe.
+            val newestAapsMs = fromAaps.lastOrNull()?.time?.millis ?: Long.MIN_VALUE
+            val newer = bufferSnapshot.filter { it.time.millis > newestAapsMs + NEWER_POINT_TOLERANCE_MS }
+            return if (newer.isEmpty()) fromAaps else fromAaps + newer
+        }
         val bufferOldestMs = bufferSnapshot.first().time.millis
         val merged = (fromAaps.filter { it.time.millis < bufferOldestMs } + bufferSnapshot)
             .distinctBy { it.time.millis }

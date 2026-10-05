@@ -774,7 +774,45 @@ private const val DOSE_RATIO_DAMPING = 0.4          // resterende factor op een 
 // ongemoeid — daar lag ctx.acceleration op het triggermoment nog op of
 // vlakbij zijn eigen recente piek.
 private const val VROEGE_STIJGING_ACCEL_DECLINE_FRACTION = 0.55  // acceleratie mag tot deze fractie van zijn recente piek zakken
-private const val VROEGE_STIJGING_ACCEL_PEAK_MIN = 0.30           // alleen toetsen als de piek zelf betekenisvol hoog was (voorkomt ruis-triggers bij zwakke stijgingen)
+// 04/10/2026 (de gebruiker — maaltijd 4/10 17:18-17:38): de vroege-stijging-reset ging om 17:33 voor
+// het eerst aan (ramp 35%), midden in de afbouw, terwijl recentSlope al van 6,4 (piek) naar 3,8 was
+// gezakt. Gevolg: lateDecayMul 0,19 -> 0,30 en een commit van 0,99U op de top, even groot als de
+// eerste (1,03U). De reset is bedoeld voor een stijging die nog volop doorgaat, niet voor een die al
+// afremt. De ramp wordt daarom vloeiend verzwakt naarmate recentSlope verder onder zijn eigen piek
+// in deze stijging zakt: volle sterkte vanaf 80% van de piek, nul op 55% of lager.
+// Teruggerekend op 7 dagen log (56 ramp-cycli): terechte momenten (3/10 10:28, 2/10 19:03) zaten
+// op 85-100% van de piek en blijven onaangetast; 17:33 (60%), 1/10 13:18 (52%) en 28/9 08:13 (67%) worden gedempt.
+// ── Afremming-IOB-rem (04/10/2026, de gebruiker) ─────────────────────────────────────────────
+// AANLEIDING: 4/10 17:33. Ook met de ramp-demping hierboven bleef een commit van ~0,6U over, terwijl er
+// al 2,65U IOB stond (= 12 mmol daling bij ISF 4,6) en de BG op 7,3 net boven target zat. Zonder
+// het diner dat daarna kwam was dit een hypo geworden (BG zakte tot 4,7).
+// Extra vloeiende demping, maximaal DECEL_IOB_BRAKE_MAX_CUT (0,50 = commit nooit meer dan gehalveerd), alleen als ALLE drie
+// gelden: stijging remt af (recentSlope/piek van 0,85 -> 0,55), veel werkzame insuline (IOB x ISF van 8 -> 16 mmol),
+// en BG dicht bij target (volle werking tot target+3,0, nul vanaf target+6,0). Zo blijft een grote maaltijd met hoge BG
+// ongemoeid (10/2 19:43 en 20:13 op 12-15 mmol worden niet geraakt).
+// Teruggerekend op 7 dagen (145,6U commit in CONFIRMED-maaltijden): 18 momenten gedempt, totaal -3,3U; 4 daarvan hadden
+// daarna nog 1,6-2,2 mmol stijging (dosis 0,3-1,2U, gedempt met 12-38%), 14 niet.
+// ── Bevroren-BG-invoer-bewaking (05/10/2026, Gijs' log 4a3555) ──────────────────────────────
+// AANLEIDING: 4/10 21:11-22:28 bleef bg_mmol 77 min lang exact 8,5 (recent_slope 7,83, recentDelta5m 0,65 en
+// curve_acceleration 18,62 ook niet meer veranderend) terwijl de horloge-BG (AAPS) daalde tot 3,8 en daarna 3,5.
+// FCL doseerde in die tijd 17,7U. Zelfde patroon 5/10 19:09-19:44: bg 11,4 bevroren, terwijl de echte BG naar
+// 16 steeg (FCL reageerde daardoor te laat). In Gijs' log komt dit 9x voor (28/9-5/10), bij Ecko 1x (0,32U).
+// Signatuur: bgNow identiek aan de vorige cyclus terwijl recentDelta5m (|waarde| >= 0,3) nog beweging meldt.
+// Een echte sensor geeft dat niet: identieke BG betekent delta 0. Bij FROZEN_BG_MIN_STREAK opeenvolgende
+// cycli (3 identieke waarden) wordt er niet meer gedoseerd tot de BG weer verandert.
+private const val FROZEN_BG_MIN_ABS_DELTA5M = 0.3
+private const val FROZEN_BG_MIN_STREAK = 2
+private const val FROZEN_BG_SAME_EPS = 0.05
+private const val DECEL_IOB_BRAKE_MAX_CUT = 0.50
+private const val DECEL_IOB_BRAKE_RATIO_HIGH = 0.85
+private const val DECEL_IOB_BRAKE_RATIO_LOW = 0.55
+private const val DECEL_IOB_BRAKE_COVER_LOW_MMOL = 8.0
+private const val DECEL_IOB_BRAKE_COVER_HIGH_MMOL = 16.0
+private const val DECEL_IOB_BRAKE_NEAR_TARGET_MMOL = 3.0
+private const val DECEL_IOB_BRAKE_NEAR_TARGET_RAMP_MMOL = 3.0
+private const val VROEGE_STIJGING_SLOPE_KEEP_LOW = 0.55  // recentSlope/piek: op of onder dit punt geen reset meer
+private const val VROEGE_STIJGING_SLOPE_KEEP_HIGH = 0.80  // recentSlope/piek: vanaf dit punt volle reset
+private const val VROEGE_STIJGING_ACCEL_PEAK_MIN = 0.30          // alleen toetsen als de piek zelf betekenisvol hoog was (voorkomt ruis-triggers bij zwakke stijgingen)
 
 // ── Gedeelde, geleidelijke "commit-urgentie" (15/08/2026) ──────────
 // AANLEIDING: golf 3 van de pizza-episode (14/8 22:53) miste isReentrySignal()
@@ -5316,7 +5354,7 @@ class FCLvNext(
     // "vNN-jjjj-mm-dd-uumm" (aanmaaktijdstip, geen omschrijving; die van
     // eerdere versies raakten toch achter). Alleen als het écht relevant
     // is een korte omschrijving toevoegen.
-    private val FCL_CODE_VERSION = "v135-2026-10-04-1500"
+    private val FCL_CODE_VERSION = "v136-2026-10-05-2330"
 
     // ── Restart-detectie (16/07/2026) ─────────────────────────────────
     // true op precies de EERSTE cyclus na het (her)starten van dit class-
@@ -6197,6 +6235,16 @@ class FCLvNext(
     // stijging begon (dezelfde levenscyclus/reset-momenten als
     // sustainedHighSlopeMinutes hieronder, zie SUSTAINED RISE TRACKING).
     private var recentAccelPeakInRise: Double = 0.0
+
+    // 04/10/2026 — hoogste ctx.recentSlope sinds de huidige aanhoudende stijging begon, zelfde
+    // levenscyclus als recentAccelPeakInRise. Zie VROEGE_STIJGING_SLOPE_KEEP_LOW.
+    private var recentSlopePeakInRise: Double = 0.0
+
+    // 05/10/2026 — bevroren-BG-invoer-bewaking, zie kdoc bij FROZEN_BG_MIN_ABS_DELTA5M. bgNow van de
+    // vorige cyclus en het aantal opeenvolgende cycli met een identieke waarde terwijl recentDelta5m
+    // nog "beweging" meldt.
+    private var frozenBgPrevBgNow: Double? = null
+    private var frozenBgStreak: Int = 0
 
     // ── Persistentie van een stijging (deceleratie-detectie) ───────────────
     // sustainedHighSlopeMinutes meet alleen HOELANG slope al hoog is — niet
@@ -7546,10 +7594,12 @@ class FCLvNext(
             // 15/08/2026 — zie kdoc bij VROEGE_STIJGING_ACCEL_DECLINE_FRACTION.
             // Dezelfde levenscyclus als sustainedHighSlopeMinutes hierboven.
             recentAccelPeakInRise = maxOf(recentAccelPeakInRise, ctx.acceleration)
+            recentSlopePeakInRise = maxOf(recentSlopePeakInRise, ctx.recentSlope)
         } else {
             // Slope gedaald onder drempel: reset teller
             sustainedHighSlopeMinutes = 0.0
             recentAccelPeakInRise = 0.0
+            recentSlopePeakInRise = 0.0
         }
         sustainedLastUpdateAt = now
 
@@ -7558,6 +7608,7 @@ class FCLvNext(
         if (ctx.iobRatio >= 0.40) {
             sustainedHighSlopeMinutes = 0.0
             recentAccelPeakInRise = 0.0
+            recentSlopePeakInRise = 0.0
         }
 
 // ─────────────────────────────────────────────
@@ -9448,7 +9499,22 @@ class FCLvNext(
                     // normale, teller-gebaseerde afbouwwaarde naar het (ook al
                     // vloeiende) resetCeiling, over VROEGE_STIJGING_RAMP_MIN minuten
                     // i.p.v. in 1 cyclus.
-                    lerp(normalDecayValue, resetCeiling, vroegeStijgingRampFrac)
+                    // 04/10/2026: ramp verzwakt als recentSlope al ver onder zijn eigen piek zit
+                    // (stijging remt af) — zie VROEGE_STIJGING_SLOPE_KEEP_LOW. Zonder piek-info: geen demping.
+                    val slopeKeep = if (recentSlopePeakInRise > 0.5) {
+                        smooth01(
+                            (ctx.recentSlope / recentSlopePeakInRise - VROEGE_STIJGING_SLOPE_KEEP_LOW) /
+                                (VROEGE_STIJGING_SLOPE_KEEP_HIGH - VROEGE_STIJGING_SLOPE_KEEP_LOW)
+                        )
+                    } else 1.0
+                    if (slopeKeep < 0.999) {
+                        status.append(
+                            "VROEGE STIJGING RAMP GEDEMPT: recentSlope ${"%.2f".format(ctx.recentSlope)} = " +
+                                "${"%.0f".format(100.0 * ctx.recentSlope / recentSlopePeakInRise)}% van piek " +
+                                "${"%.2f".format(recentSlopePeakInRise)} → ramp ×${"%.2f".format(slopeKeep)}\n"
+                        )
+                    }
+                    lerp(normalDecayValue, resetCeiling, vroegeStijgingRampFrac * slopeKeep)
                 } else if ((!episodeAnyRealDeliveryDone && !recentSensorNoise) ||
                     (reentry && !episodeAnyRealDeliverySinceReentry && !recentSensorNoise &&
                         (lastHypoActiveAt == null ||
@@ -9632,9 +9698,35 @@ class FCLvNext(
                 explosiveRiseMulThisCycle = explosiveRiseMul
                 explosiveRiseActiveThisCycle = explosiveRiseFrac > 0.0
 
+                // ── AFREMMING-IOB-REM (04/10/2026, de gebruiker) ────────────────────────────
+                // Zie kdoc bij DECEL_IOB_BRAKE_MAX_CUT. Extra, vloeiende demping van de commit
+                // als (1) de stijging al duidelijk afremt (recentSlope ver onder zijn eigen piek),
+                // (2) er al veel insuline werkzaam is (IOB x ISF) en (3) de BG nog dicht bij
+                // target zit (daar is een hypo het risico, niet een hoge piek).
+                val decelIobBrake = run {
+                    if (recentSlopePeakInRise <= 0.5) return@run 1.0
+                    val slopeRatio = ctx.recentSlope / recentSlopePeakInRise
+                    val decelFrac = smooth01((DECEL_IOB_BRAKE_RATIO_HIGH - slopeRatio) /
+                        (DECEL_IOB_BRAKE_RATIO_HIGH - DECEL_IOB_BRAKE_RATIO_LOW))
+                    val iobCoverMmol = ctx.input.currentIOB * ctx.input.effectiveISF
+                    val coverFrac = smooth01((iobCoverMmol - DECEL_IOB_BRAKE_COVER_LOW_MMOL) /
+                        (DECEL_IOB_BRAKE_COVER_HIGH_MMOL - DECEL_IOB_BRAKE_COVER_LOW_MMOL))
+                    val nearTargetFrac = 1.0 - smooth01(
+                        (ctx.deltaToTarget - DECEL_IOB_BRAKE_NEAR_TARGET_MMOL) / DECEL_IOB_BRAKE_NEAR_TARGET_RAMP_MMOL
+                    )
+                    val brake = 1.0 - DECEL_IOB_BRAKE_MAX_CUT * decelFrac * coverFrac * nearTargetFrac
+                    if (brake < 0.99) {
+                        status.append(
+                            "AFREMMING-IOB-REM: ×${"%.2f".format(brake)} (slope ${"%.0f".format(slopeRatio * 100)}% van piek, " +
+                                "IOB×ISF=${"%.1f".format(iobCoverMmol)} mmol, deltaTarget=${"%.1f".format(ctx.deltaToTarget)})\n"
+                        )
+                    }
+                    brake
+                }
+
                 val commitDose =
                     if (allowCommitBoost && commitAccessOk)
-                        (config.maxSMB * fraction * commitIobFactor * prePeakMul * postPeak.commitFactor * rawPlateauPenalty * decelTrendFactor * commitAggressionMul * lateDecayMul * explosiveRiseMul)
+                        (config.maxSMB * fraction * commitIobFactor * prePeakMul * postPeak.commitFactor * rawPlateauPenalty * decelTrendFactor * commitAggressionMul * lateDecayMul * explosiveRiseMul * decelIobBrake)
                             .coerceAtMost(config.maxSMB)
                     else 0.0
                 logRow.commitDoseRaw = commitDose
@@ -11448,6 +11540,23 @@ class FCLvNext(
                     "afgekapt. Dit zou nooit mogen gebeuren; graag dit incident melden.\n"
             )
             commandedDose = absoluteVeiligheidsCap
+        }
+
+        // ── Bevroren-BG-invoer-bewaking (05/10/2026) — zie kdoc bij FROZEN_BG_MIN_ABS_DELTA5M ──
+        run {
+            val prevBg = frozenBgPrevBgNow
+            val sameAsPrev = prevBg != null && kotlin.math.abs(ctx.input.bgNow - prevBg) <= FROZEN_BG_SAME_EPS
+            frozenBgStreak =
+                if (sameAsPrev && kotlin.math.abs(ctx.recentDelta5m) >= FROZEN_BG_MIN_ABS_DELTA5M) frozenBgStreak + 1 else 0
+            frozenBgPrevBgNow = ctx.input.bgNow
+            if (frozenBgStreak >= FROZEN_BG_MIN_STREAK && commandedDose > 0.0) {
+                status.append(
+                    "🧊 BEVROREN BG-INVOER: bg ${"%.1f".format(ctx.input.bgNow)} al ${frozenBgStreak + 1} cycli identiek terwijl " +
+                        "recentDelta5m=${"%.2f".format(ctx.recentDelta5m)} beweging meldt — commandedDose " +
+                        "(${"%.2f".format(commandedDose)}U) geblokkeerd tot de BG weer verandert\n"
+                )
+                commandedDose = 0.0
+            }
         }
 
         // ── Herstart-blokkade, optie 2 (29/07/2026) ────────────────────
