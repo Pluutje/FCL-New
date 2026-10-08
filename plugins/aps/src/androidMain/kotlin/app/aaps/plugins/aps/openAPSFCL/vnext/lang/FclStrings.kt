@@ -202,6 +202,9 @@ interface FclStrings {
 
     // ── Instellingen ──────────────────────────────────────────────────────
     val settingsDosisBehavior: String
+    val settingsTtDoseTitle: String
+    val settingsTtDoseSummary: String
+    val settingsTtDoseInfo: String
     val settingsMaxBolusDay: String
     val settingsMaxBolusNight: String
     val settingsMaxIob: String

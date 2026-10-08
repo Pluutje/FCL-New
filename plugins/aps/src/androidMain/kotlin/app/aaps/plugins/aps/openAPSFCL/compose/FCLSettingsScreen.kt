@@ -32,6 +32,7 @@ import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.ui.compose.pickers.TimeWheelPicker
 import app.aaps.core.ui.compose.pickers.WeekDaySelector
 import app.aaps.plugins.aps.openAPSFCL.vnext.FCL_STATUS_VERSION
+import app.aaps.plugins.aps.openAPSFCL.vnext.FclTempTargetDoseSettings
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.DFLearner
 import app.aaps.plugins.aps.openAPSFCL.vnext.database.FCLCycleLogRepository
 import app.aaps.plugins.aps.openAPSFCL.vnext.healthconnect.FclHealthConnectPermissions
@@ -377,6 +378,42 @@ fun FCLSettingsScreen(
                     sp.putString(StringKey.fcl_vnext_dose_distribution_style.key, it)
                 }
             )
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+            var ttDoseEnabled by remember { mutableStateOf(FclTempTargetDoseSettings.isEnabled(ctx)) }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(s.settingsTtDoseTitle, style = MaterialTheme.typography.bodyMedium)
+                        IconButton(
+                            onClick = { showInfo(s.settingsTtDoseTitle, s.settingsTtDoseInfo) },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Info, contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                    Text(
+                        s.settingsTtDoseSummary,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = ttDoseEnabled,
+                    onCheckedChange = {
+                        ttDoseEnabled = it
+                        FclTempTargetDoseSettings.setEnabled(ctx, it)
+                    }
+                )
+            }
 
         }
 

@@ -79,6 +79,7 @@ import app.aaps.core.interfaces.sharedPreferences.SP
 import app.aaps.plugins.aps.openAPSFCL.compose.FclOverviewScreen
 import app.aaps.plugins.aps.openAPSFCL.compose.PREFS_NAME
 import app.aaps.plugins.aps.openAPSFCL.compose.PREF_OVERVIEW_SCREEN_ENABLED
+import app.aaps.plugins.aps.openAPSFCL.vnext.FclTempTargetDoseSettings
 import app.aaps.plugins.aps.openAPSFCL.vnext.deliveryHistory
 import app.aaps.plugins.aps.openAPSFCL.vnext.MAX_DELIVERY_HISTORY
 import app.aaps.plugins.aps.openAPSFCL.vnext.lastCycleFclDelivered
@@ -360,6 +361,13 @@ open class OpenAPSFCLPlugin @Inject constructor(
             maxBg = hardLimits.verifyHardLimits(tempTarget.highTarget, CoreUiStrings.temp_target_high_target, HardLimits.LIMIT_TEMP_MAX_BG)
             targetBg = hardLimits.verifyHardLimits(tempTarget.target(), CoreUiStrings.temp_target_value, HardLimits.LIMIT_TEMP_TARGET_BG)
         }
+
+        // 07/10/2026: FCLvNext needs the plain profile target and the temp target apart (the
+        // activity module changes the target later), see FclTempTargetDoseSettings.
+        FclTempTargetDoseSettings.update(
+            profileTargetMgdl = profile.getTargetMgdl(),
+            tempTargetMgdl = persistenceLayer.getTemporaryTargetActiveAt(dateUtil.now())?.target()
+        )
 
         val autosensResult = AutosensResult()
         val iobArray = iobCobCalculator.calculateIobArrayForSMB(autosensResult, SMBDefaults.exercise_mode, SMBDefaults.half_basal_exercise_target, isTempTarget)

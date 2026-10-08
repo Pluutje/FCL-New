@@ -621,6 +621,12 @@ private var tempOverrideTargetPctThisCycle: Int = 100
 private var tempOverrideEffectiveMulThisCycle: Double = 1.0
 private var tempOverrideRemainingMinThisCycle: Int = -1
 
+// 06/10/2026 (de gebruiker): tijdens een POSITIEVE override geen piek-IOB-rem zolang de BG nog duidelijk
+// stijgt en hoog is (zie computePeakBrake). Wordt elke cyclus gezet vlak voor evaluatePostPeak.
+private var tempOverrideRelaxesPeakBrake: Boolean = false
+private const val OVERRIDE_PEAK_BRAKE_RELAX_MIN_BG = 10.0     // mmol/L
+private const val OVERRIDE_PEAK_BRAKE_RELAX_MIN_SLOPE = 3.0   // mmol/L/u
+
 // 24/09/2026 (de gebruiker, ronde 3; HERZIEN ronde 3-vervolg — retry+erosie)
 // — +portion/+pending/+preset: gezet bij het PRESET PORTIE-AFREKENING-blok
 // verderop, vlak vóór "🔟 Execution" (ná de portie-aanvraag, de afbouw-check
@@ -4492,6 +4498,16 @@ private fun computePeakBrake(
         return PeakBrakeResult(1.0, false, 0.0, 0.50, recentSlopeDrop, "NONE", rawDecelSignal)
     }
 
+    // 06/10/2026 (de gebruiker): positieve override + BG hoog + nog duidelijk stijgend → geen rem.
+    // De voorspelde piek zit dan telkens vlak boven de BG, terwijl een grote maaltijd nog doorstijgt
+    // (6/10: rem gaf 2 cycli 0 E bij BG 14,7-15,3, piek werd 17,3). De IOB-grenzen blijven gewoon gelden.
+    if (tempOverrideRelaxesPeakBrake &&
+        ctx.input.bgNow >= OVERRIDE_PEAK_BRAKE_RELAX_MIN_BG &&
+        ctx.slope >= OVERRIDE_PEAK_BRAKE_RELAX_MIN_SLOPE
+    ) {
+        return PeakBrakeResult(1.0, false, 0.0, 0.50, recentSlopeDrop, "NONE", rawDecelSignal)
+    }
+
     val t = smooth01((ctx.iobRatio - suppressThreshold) / (slopeCeilingFullIobRatio - suppressThreshold))
     val slopeCeiling = 0.50 + t * (maxSlopeCeiling - 0.50)
 
@@ -5354,7 +5370,7 @@ class FCLvNext(
     // "vNN-jjjj-mm-dd-uumm" (aanmaaktijdstip, geen omschrijving; die van
     // eerdere versies raakten toch achter). Alleen als het écht relevant
     // is een korte omschrijving toevoegen.
-    private val FCL_CODE_VERSION = "v136-2026-10-05-2330"
+    private val FCL_CODE_VERSION = "v139-2026-10-08-1200"
 
     // ── Restart-detectie (16/07/2026) ─────────────────────────────────
     // true op precies de EERSTE cyclus na het (her)starten van dit class-
@@ -7773,6 +7789,9 @@ class FCLvNext(
         else sensorBlipStreakCount = 0
         saveSensorBlipStreakCount(context, sensorBlipStreakCount)
 
+        tempOverrideRelaxesPeakBrake = FclTempOverrideSettings.status(context, now.millis).let { st ->
+            st.active && (st.targetPct > 100 || FclTempOverrideSettings.isActiveExtraPositive(context))
+        }
         val postPeak = evaluatePostPeak(
             ctx, mealSignal, peak, now, config,
             episodeMinutesForPostPeak,
@@ -10165,6 +10184,27 @@ class FCLvNext(
                     "nog ${tempOverrideStatus.remainingMinutes} min)\n"
             )
         }
+        // ── TEMP TARGET → DOSIS (07/10/2026, de gebruiker) ──────────────────────
+        // Hoog temp target = kleinere dosis, laag temp target = grotere dosis (alleen als de
+        // schakelaar "Dosering & gedrag" aan staat). Zie FclTempTargetDoseSettings. Dezelfde plek als
+        // de override-multiplier: vóór alle veiligheidsstappen, en NIET op de override-porties
+        // (die worden pas verderop opgeteld).
+        if (commandedDose > 0.0 && FclTempTargetDoseSettings.isEnabled(context)) {
+            val ttFactor = FclTempTargetDoseSettings.factor(
+                FclTempTargetDoseSettings.currentProfileTargetMmol(),
+                FclTempTargetDoseSettings.currentTempTargetMmol()
+            )
+            if (kotlin.math.abs(ttFactor - 1.0) > 0.005) {
+                val beforeTt = commandedDose
+                commandedDose *= ttFactor
+                status.append(
+                    "TEMP TARGET DOSIS: ${"%.2f".format(beforeTt)}→${"%.2f".format(commandedDose)}U " +
+                        "(profiel ${"%.1f".format(FclTempTargetDoseSettings.currentProfileTargetMmol())}, " +
+                        "temp target ${"%.1f".format(FclTempTargetDoseSettings.currentTempTargetMmol() ?: 0.0)}, " +
+                        "factor ${"%.2f".format(ttFactor)})\n"
+                )
+            }
+        }
         tempOverrideActiveThisCycle = tempOverrideStatus.active
         tempOverrideTargetPctThisCycle = tempOverrideStatus.targetPct
         tempOverrideEffectiveMulThisCycle = tempOverrideStatus.effectiveMul
@@ -10574,7 +10614,20 @@ class FCLvNext(
             episodeHypoDebtU > 0.01 && ctx.iobRatio >= POST_HYPO_BRAKE_ARM_MIN_IOB_RATIO
         val recentLowArm = recentlyLow
 
-        if (mealSignal.state == MealState.CONFIRMED && (hypoDebtArm || recentLowArm) && !postHypoBrakeActive) {
+        // 06/10/2026 (de gebruiker): de rem mag niet meer aanslaan als de BG al ruim boven target zit
+        // (zelfde grens als het loslaten, POST_HYPO_BRAKE_DISARM_ABOVE_TARGET). Zonder deze grens liet hij
+        // op 19:08 los (BG 10,3) en sloeg hij op 19:13 weer aan (BG 11,2) door de lage BG van 30 min eerder.
+        val bgFarAboveTarget =
+            ctx.input.bgNow >= ctx.input.targetBG + POST_HYPO_BRAKE_DISARM_ABOVE_TARGET
+        // 06/10/2026 (de gebruiker): bij een POSITIEVE override (hogere sterkte of extra porties) weet
+        // de gebruiker dat het een grote maaltijd is. Dan slaat de rem niet aan en een lopende rem
+        // gaat vroeg los (zie auto-disarm hieronder). hypo-projectie (hypoActive) blijft altijd gelden.
+        val overrideRelaxesBrake =
+            tempOverrideStatus.active &&
+                (tempOverrideStatus.targetPct > 100 || FclTempOverrideSettings.isActiveExtraPositive(context))
+        if (mealSignal.state == MealState.CONFIRMED && (hypoDebtArm || recentLowArm) &&
+            !postHypoBrakeActive && !bgFarAboveTarget && !overrideRelaxesBrake
+        ) {
             postHypoBrakeActive = true
             postHypoBrakeBg = ctx.input.bgNow
             postHypoBrakeArmedAt = now
@@ -10618,11 +10671,13 @@ class FCLvNext(
             ctx.input.bgNow >= POST_HYPO_BRAKE_FLAT_DISARM_MIN_BG &&
                 ctx.input.bgNow >= postHypoBrakeBg - POST_HYPO_BRAKE_FLAT_DISARM_TOLERANCE
         if (postHypoBrakeActive && !logRow.hypoActive &&
-            minutesSince(postHypoBrakeArmedAt, now) >= POST_HYPO_BRAKE_MIN_ARMED_MIN &&
-            (disarmAboveTarget || disarmFlatOrRising)
+            (overrideRelaxesBrake || minutesSince(postHypoBrakeArmedAt, now) >= POST_HYPO_BRAKE_MIN_ARMED_MIN) &&
+            (disarmAboveTarget || disarmFlatOrRising || overrideRelaxesBrake)
         ) {
             val disarmReason =
-                if (disarmAboveTarget)
+                if (overrideRelaxesBrake && !disarmAboveTarget && !disarmFlatOrRising)
+                    "positieve override actief (bgNow=${"%.1f".format(ctx.input.bgNow)})"
+                else if (disarmAboveTarget)
                     "bgNow=${"%.1f".format(ctx.input.bgNow)} (target+" +
                         "${"%.1f".format(POST_HYPO_BRAKE_DISARM_ABOVE_TARGET)} of hoger)"
                 else
@@ -11501,8 +11556,11 @@ class FCLvNext(
         // "Altijd geven"-portie (04/10/2026): op het ingestelde tijdstip erbij, ook als de BG daalt of
         // de down-trend-gate de basisdosis op 0 zette. Enige uitzondering: BG onder
         // ALWAYS_GIVE_MIN_BG_MMOL — dan wacht de portie (blijft open) tot de BG weer hoger is.
+        // 06/10/2026 (de gebruiker): ook wachten als de BG echt aan het dalen is (down-trend-gate, geen
+        // maaltijd). De portie blijft dan open tot de BG weer stijgt of de override vervalt.
+        val alwaysGiveFalling = downGate.locked && mealSignal.state == MealState.NONE
         if (portionRequest != null && portionRequest.alwaysGive) {
-            if (ctx.input.bgNow >= FclTempOverrideSettings.ALWAYS_GIVE_MIN_BG_MMOL) {
+            if (ctx.input.bgNow >= FclTempOverrideSettings.ALWAYS_GIVE_MIN_BG_MMOL && !alwaysGiveFalling) {
                 portionRequestBeforeDose = commandedDose
                 portionRequestAmount = portionRequest.requestU
                 portionRequestId = portionRequest.portionId
@@ -11514,8 +11572,8 @@ class FCLvNext(
                 )
             } else {
                 status.append(
-                    "PRESET PORTIE ALTIJD-GEVEN WACHT: BG ${"%.1f".format(ctx.input.bgNow)} < " +
-                        "${"%.1f".format(FclTempOverrideSettings.ALWAYS_GIVE_MIN_BG_MMOL)} mmol — portie blijft open\n"
+                    "PRESET PORTIE ALTIJD-GEVEN WACHT: BG ${"%.1f".format(ctx.input.bgNow)} " +
+                        "(onder ${"%.1f".format(FclTempOverrideSettings.ALWAYS_GIVE_MIN_BG_MMOL)} mmol of dalend) — portie blijft open\n"
                 )
             }
         }
@@ -11532,7 +11590,10 @@ class FCLvNext(
         // waarde laten doorglippen, is dit de allerlaatste stop vóórdat er
         // daadwerkelijk insuline wordt afgegeven. Loggen bij ingrijpen — als dit
         // ooit afgaat, is dat zelf het signaal dat er elders een bug zit.
-        val absoluteVeiligheidsCap = config.maxSMB * 1.5
+        // 06/10/2026 (de gebruiker): de override-portie komt BOVENOP de gewone dosis en mag niet door deze
+        // grens worden geknepen; de grens geldt dus voor de basisdosis alleen.
+        val absoluteVeiligheidsCap = config.maxSMB * 1.5 +
+            (if (portionRequestId != null && portionRequestAmount > 0.0) portionRequestAmount else 0.0)
         if (commandedDose > absoluteVeiligheidsCap) {
             status.append(
                 "⚠️ VEILIGHEIDSVANGRAIL: commandedDose ${"%.2f".format(commandedDose)}U " +

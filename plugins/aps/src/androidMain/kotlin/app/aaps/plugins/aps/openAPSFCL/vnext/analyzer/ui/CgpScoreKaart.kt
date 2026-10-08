@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.sp
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.CgpHistory
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.CgpScore
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.CgpScoreCalculator
+import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.LogRow
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.min
@@ -283,11 +284,34 @@ fun CgpScoreKaart(context: Context) {
                 }
             }
 
-            Divider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
+        }
+    }
+}
 
-            // ── PGR trendlijn: dagpunten + 14-daags voortschrijdend gemiddelde ──
+/**
+ * Losse kaart met de vier dagelijkse verlopen (stippen + 14-daags gemiddelde):
+ * HbA1c, PGR, GVP en TIR. Staat onder de CGP-kaart en de GVP-kaart.
+ */
+@Composable
+fun CgpTrendKaart(context: Context, rows: List<LogRow>) {
+    val scores14d  = remember { CgpHistory.get14dScores(context) }
+    val scores24h  = remember { CgpHistory.get24hScores(context) }
+    val lijnReeks: List<Double?> = remember { CgpHistory.getRollingAverageOfDots(context) }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.35f)
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text("📈 14-daags overzicht",
+                 style = MaterialTheme.typography.bodyMedium,
+                 fontWeight = FontWeight.SemiBold)
             if (scores14d.size >= 2) {
-                Divider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
                 // ── HbA1c-trendlijn (20/07/2026) ──────────────────────────
                 // Zelfde dagpunten+voortschrijdend-gemiddelde-patroon als de PGR-
                 // trendlijn hieronder, maar dan op het geschatte HbA1c. Bewust
@@ -298,7 +322,7 @@ fun CgpScoreKaart(context: Context) {
                 // trendgrafiek hoort hier het meest voor de hand liggend thuis. Geen
                 // nieuwe databron nodig: scores24h bevat al meanMmol per dag, exact
                 // dezelfde geschiedenis die de PGR-trendlijn hieronder ook gebruikt.
-                Text("HbA1c per dag  |  lijn = 14-daags gemiddelde",
+                Text("HbA1c (geschat, mmol/mol)",
                      style = MaterialTheme.typography.labelSmall,
                      color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Hba1cTrendlijn(
@@ -308,7 +332,7 @@ fun CgpScoreKaart(context: Context) {
                 )
 
                 Divider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
-                Text("PGR per dag  |  lijn = 14-daags gemiddelde",
+                Text("PGR (risicoscore, lager = beter)",
                      style = MaterialTheme.typography.labelSmall,
                      color = MaterialTheme.colorScheme.onSurfaceVariant)
                 PgrTrendlijn(
@@ -318,6 +342,22 @@ fun CgpScoreKaart(context: Context) {
                     modifier   = Modifier.fillMaxWidth().height(80.dp)
                 )
             }
+
+            Divider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
+            Text("GVP (onrust van de curve, lager = beter)",
+                 style = MaterialTheme.typography.labelSmall,
+                 color = MaterialTheme.colorScheme.onSurfaceVariant)
+            GvpPerDagLijn(rows = rows, modifier = Modifier.fillMaxWidth().height(80.dp))
+
+            Divider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
+            Text("TIR (tijd in bereik, hoger = beter)",
+                 style = MaterialTheme.typography.labelSmall,
+                 color = MaterialTheme.colorScheme.onSurfaceVariant)
+            TirPerDagLijn(rows = rows, modifier = Modifier.fillMaxWidth().height(80.dp))
+
+            Text("stip = dag, lijn = 14-daags gemiddelde",
+                 style = MaterialTheme.typography.labelSmall,
+                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f))
         }
     }
 }

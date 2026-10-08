@@ -61,5 +61,9 @@ fun FclStatisticsScreen() {
         )
 
         CgpScoreKaart(context = context)
+
+        GvpKaart(rows = allRows)
+
+        CgpTrendKaart(context = context, rows = allRows)
     }
 }

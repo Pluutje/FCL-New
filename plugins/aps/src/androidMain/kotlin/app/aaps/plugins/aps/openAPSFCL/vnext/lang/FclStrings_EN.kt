@@ -198,6 +198,15 @@ object FclStrings_EN : FclStrings {
 
     // ── Settings ──────────────────────────────────────────────────────────
     override val settingsDosisBehavior          = "\uD83D\uDC89 Dosing & behaviour"
+    override val settingsTtDoseTitle            = "Temp target adjusts dose"
+    override val settingsTtDoseSummary          = "High temp target = smaller dose, low temp target = bigger dose."
+    override val settingsTtDoseInfo             =
+        "When this is on, the dose follows your temp target.\n\n" +
+            "\u2022 High temp target (for example for sport): smaller doses.\n" +
+            "\u2022 Low temp target (for example eating soon): bigger doses.\n\n" +
+            "The factor is 3.3 \u00F7 (3.3 + (temp target \u2212 profile target)), between 0.5 and 1.3. " +
+            "Example: profile target 6.0 and temp target 7.8 gives factor 0.65.\n\n" +
+            "The extra doses of an override preset are not changed by this."
     override val settingsMaxBolusDay            = "Max bolus day"
     override val settingsMaxBolusNight          = "Max bolus night"
     override val settingsMaxIob                 = "Max IOB"

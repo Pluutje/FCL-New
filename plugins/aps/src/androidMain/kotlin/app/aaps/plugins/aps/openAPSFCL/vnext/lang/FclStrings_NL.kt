@@ -198,6 +198,15 @@ object FclStrings_NL : FclStrings {
 
     // ── Instellingen ──────────────────────────────────────────────────────
     override val settingsDosisBehavior          = "\uD83D\uDC89 Dosering & gedrag"
+    override val settingsTtDoseTitle            = "Temp target past dosis aan"
+    override val settingsTtDoseSummary          = "Hoog temp target = kleinere dosis, laag temp target = grotere dosis."
+    override val settingsTtDoseInfo             =
+        "Als dit aan staat, volgt de dosis je temp target.\n\n" +
+            "\u2022 Hoog temp target (bijvoorbeeld voor sport): kleinere doses.\n" +
+            "\u2022 Laag temp target (bijvoorbeeld eet-binnenkort): grotere doses.\n\n" +
+            "De factor is 3,3 \u00F7 (3,3 + (temp target \u2212 profieltarget)), tussen 0,5 en 1,3. " +
+            "Voorbeeld: profieltarget 6,0 en temp target 7,8 geeft factor 0,65.\n\n" +
+            "De extra doses van een override-preset worden hierdoor niet aangepast."
     override val settingsMaxBolusDay            = "Max bolus dag"
     override val settingsMaxBolusNight          = "Max bolus nacht"
     override val settingsMaxIob                 = "Max IOB"
