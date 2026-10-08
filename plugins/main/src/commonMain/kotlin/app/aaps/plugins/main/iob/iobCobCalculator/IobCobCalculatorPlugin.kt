@@ -44,6 +44,7 @@ import app.aaps.core.interfaces.rx.collectResilient
 import app.aaps.core.interfaces.rx.events.EventAppInitialized
 import app.aaps.core.interfaces.rx.events.EventCalibrationChanged
 import app.aaps.core.interfaces.rx.events.EventConfigBuilderChange
+import app.aaps.core.interfaces.rx.events.EventTimeZoneChanged
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.interfaces.utils.DecimalFormatter
 import app.aaps.core.interfaces.utils.MidnightTime
@@ -62,14 +63,18 @@ import app.aaps.plugins.main.MainStrings
 import app.aaps.plugins.main.iob.iobCobCalculator.data.AutosensDataStoreObject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
 import kotlin.concurrent.Volatile
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 class IobCobCalculatorPlugin(
     aapsLogger: AAPSLogger,
@@ -99,8 +104,10 @@ class IobCobCalculatorPlugin(
 
     private var scope: CoroutineScope? = null
 
+    /** How long a burst of time zone changes is collected before one full reset. A var only for tests. */
+    internal var timeZoneResetDebounce: Duration = 10.seconds
+
     private var iobTable = LongSparseArray<IobTotal>() // oldest at index 0
-    private var basalDataTable = LongSparseArray<BasalData>() // oldest at index 0
 
     // Written by the calculation when it publishes its result (PrepareGraphDataRunner.publishAds) and
     // read by the UI, the loop and the watch on other threads. Every store guards its own state, so a
@@ -109,8 +116,10 @@ class IobCobCalculatorPlugin(
     // should. kotlin.concurrent.Volatile, which works in common code.
     @Volatile override var ads: AutosensDataStore = AutosensDataStoreObject()
 
-    private val dataLock = AapsLock()
+    // Guards iobTable, every read and every write. Internal only so a test can hold it.
+    internal val dataLock = AapsLock()
 
+    @OptIn(FlowPreview::class)
     override suspend fun onStart() {
         super.onStart()
         val newScope = CoroutineScope(aapsIoDispatcher + SupervisorJob())
@@ -118,6 +127,14 @@ class IobCobCalculatorPlugin(
         // EventConfigBuilderChange
         rxBus.toFlow(EventConfigBuilderChange::class)
             .collectResilient(newScope, aapsLogger, LTag.AUTOSENS, start = CoroutineStart.UNDISPATCHED) { resetDataAndRunCalculation("onEventConfigBuilderChange") }
+        // EventTimeZoneChanged: the basal profile is read in the current time zone, so every cached IOB,
+        // basal and autosens value of the past would now be calculated differently. Until the past is
+        // calculated with the offset of its own time (_docs/IOB_TIME_ZONE.md), start again from scratch.
+        // Debounced: automatic zone detection near a border can send several changes in a row, and each
+        // full recalculation stopped by the next one would be thrown away.
+        rxBus.toFlow(EventTimeZoneChanged::class)
+            .debounce(timeZoneResetDebounce)
+            .collectResilient(newScope, aapsLogger, LTag.AUTOSENS, start = CoroutineStart.UNDISPATCHED) { resetDataAndRunCalculation("onEventTimeZoneChanged") }
         // EventCalibrationChanged → the fit changed, so bucketed data needs to be re-smoothed
         // with the new calibration applied. scheduleHistoryDataChange has its own 5s debounce
         // so bursts (delete-many, bulk-add) collapse into one workflow run.
@@ -240,7 +257,20 @@ class IobCobCalculatorPlugin(
         dataLock.withLock {
             aapsLogger.debug(LTag.AUTOSENS, "Clearing cached data.")
             iobTable = LongSparseArray()
-            basalDataTable = LongSparseArray()
+        }
+    }
+
+    override fun bgDataReloaded() {
+        // The calculation reaches 24 h + DIA back (calculateDetectionStart); older entries are never asked for
+        val oldest = dateUtil.now() - T.hours(CACHED_IOB_HOURS).msecs()
+        dataLock.withLock {
+            // Oldest at index 0. A few per BG: one value every 5 minutes moves past the limit.
+            var count = 0
+            while (iobTable.size() > 0 && iobTable.keyAt(0) < oldest) {
+                iobTable.removeAt(0)
+                count++
+            }
+            aapsLogger.debug(LTag.AUTOSENS, "BG data reloaded: kept ${iobTable.size()} cached IOB values, dropped $count older than $CACHED_IOB_HOURS h")
         }
     }
 
@@ -275,7 +305,10 @@ class IobCobCalculatorPlugin(
     override suspend fun calculateFromTreatmentsAndTemps(toTime: Long, profile: EffectiveProfile): IobTotal {
         val now = dateUtil.now()
         val time = ads.roundUpTime(toTime)
-        val cacheHit = iobTable[time]
+        // Under the same lock as every write. iobTable is a plain LongSparseArray, and the writers
+        // (new BG, history change, clearCache) run on other threads: a read without the lock could
+        // see the arrays half compacted and return the IOB of another time, or throw (#5211).
+        val cacheHit = dataLock.withLock { iobTable[time] }
         if (time < now && cacheHit != null) {
             //og.debug(">>> calculateFromTreatmentsAndTemps Cache hit " + new Date(time).toLocaleString());
             return cacheHit
@@ -331,28 +364,21 @@ class IobCobCalculatorPlugin(
         return IobTotal.combine(bolusIob, basalIob).round()
     }
 
+    // Not cached. A cache keyed by time held a value made with the profile of whichever caller came
+    // first, and the callers that asked for the past (overview basal graph, TDD) read their range at
+    // once now. The callers left ask for now, which was never stored anyway.
     override suspend fun getBasalData(profile: Profile, fromTime: Long): BasalData {
-        val now = dateUtil.now()
         val time = ads.roundUpTime(fromTime)
-        var retVal = basalDataTable[time]
-        if (retVal == null) {
-            //log.debug(">>> getBasalData Cache miss " + new Date(time).toLocaleString());
-            retVal = BasalData()
-            val tb = processedTbrEbData.getTempBasalIncludingConvertedExtended(time)
-            retVal.basal = profile.getBasal(time)
-            if (tb != null) {
-                retVal.isTempBasalRunning = true
-                retVal.tempBasalAbsolute = tb.convertedToAbsolute(time, profile)
-            } else {
-                retVal.isTempBasalRunning = false
-                retVal.tempBasalAbsolute = retVal.basal
-            }
-            if (time < now) {
-                dataLock.withLock {
-                    basalDataTable.append(time, retVal)
-                }
-            }
-        } //else log.debug(">>> getBasalData Cache hit " +  new Date(time).toLocaleString());
+        val retVal = BasalData()
+        val tb = processedTbrEbData.getTempBasalIncludingConvertedExtended(time)
+        retVal.basal = profile.getBasal(time)
+        if (tb != null) {
+            retVal.isTempBasalRunning = true
+            retVal.tempBasalAbsolute = tb.convertedToAbsolute(time, profile)
+        } else {
+            retVal.isTempBasalRunning = false
+            retVal.tempBasalAbsolute = retVal.basal
+        }
         return retVal
     }
 
@@ -494,14 +520,6 @@ class IobCobCalculatorPlugin(
                 if (iobTable.keyAt(index) > time) {
                     aapsLogger.debug(LTag.AUTOSENS, "Removing from iobTable: " + dateUtil.dateAndTimeAndSecondsString(iobTable.keyAt(index)))
                     iobTable.removeAt(index)
-                } else {
-                    break
-                }
-            }
-            for (index in basalDataTable.size() - 1 downTo 0) {
-                if (basalDataTable.keyAt(index) > time) {
-                    aapsLogger.debug(LTag.AUTOSENS, "Removing from basalDataTable: " + dateUtil.dateAndTimeAndSecondsString(basalDataTable.keyAt(index)))
-                    basalDataTable.removeAt(index)
                 } else {
                     break
                 }
@@ -693,5 +711,11 @@ class IobCobCalculatorPlugin(
             total.plus(totalExt)
         }
         return total
+    }
+
+    internal companion object {
+
+        /** How long cached IOB values are kept: more than the 24 h + DIA the calculation looks back. */
+        const val CACHED_IOB_HOURS = 48L
     }
 }

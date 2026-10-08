@@ -49,3 +49,4 @@ object Versions {
     val jvmTarget = JvmTarget.JVM_21
     const val jacoco = "0.8.11"
 }
+

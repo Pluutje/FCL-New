@@ -84,8 +84,13 @@ class Converters {
     fun fromSourceSensor(sourceSensor: GlucoseValue.SourceSensor?) = sourceSensor?.name
 
     @TypeConverter
-    fun toSourceSensor(sourceSensor: String?): GlucoseValue.SourceSensor? =
-        safeEnum<GlucoseValue.SourceSensor>(sourceSensor) ?: GlucoseValue.SourceSensor.UNKNOWN
+    fun toSourceSensor(sourceSensor: String?): GlucoseValue.SourceSensor? {
+        return sourceSensor?.let {
+            GlucoseValue.SourceSensor.entries.firstOrNull { enumValue -> enumValue.name == it }
+                ?: LEGACY_SOURCE_SENSOR_NAMES[it]
+                ?: GlucoseValue.SourceSensor.UNKNOWN
+        }
+    }
 
     // ── TemporaryBasal ────────────────────────────────────────────────────
 
