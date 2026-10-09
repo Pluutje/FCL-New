@@ -810,6 +810,19 @@ private const val FROZEN_BG_MIN_ABS_DELTA5M = 0.3
 private const val FROZEN_BG_MIN_STREAK = 2
 private const val FROZEN_BG_SAME_EPS = 0.05
 private const val DECEL_IOB_BRAKE_MAX_CUT = 0.50
+
+// v140 (09/10/2026): micro-dosis blokkeren onder target kort na een lage waarde.
+private const val MICRO_RECENT_LOW_READINGS = 6   // ~30 minuten
+private const val MICRO_RECENT_LOW_MMOL = 4.6
+
+// v140 (09/10/2026): afbouw naar de top op basis van de laatste echte 5-minuten-stap.
+// 9/10 12:48: stap +0,3 na +0,5 (60%), maar recentSlope stond op 90% van de piek, dus
+// geen rem en 2,34 U op de top. Deze rem kijkt naar de stap zelf (loopt niet achter).
+private const val STEP_DECEL_MIN_MAX_STEP = 0.4   // mmol/5 min: alleen bij een echte stijging
+private const val STEP_DECEL_RATIO_HIGH = 0.85    // stap/max-stap: vanaf hier geen rem
+private const val STEP_DECEL_RATIO_LOW = 0.55     // stap/max-stap: op of onder dit punt volle rem
+private const val STEP_DECEL_MAX_CUT = 0.60
+private const val STEP_DECEL_WINDOW_READINGS = 8  // ~40 minuten terugkijken voor de max-stap
 private const val DECEL_IOB_BRAKE_RATIO_HIGH = 0.85
 private const val DECEL_IOB_BRAKE_RATIO_LOW = 0.55
 private const val DECEL_IOB_BRAKE_COVER_LOW_MMOL = 8.0
@@ -1129,7 +1142,7 @@ private const val VROEGE_STIJGING_SUSTAIN_MIN = 15.0      // min. aanhoudend hog
 // VROEGE_STIJGING_RAMP_MIN_FAST (Rick's geval: ~2,6 min, dus al binnen 1
 // cyclus vrijwel volledig op kracht). Nooit sneller dan dit floor, dus nooit
 // een instante 1-cyclus-sprong zoals de oude code.
-private const val VROEGE_STIJGING_RAMP_MIN_SLOW = 10.0
+private const val VROEGE_STIJGING_RAMP_MIN_SLOW = 7.0  // v140: was 10 (eerder geven, de stap-afbouw beschermt de top)
 private const val VROEGE_STIJGING_RAMP_MIN_FAST = 2.0
 private const val VROEGE_STIJGING_RAMP_SLOPE_LOW = 5.0    // mmol/u -- onder dit punt blijft de volledige, trage opbouw gelden
 private const val VROEGE_STIJGING_RAMP_SLOPE_HIGH = 15.0  // mmol/u -- vanaf dit punt geldt de snelste opbouw
@@ -5370,7 +5383,7 @@ class FCLvNext(
     // "vNN-jjjj-mm-dd-uumm" (aanmaaktijdstip, geen omschrijving; die van
     // eerdere versies raakten toch achter). Alleen als het écht relevant
     // is een korte omschrijving toevoegen.
-    private val FCL_CODE_VERSION = "v139-2026-10-08-1200"
+    private val FCL_CODE_VERSION = "v140-2026-10-09-1500"
 
     // ── Restart-detectie (16/07/2026) ─────────────────────────────────
     // true op precies de EERSTE cyclus na het (her)starten van dit class-
@@ -7546,6 +7559,19 @@ class FCLvNext(
         if (mealAccessOverride && accessLevel == DoseAccessLevel.BLOCKED && zoneEnum != BgZone.LOW) {
             status.append("ACCESS OVERRIDE: meal-like in-range → MICRO_ONLY\n")
             accessLevel = DoseAccessLevel.MICRO_ONLY
+        }
+
+        // v140 (09/10/2026): geen micro-dosis onder target kort na een lage waarde.
+        // 9/10 08:33 en 08:58: korte sensor-schommeling (4,5 -> 4,9 -> 5,3 -> 4,9) leek
+        // op het begin van een stijging en gaf 2x 0,15 U terwijl BG net laag was.
+        if (accessLevel == DoseAccessLevel.MICRO_ONLY &&
+            mealSignal.state != MealState.CONFIRMED &&
+            ctx.deltaToTarget < 0.0 &&
+            ctx.input.bgHistory.sortedBy { it.first.millis }.takeLast(MICRO_RECENT_LOW_READINGS)
+                .any { it.second <= MICRO_RECENT_LOW_MMOL }
+        ) {
+            status.append("MICRO GEBLOKKEERD: onder target en BG was de laatste 30 min <= ${MICRO_RECENT_LOW_MMOL}\n")
+            accessLevel = DoseAccessLevel.BLOCKED
         }
 
         status.append("DoseAccess=$accessLevel\n")
@@ -9743,9 +9769,33 @@ class FCLvNext(
                     brake
                 }
 
+                // v140: rem op de laatste echte 5-minuten-stap t.o.v. de grootste stap in deze stijging.
+                val stepDecelBrake = run {
+                    val pts = ctx.input.bgHistory.sortedBy { it.first.millis }.takeLast(STEP_DECEL_WINDOW_READINGS)
+                    if (pts.size < 3) return@run 1.0
+                    val steps = pts.zipWithNext().mapNotNull { (a, b) ->
+                        val dtMin = (b.first.millis - a.first.millis) / 60000.0
+                        if (dtMin < 2.0 || dtMin > 8.0) null else (b.second - a.second) * 5.0 / dtMin
+                    }
+                    if (steps.size < 2) return@run 1.0
+                    val lastStep = steps.last()
+                    val maxStep = steps.max()
+                    if (maxStep < STEP_DECEL_MIN_MAX_STEP) return@run 1.0
+                    val ratio = (lastStep / maxStep).coerceAtLeast(0.0)
+                    val frac = smooth01((STEP_DECEL_RATIO_HIGH - ratio) / (STEP_DECEL_RATIO_HIGH - STEP_DECEL_RATIO_LOW))
+                    val brake = 1.0 - STEP_DECEL_MAX_CUT * frac
+                    if (brake < 0.99) {
+                        status.append(
+                            "STAP-AFBOUW: ×${"%.2f".format(brake)} (laatste stap ${"%.2f".format(lastStep)} = " +
+                                "${"%.0f".format(ratio * 100)}% van max ${"%.2f".format(maxStep)} mmol/5min)\n"
+                        )
+                    }
+                    brake
+                }
+
                 val commitDose =
                     if (allowCommitBoost && commitAccessOk)
-                        (config.maxSMB * fraction * commitIobFactor * prePeakMul * postPeak.commitFactor * rawPlateauPenalty * decelTrendFactor * commitAggressionMul * lateDecayMul * explosiveRiseMul * decelIobBrake)
+                        (config.maxSMB * fraction * commitIobFactor * prePeakMul * postPeak.commitFactor * rawPlateauPenalty * decelTrendFactor * commitAggressionMul * lateDecayMul * explosiveRiseMul * decelIobBrake * stepDecelBrake)
                             .coerceAtMost(config.maxSMB)
                     else 0.0
                 logRow.commitDoseRaw = commitDose

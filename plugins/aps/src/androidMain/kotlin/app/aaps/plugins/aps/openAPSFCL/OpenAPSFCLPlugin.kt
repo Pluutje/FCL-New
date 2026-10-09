@@ -172,7 +172,6 @@ open class OpenAPSFCLPlugin @Inject constructor(
         }
         .icon(IcPluginOpenAPS)
         .pluginName(ApsStrings.openaps_fcl)
-        .shortName(CoreUiStrings.fcl_shortname)
         .preferencesVisibleInSimpleMode(false)
         .showInList(showInList = { config.APS })
         .description(ApsStrings.description_smb)
