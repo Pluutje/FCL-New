@@ -5383,7 +5383,7 @@ class FCLvNext(
     // "vNN-jjjj-mm-dd-uumm" (aanmaaktijdstip, geen omschrijving; die van
     // eerdere versies raakten toch achter). Alleen als het écht relevant
     // is een korte omschrijving toevoegen.
-    private val FCL_CODE_VERSION = "v140-2026-10-09-1500"
+    private val FCL_CODE_VERSION = "v141-2026-10-09-2100"
 
     // ── Restart-detectie (16/07/2026) ─────────────────────────────────
     // true op precies de EERSTE cyclus na het (her)starten van dit class-
@@ -7543,8 +7543,34 @@ class FCLvNext(
         logRow.commitIobFactor = commitIobFactor
 
 
+        // v140/v141: rem op de laatste echte 5-minuten-stap t.o.v. de grootste stap in deze stijging.
+        // v141: geldt nu ook voor finalDose (basis-energiepad), niet alleen voor de commit-dosis
+        // (9/10 19:28: 0,85 U op de top via dit pad).
+        val stepDecelBrake = run {
+            val pts = ctx.input.bgHistory.sortedBy { it.first.millis }.takeLast(STEP_DECEL_WINDOW_READINGS)
+            if (pts.size < 3) return@run 1.0
+            val steps = pts.zipWithNext().mapNotNull { (a, b) ->
+                val dtMin = (b.first.millis - a.first.millis) / 60000.0
+                if (dtMin < 2.0 || dtMin > 8.0) null else (b.second - a.second) * 5.0 / dtMin
+            }
+            if (steps.size < 2) return@run 1.0
+            val lastStep = steps.last()
+            val maxStep = steps.max()
+            if (maxStep < STEP_DECEL_MIN_MAX_STEP) return@run 1.0
+            val ratio = (lastStep / maxStep).coerceAtLeast(0.0)
+            val frac = smooth01((STEP_DECEL_RATIO_HIGH - ratio) / (STEP_DECEL_RATIO_HIGH - STEP_DECEL_RATIO_LOW))
+            val brake = 1.0 - STEP_DECEL_MAX_CUT * frac
+            if (brake < 0.99) {
+                status.append(
+                    "STAP-AFBOUW: ×${"%.2f".format(brake)} (laatste stap ${"%.2f".format(lastStep)} = " +
+                        "${"%.0f".format(ratio * 100)}% van max ${"%.2f".format(maxStep)} mmol/5min)\n"
+                )
+            }
+            brake
+        }
+
         var finalDose =
-            (decidedDose * iobFactor * config.doseStrengthMul)
+            (decidedDose * iobFactor * config.doseStrengthMul * stepDecelBrake)
                 .coerceAtLeast(0.0)
 
         if (mealSignal.state == MealState.NONE && ctx.acceleration > 0.2 && ctx.iobRatio >= 0.75) {
@@ -7952,6 +7978,7 @@ class FCLvNext(
 
 
         var earlyFiredThisCycle = false  // wordt true als early floor deze cyclus vuurt
+        var boostBudgetAddedThisCycle = 0.0  // v141: wat deze cyclus aan episodeBoostBudgetU is toegevoegd
 // Apply early floor AFTER dampers (maar vóór cap/commit)
 // ✅ NIET toepassen als we al aan het afremmen zijn (accel < 0)
         // Snapshot vóór deze cyclus' eigen frontload-update: de geboost
@@ -8007,6 +8034,7 @@ class FCLvNext(
             // afbouw altijd een compleet beeld heeft van "hoeveel is er al gegeven".
             if (finalDose > 0.01) {
                 episodeBoostBudgetU += finalDose
+                boostBudgetAddedThisCycle = finalDose
                 status.append(
                     "BOOST BUDGET +${"%.2f".format(finalDose)}U " +
                         "→ totaal=${"%.2f".format(episodeBoostBudgetU)}U\n"
@@ -9769,30 +9797,6 @@ class FCLvNext(
                     brake
                 }
 
-                // v140: rem op de laatste echte 5-minuten-stap t.o.v. de grootste stap in deze stijging.
-                val stepDecelBrake = run {
-                    val pts = ctx.input.bgHistory.sortedBy { it.first.millis }.takeLast(STEP_DECEL_WINDOW_READINGS)
-                    if (pts.size < 3) return@run 1.0
-                    val steps = pts.zipWithNext().mapNotNull { (a, b) ->
-                        val dtMin = (b.first.millis - a.first.millis) / 60000.0
-                        if (dtMin < 2.0 || dtMin > 8.0) null else (b.second - a.second) * 5.0 / dtMin
-                    }
-                    if (steps.size < 2) return@run 1.0
-                    val lastStep = steps.last()
-                    val maxStep = steps.max()
-                    if (maxStep < STEP_DECEL_MIN_MAX_STEP) return@run 1.0
-                    val ratio = (lastStep / maxStep).coerceAtLeast(0.0)
-                    val frac = smooth01((STEP_DECEL_RATIO_HIGH - ratio) / (STEP_DECEL_RATIO_HIGH - STEP_DECEL_RATIO_LOW))
-                    val brake = 1.0 - STEP_DECEL_MAX_CUT * frac
-                    if (brake < 0.99) {
-                        status.append(
-                            "STAP-AFBOUW: ×${"%.2f".format(brake)} (laatste stap ${"%.2f".format(lastStep)} = " +
-                                "${"%.0f".format(ratio * 100)}% van max ${"%.2f".format(maxStep)} mmol/5min)\n"
-                        )
-                    }
-                    brake
-                }
-
                 val commitDose =
                     if (allowCommitBoost && commitAccessOk)
                         (config.maxSMB * fraction * commitIobFactor * prePeakMul * postPeak.commitFactor * rawPlateauPenalty * decelTrendFactor * commitAggressionMul * lateDecayMul * explosiveRiseMul * decelIobBrake * stepDecelBrake)
@@ -10762,6 +10766,7 @@ class FCLvNext(
         // stijging weg (recentSlope onder de drempel) of onder de
         // BG-ondergrens, dan klemt de harde vloer (smallCorrectionMaxU) nog
         // steeds vast, net als voorheen.
+        val doseBeforePostHypoBrake = commandedDose
         if (postHypoBrakeActive && commandedDose > 0.0) {
             val riseSinceBrake = (ctx.input.bgNow - postHypoBrakeBg).coerceAtLeast(0.0)
             // 19/09/2026 (de gebruiker) -- zie kdoc bij POST_HYPO_BRAKE_CATCHUP_MIN_BG_CONFIDENT
@@ -10840,7 +10845,10 @@ class FCLvNext(
                 else POST_HYPO_BRAKE_CATCHUP_RISE
             if (slopeOk && bgFloorOk && riseSinceBrake > 0.001) {
                 val rampX = (riseSinceBrake / catchupRise).coerceIn(0.0, 1.0)
-                val rampFrac = (rampX * rampX) * postHypoBrakeRampDamp
+                // v141: lineair i.p.v. kwadratisch (was rampX * rampX). 9/10: de rem liet pas los
+                // op de top (0,32 / 1,08 / 2,00 U van 3,5-4,4 U gewenst). Bewust NIET gemeten vanaf de
+                // laagste waarde: bij een rebound van 3,8 zou de rem dan al bij het aanslaan bijna vrij zijn.
+                val rampFrac = rampX * postHypoBrakeRampDamp
                 val cap = config.smallCorrectionMaxU +
                     (commandedDose - config.smallCorrectionMaxU).coerceAtLeast(0.0) * rampFrac
                 commandedDose = commandedDose.coerceAtMost(cap)
@@ -10870,6 +10878,25 @@ class FCLvNext(
                     logRow.guardPeakLimited = true
                 }
             }
+        }
+
+        // v141 (09/10/2026): een commit die de post-hypo-rem grotendeels wegknipt telt niet mee
+        // voor de afbouw. Eerder liep de teller (commit 2 -> 6 in 20 min) en het boost-budget
+        // door terwijl er bijna niets was geleverd; toen de rem losliet was de afbouw al
+        // voorbij (lateDecayMul 0,15 -> 0,45 U per cyclus).
+        val brakeCut = doseBeforePostHypoBrake - commandedDose
+        if (postHypoBrakeActive && doseBeforePostHypoBrake > 0.0 &&
+            commandedDose < 0.5 * doseBeforePostHypoBrake &&
+            (didCommitThisCycle || earlyFiredThisCycle)
+        ) {
+            if (episodeCommitCount > 1) episodeCommitCount--
+            val budgetBack = minOf(brakeCut, boostBudgetAddedThisCycle).coerceAtLeast(0.0)
+            episodeBoostBudgetU = (episodeBoostBudgetU - budgetBack).coerceAtLeast(0.0)
+            status.append(
+                "POST-HYPO BRAKE: commit telt niet mee voor afbouw (geleverd ${"%.2f".format(commandedDose)} " +
+                    "van ${"%.2f".format(doseBeforePostHypoBrake)} U), teller=$episodeCommitCount, " +
+                    "budget -${"%.2f".format(budgetBack)} U\n"
+            )
         }
 
         // Diagnostiek (26/08/2026, v83): eindstand van de post-hypo-rem deze
