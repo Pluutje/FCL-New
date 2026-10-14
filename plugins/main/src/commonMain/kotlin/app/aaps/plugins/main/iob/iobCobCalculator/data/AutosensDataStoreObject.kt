@@ -50,6 +50,10 @@ class AutosensDataStoreObject : AutosensDataStore {
         // now rather than one it left hours ago.
         const val PHASE_SEED_MIN = 30L
 
+        // Phase shift of the sensor, measured against the current anchor, from which the anchor moves
+        // (see reanchorOnPhaseShift). Same limit createBucketedData5min uses for its own re-anchor.
+        const val REANCHOR_MIN_OFFSET_SEC = 90L
+
         // Autosens/COB data (table or stored fallback) older than this is treated as stale and not handed out.
         val MAX_AUTOSENS_AGE_MS = T.mins(11).msecs()
     }
@@ -327,8 +331,45 @@ class AutosensDataStoreObject : AutosensDataStore {
         }
     }
 
+    /**
+     * Move the anchor when the sensor itself has shifted its 5 minute measurement phase.
+     *
+     * Some sensors (seen with CareSens Air, about once a day) write a record that is 7m45s instead of
+     * 5 minutes after the previous one. From then on all readings sit on a new phase, e.g. 165 s later.
+     * [referenceTime] lives as long as the process, so it keeps the old phase. [adjustToReferenceTime]
+     * then lands 135 s after the newest reading, [createBucketedDataRecalculated] steps back 5 minutes,
+     * and bucketedData[0] becomes a value interpolated 2m45s BEFORE the newest reading. Overview, loop
+     * and wear all read bucketedData[0], so they run on an old, interpolated value until a restart.
+     *
+     * A single off-grid reading can be jitter, so the anchor only moves when the two newest readings
+     * are a normal 5 minute step apart, both are off the old grid by more than
+     * [REANCHOR_MIN_OFFSET_SEC] (the same 90 seconds createBucketedData5min tolerates), and both agree
+     * on the same new phase. That is one reading (5 minutes) after the jump.
+     *
+     * Only called for irregular data. Regular 5 minute data is handled by createBucketedData5min, which
+     * already re-anchors on its own.
+     *
+     * The cached autosens table was built on the old grid, so it is cleared with [reset].
+     */
+    private fun reanchorOnPhaseShift(aapsLogger: AAPSLogger) {
+        val readings = bgReadings
+        if (referenceTime == -1L || readings.size < 3) return
+        val tolerance = T.secs(IRREGULAR_DATA_SEC).msecs()
+        val minOffset = T.secs(REANCHOR_MIN_OFFSET_SEC).msecs()
+        val newest = readings[0].timestamp
+        val previous = readings[1].timestamp
+        if (abs(newest - previous - T.mins(5).msecs()) > tolerance) return // not a normal 5 minute step
+        if (distanceToGrid(newest, referenceTime) <= minOffset) return // still close to the anchor's grid
+        if (distanceToGrid(previous, referenceTime) <= minOffset) return // only the newest is off: maybe jitter
+        if (distanceToGrid(newest, previous) > tolerance) return // the two disagree: no stable new phase
+        aapsLogger.debug(LTag.AUTOSENS, "Sensor phase shifted. Re-anchoring bucket grid to the newest reading.")
+        referenceTime = newest
+        reset()
+    }
+
     override fun createBucketedData(aapsLogger: AAPSLogger, dateUtil: DateUtil) {
         val fiveMinData = isAbout5minData(aapsLogger)
+        if (!fiveMinData) reanchorOnPhaseShift(aapsLogger)
         if (lastUsed5minCalculation != null && lastUsed5minCalculation != fiveMinData) {
             // changing mode => clear cache
             aapsLogger.debug("Invalidating cached data because of changed mode.")

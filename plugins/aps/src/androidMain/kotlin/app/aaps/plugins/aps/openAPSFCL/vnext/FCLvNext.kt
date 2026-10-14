@@ -627,6 +627,31 @@ private var tempOverrideRelaxesPeakBrake: Boolean = false
 private const val OVERRIDE_PEAK_BRAKE_RELAX_MIN_BG = 10.0     // mmol/L
 private const val OVERRIDE_PEAK_BRAKE_RELAX_MIN_SLOPE = 3.0   // mmol/L/u
 
+// v142 (11/10/2026): "hoog zonder te dalen" -- hoe langer de BG boven target+2 blijft zonder
+// echt te dalen, hoe meer de afbouw/absorption-rem/persist-dosis versoepelen. Gewicht 0..1:
+// tijdfactor (start na 10 min, vol na 50 min) x hoogtefactor (delta 2 -> 0, delta 4 -> 1).
+// Veilig: valt weg zodra de BG meer dan 0,3 mmol onder de waarde van 20 min geleden zakt.
+// 10/10: BG 10,3-11,1 met late_decay_mul 0,10 (0,15 U terwijl 2,4 U gewenst) en 20 min niets
+// geleverd door ABSORPTION bij BG 12,4.
+private var highPlateauSince: DateTime? = null
+private var highPlateauFracThisCycle: Double = 0.0
+private const val HIGH_PLATEAU_MIN_DELTA_MMOL = 2.0
+private const val HIGH_PLATEAU_FALL_TOLERANCE_MMOL = 0.3
+private const val HIGH_PLATEAU_LOOKBACK_MIN = 20
+private const val HIGH_PLATEAU_TIME_START_MIN = 10.0
+private const val HIGH_PLATEAU_TIME_RAMP_MIN = 40.0
+private const val HIGH_PLATEAU_HEIGHT_RAMP_MMOL = 2.0
+private const val HIGH_PLATEAU_LDM_FLOOR_MAX = 0.50
+private const val HIGH_PLATEAU_ABSORPTION_RELEASE_FRAC = 0.50
+private const val HIGH_PLATEAU_MAX_IOB_RATIO = 0.55
+
+// v142: afbouw (teller, late_decay_mul, budget) resetten als er 15 min geen maaltijd is en weinig IOB.
+// 10/10 19:18-19:38: een klein bultje (0,10 U) liet late_decay_mul op 0,32 staan; de echte maaltijd
+// om 20:08 kreeg daardoor 6 cycli lang te kleine doses.
+private var noMealSince: DateTime? = null
+private const val AFBOUW_RESET_NONE_MIN = 15
+private const val AFBOUW_RESET_MAX_IOB_U = 1.5
+
 // 24/09/2026 (de gebruiker, ronde 3; HERZIEN ronde 3-vervolg — retry+erosie)
 // — +portion/+pending/+preset: gezet bij het PRESET PORTIE-AFREKENING-blok
 // verderop, vlak vóór "🔟 Execution" (ná de portie-aanvraag, de afbouw-check
@@ -1181,6 +1206,57 @@ private const val NIEUWE_MAALTIJD_RECENT_SLOPE_MIN = 4.0        // mmol/u — fa
 private const val NIEUWE_MAALTIJD_IOB_MAX = 0.30                // reset alleen toestaan als er nog niet te veel IOB van de vorige maaltijd over is
 private const val NIEUWE_MAALTIJD_COMMIT_NR_MIN = 4             // alleen relevant als het gewone eenmalige mechanisme (vroegeStijgingBevestigd) al aantoonbaar verbruikt is
 private const val NIEUWE_MAALTIJD_COOLDOWN_MIN = 30             // min. minuten tussen twee nieuwe-maaltijd-resets (voorkomt herhaald vuren binnen dezelfde stijging)
+
+// ── Vroege dosis bij bevestigde stijging (12/10/2026) ─────────────────────
+// Idee: dezelfde insuline, maar eerder. Na de eerste commit knijpt de taper-clamp
+// de dosis vaak naar ~0,15 U terwijl finalDose 1-5 U is. Hierdoor komt de insuline
+// pas als BG al bijna 10 is. Deze regel geeft in het begin van een BEVESTIGDE
+// stijging een deel van finalDose eerder. Het totaal blijft gelijk: de extra eenheden
+// tellen mee als IOB, dus de bestaande afbouw geeft later minder.
+// Backtest (Rick/Gijs/Ecko, 7 dagen): 35-75% van de triggers is een vals alarm
+// (stijging stopt). Daarom: strenge trigger, BG-ondergrens en een plafond per episode.
+private const val FRONTLOAD_FRACTION = 0.5            // deel van finalDose dat eerder mag komen
+private const val FRONTLOAD_MAX_PER_CYCLE_U = 1.0     // plafond voor de dosis in één cyclus
+private const val FRONTLOAD_MAX_EXTRA_PER_EPISODE_U = 0.6  // totaal extra boven de gewone dosis, per episode
+// Dynamische grenzen: elk van de vijf signalen geeft een gewicht van 0 tot 1 (smoothRamp).
+// Het zwakste gewicht (minimum) bepaalt hoeveel van de vroege dosis meegaat. Zo is er geen
+// harde aan/uit-grens: bij 0,5 gewicht komt de helft van de extra dosis, bij 0 niets.
+private const val FRONTLOAD_DELTA5M_FROM = 0.3          // mmol/5m: stijging, gewicht begint
+private const val FRONTLOAD_DELTA5M_TO = 0.5            // gewicht volledig
+private const val FRONTLOAD_IOB_RATIO_FROM = 0.45       // alleen bij weinig IOB: gewicht begint
+private const val FRONTLOAD_IOB_RATIO_TO = 0.25         // gewicht volledig
+private const val FRONTLOAD_PROJ_MIN_FROM = 6.0         // mmol: zonder insuline blijft BG hierboven, gewicht begint
+private const val FRONTLOAD_PROJ_MIN_TO = 8.0           // gewicht volledig
+private const val FRONTLOAD_BG_FROM = 7.0               // mmol: 1 mmol extra daling mag nooit een hypo geven
+private const val FRONTLOAD_BG_TO = 8.0                 // gewicht volledig
+private const val FRONTLOAD_ABOVE_TARGET_FROM = 0.5     // mmol boven target
+private const val FRONTLOAD_ABOVE_TARGET_TO = 1.5       // gewicht volledig
+private const val FRONTLOAD_MIN_WEIGHT = 0.15         // onder dit gewicht doet de regel niets
+
+// ── Herstel-buffer na een bijna-hypo (12/10/2026) ─────────────────────────
+// AANLEIDING: 12/10 22:23-22:38 (Ecko): BG zakte naar 4,7, daarna snel 4,9→7,9 (waarschijnlijk
+// snelle koolhydraten). Het systeem las dit als maaltijd en gaf 7,4 U in 15 minuten.
+// Regel: na een bijna-hypo (laagste BG in de laatste 90 min) is het totaal in een venster
+// van 40 minuten beperkt tot een buffer. De buffer is DYNAMISCH:
+//   - ernst: 0 bij laagste BG >= 5,2; 1 bij <= 4,4 (vloeiend).
+//   - de ernst zakt weg naarmate het laagste punt langer geleden is: vol tot 30 min, 0 na 60 min.
+//   - buffer in mmol: van 24 (geen bijna-hypo, ruim) naar 11 (diepe bijna-hypo), gedeeld door ISF -> eenheden.
+//   - de buffer groeit mee met de stijging boven het laagste punt: x(1 + 0,5 * stijging/4 mmol).
+// Backtest (7 dagen, 3 gebruikers): grijpt weinig in (0,2-1,9 U per dag ingehouden). Ecko 12/10
+// 22:23-22:38 (laagste 4,7, ISF 3,7): buffer ~6 U i.p.v. de 7,4 U in 15 minuten.
+// Het ingehouden deel is geen verlies: de loop rekent elke 5 min opnieuw en doseert later
+// alsnog als de stijging doorzet.
+private const val REBOUND_LOOKBACK_MIN = 90               // min: terugkijktijd voor het laagste punt
+private const val REBOUND_SEVERITY_BG_FROM = 5.2          // mmol: laagste BG waarbij de ernst begint
+private const val REBOUND_SEVERITY_BG_TO = 4.4            // mmol: laagste BG waarbij de ernst volledig is
+private const val REBOUND_AGE_FADE_FROM_MIN = 60.0        // min geleden: ernst is dan 0
+private const val REBOUND_AGE_FADE_TO_MIN = 30.0          // min geleden of korter: ernst volledig
+private const val REBOUND_BUFFER_MMOL_NONE = 24.0         // mmol: buffer zonder bijna-hypo (ruim)
+private const val REBOUND_BUFFER_MMOL_DEEP = 11.0         // mmol: buffer na diepe bijna-hypo
+private const val REBOUND_RISE_GROWTH = 0.5               // extra buffer bij een stijging van REBOUND_RISE_FULL_MMOL (0,5 = +50%)
+private const val REBOUND_RISE_FULL_MMOL = 4.0            // mmol stijging boven het laagste punt waarbij de buffer volledig gegroeid is
+private const val REBOUND_WINDOW_MIN = 40                 // min: venster waarin de doses worden opgeteld
+private const val REBOUND_MIN_SEVERITY = 0.05             // onder deze ernst doet de regel niets
 // Hoeveel bgStijgtNogFors nog boven de normale afbouw mag uitkomen ALS hij
 // afgaat vlak na een net-al-vervroegde grote commit, zolang er nog GEEN
 // afvlakking (plateau) is geweest sinds die vervroegde commit — dus nog
@@ -3504,6 +3580,16 @@ private fun smooth01(x: Double): Double {
 private fun lerp(a: Double, b: Double, t: Double): Double =
     a + (b - a) * t.coerceIn(0.0, 1.0)
 
+/**
+ * Vloeiende overgang (0..1) van [from] naar [to], in plaats van een harde grens.
+ * Werkt ook omgekeerd: bij from > to wordt het gewicht groter als x kleiner wordt.
+ * 12/10/2026 -- nieuwe regels gebruiken dit i.p.v. aan/uit-schakelaars (zie FRONTLOAD_* en REBOUND_*).
+ */
+private fun smoothRamp(x: Double, from: Double, to: Double): Double {
+    if (from == to) return if (x >= to) 1.0 else 0.0
+    return smooth01((x - from) / (to - from))
+}
+
 // v120 -- piecewise-lineaire interpolatie-helper (17/09/2026, de gebruiker) --
 // Gebruikt om voorheen harde trapfuncties (commitFractionZoneFactor,
 // peakIobBoost) om te zetten in vloeiende overgangen tussen dezelfde
@@ -4706,6 +4792,13 @@ private fun evaluatePostPeak(
             ctx.recentDelta5m >= 0.10 &&
             ctx.iobRatio < 0.20
 
+    // v142: langdurig hoog zonder te dalen laat de absorption-suppress/lockout los (niet de
+    // piek-IOB-rem en niet de tail/blip-regels). Alleen bij lage IOB-ratio en geen daling.
+    val plateauOverride =
+        highPlateauFracThisCycle >= HIGH_PLATEAU_ABSORPTION_RELEASE_FRAC &&
+            ctx.iobRatio < HIGH_PLATEAU_MAX_IOB_RATIO &&
+            ctx.recentSlope > -0.30
+
     // episode-like: ook zonder absorption kunnen we een top herkennen
     val episodeLike =
         mealSignal.state != MealState.NONE || peakEstimator.active || peak.state != PeakPredictionState.IDLE
@@ -4793,7 +4886,7 @@ private fun evaluatePostPeak(
     val suppress =
         reliable && (
             // bestaande post-commit suppress — niet bij bewezen nieuwe maaltijdstijging
-            (inAbsorption && !newMealOverride && !slowCarbOverride &&
+            (inAbsorption && !newMealOverride && !slowCarbOverride && !plateauOverride &&
                 (ctx.slope <= config.peakSlopeThreshold || ctx.acceleration <= config.peakAccelThreshold)
                 )
                 // bestaande pre-commit top/plateau suppress
@@ -4811,7 +4904,7 @@ private fun evaluatePostPeak(
         (0.30 + 0.07 * ctx.deltaToTarget).coerceIn(0.30, 0.70)
     val lockout =
         reliable && (
-            (inAbsorption && !newMealOverride && !slowCarbOverride &&
+            (inAbsorption && !newMealOverride && !slowCarbOverride && !plateauOverride &&
                 ((ctx.slope <= config.peakSlopeThreshold) || (ctx.acceleration <= config.peakAccelThreshold)) &&
                 (ctx.iobRatio >= dynamicIobThreshold)
                 )
@@ -5383,7 +5476,7 @@ class FCLvNext(
     // "vNN-jjjj-mm-dd-uumm" (aanmaaktijdstip, geen omschrijving; die van
     // eerdere versies raakten toch achter). Alleen als het écht relevant
     // is een korte omschrijving toevoegen.
-    private val FCL_CODE_VERSION = "v141-2026-10-09-2100"
+    private val FCL_CODE_VERSION = "v143-2026-10-14-1000"
 
     // ── Restart-detectie (16/07/2026) ─────────────────────────────────
     // true op precies de EERSTE cyclus na het (her)starten van dit class-
@@ -5914,6 +6007,15 @@ class FCLvNext(
             if (field != value) saveEpisodePeakCommitU(value)
             field = value
         }
+
+    // 12/10/2026 — extra insuline die de vroege-dosis regel (FRONTLOAD_*) deze episode al gaf.
+    // Alleen in het geheugen: na een herstart begint de teller weer op 0 (veilig, het plafond is klein).
+    // Wordt op 0 gezet zodra er geen maaltijdsignaal meer is (einde van de episode).
+    private var episodeFrontloadExtraU: Double = 0.0
+
+    // 12/10/2026 — herstel-buffer (REBOUND_*): de doses van de laatste REBOUND_WINDOW_MIN minuten
+    // (tijd in ms, dosis in U). Alleen in het geheugen; na een herstart telt het venster opnieuw op.
+    private val reboundDoseLog = ArrayDeque<Pair<Long, Double>>()
 
     // ── Herstart-blokkade, optie 2 (29/07/2026) ───────────────────────
     // AANLEIDING: 18:53-incident — een app-herstart om 18:47 zat middenin een
@@ -7338,6 +7440,29 @@ class FCLvNext(
             lastNieuweMaaltijdResetAt = null
         }
 
+        // v142: afbouw resetten na 15 min zonder maaltijd en met weinig IOB, ook als de
+        // episode zelf nog open staat (bijvoorbeeld door peakEstimator.active). Zie kdoc bij noMealSince.
+        if (mealSignal.state == MealState.NONE) {
+            if (noMealSince == null) noMealSince = now
+        } else {
+            noMealSince = null
+        }
+        val noMealMinutes = noMealSince?.let { minutesSince(it, now) } ?: 0
+        if (noMealMinutes >= AFBOUW_RESET_NONE_MIN &&
+            ctx.input.currentIOB < AFBOUW_RESET_MAX_IOB_U &&
+            (episodeCommitCount > 0 || lastKnownLateDecayMul < 0.999 || episodeBoostBudgetU > 0.0 || episodePeakCommitU > 0.0)
+        ) {
+            status.append(
+                "AFBOUW RESET: ${noMealMinutes} min geen maaltijd, IOB ${"%.2f".format(ctx.input.currentIOB)} U " +
+                    "(teller=$episodeCommitCount, late_decay=${"%.2f".format(lastKnownLateDecayMul)})\n"
+            )
+            episodeCommitCount = 0
+            episodeBoostBudgetU = 0.0
+            episodePeakCommitU = 0.0
+            lastKnownLateDecayMul = 1.0
+            lastKnownCommitDoseFinalU = 0.0
+        }
+
         // ── Maaltijdtype update (elke cyclus tijdens episode) ─────────────
         if (activeMealEpisodeId != -1L && mealEpisodeStartTime != null) {
             val minSinceStart = org.joda.time.Minutes.minutesBetween(mealEpisodeStartTime, now).minutes
@@ -7841,6 +7966,30 @@ class FCLvNext(
         else sensorBlipStreakCount = 0
         saveSensorBlipStreakCount(context, sensorBlipStreakCount)
 
+        // v142: "hoog zonder te dalen" -- zie kdoc bij highPlateauSince.
+        run {
+            val bgNowPlateau = ctx.input.bgNow
+            val refReading = ctx.input.bgHistory.sortedBy { it.first.millis }.lastOrNull {
+                now.millis - it.first.millis >= HIGH_PLATEAU_LOOKBACK_MIN * 60_000L - 150_000L
+            }
+            val notFalling = refReading == null || bgNowPlateau >= refReading.second - HIGH_PLATEAU_FALL_TOLERANCE_MMOL
+            if (ctx.deltaToTarget >= HIGH_PLATEAU_MIN_DELTA_MMOL && notFalling) {
+                if (highPlateauSince == null) highPlateauSince = now
+            } else {
+                highPlateauSince = null
+            }
+            val plateauMin = highPlateauSince?.let { minutesSince(it, now) } ?: 0
+            val timeFrac = smooth01((plateauMin - HIGH_PLATEAU_TIME_START_MIN) / HIGH_PLATEAU_TIME_RAMP_MIN)
+            val heightFrac = smooth01((ctx.deltaToTarget - HIGH_PLATEAU_MIN_DELTA_MMOL) / HIGH_PLATEAU_HEIGHT_RAMP_MMOL)
+            highPlateauFracThisCycle = timeFrac * heightFrac
+            if (highPlateauFracThisCycle > 0.05) {
+                status.append(
+                    "HOOG PLATEAU: ${plateauMin} min boven target+${"%.0f".format(HIGH_PLATEAU_MIN_DELTA_MMOL)} zonder dalen, " +
+                        "gewicht=${"%.2f".format(highPlateauFracThisCycle)}\n"
+                )
+            }
+        }
+
         tempOverrideRelaxesPeakBrake = FclTempOverrideSettings.status(context, now.millis).let { st ->
             st.active && (st.targetPct > 100 || FclTempOverrideSettings.isActiveExtraPositive(context))
         }
@@ -8108,7 +8257,10 @@ class FCLvNext(
             confirmCycles = effectiveConfirmCycles,
 
             minDoseU = 0.05,
-            iobRatioHardStop = 0.45
+            iobRatioHardStop = 0.45,
+
+            // v142: grotere dosis en kortere cooldown naarmate de BG langer hoog blijft zonder te dalen.
+            plateauBoost = highPlateauFracThisCycle
         )
 
         // ── V-learner input + CSV-diagnostiek: log ELKE cyclus (21/09/2026,
@@ -9708,6 +9860,23 @@ class FCLvNext(
                     )
                 }
 
+                // v142: ondergrens die meegroeit met de tijd dat de BG hoog blijft zonder te dalen
+                // (zie kdoc bij highPlateauSince). Niet bij hoge IOB-ratio.
+                if (allowCommitBoost && commitAccessOk &&
+                    highPlateauFracThisCycle > 0.0 &&
+                    ctx.iobRatio < HIGH_PLATEAU_MAX_IOB_RATIO
+                ) {
+                    val plateauFloor = HIGH_PLATEAU_LDM_FLOOR_MAX * highPlateauFracThisCycle
+                    if (lateDecayMul < plateauFloor) {
+                        val voorPlateauFloor = lateDecayMul
+                        lateDecayMul = plateauFloor
+                        status.append(
+                            "LATEDECAYMUL PLATEAU-BODEM (v142): ${"%.2f".format(voorPlateauFloor)}->${"%.2f".format(lateDecayMul)} " +
+                                "(gewicht=${"%.2f".format(highPlateauFracThisCycle)})\n"
+                        )
+                    }
+                }
+
                 // Onthoud de volledig-aangepaste stand van dit cyclus voor als een
                 // latere cyclus het commit-blok overslaat (zie kdoc bij
                 // lastKnownLateDecayMul hierboven).
@@ -11185,6 +11354,87 @@ class FCLvNext(
         }
 
         // ─────────────────────────────────────────────
+        // ⏩ VROEGE DOSIS BIJ BEVESTIGDE STIJGING (12/10/2026)
+        // ─────────────────────────────────────────────
+        // Zie kdoc bij FRONTLOAD_*. Staat BEWUST vóór de IOB hard cap en de
+        // peak-approach taper hieronder: die blijven dus volledig van kracht.
+        // De extra eenheden zijn geen extra insuline over de hele maaltijd: ze komen
+        // eerder, en tellen mee in de IOB, zodat de latere afbouw kleiner uitvalt.
+        if (mealSignal.state == MealState.NONE) episodeFrontloadExtraU = 0.0
+        if (commandedDose > 0.0 &&
+            mealSignal.state == MealState.CONFIRMED &&
+            vroegeStijgingBevestigdThisCycle &&
+            episodePeakCommitU == 0.0 &&                       // nog vóór de eerste echte (grote) commit
+            accessLevel == DoseAccessLevel.NORMAL &&
+            postPeak.suppressReason == "NONE" &&
+            !postHypoBrakeActive && !logRow.hypoActive
+        ) {
+            // Dynamische grenzen: het zwakste van vijf gewichten (0..1) bepaalt hoeveel meegaat.
+            val frontloadWeight = minOf(
+                smoothRamp(ctx.recentDelta5m, FRONTLOAD_DELTA5M_FROM, FRONTLOAD_DELTA5M_TO),
+                smoothRamp(ctx.iobRatio, FRONTLOAD_IOB_RATIO_FROM, FRONTLOAD_IOB_RATIO_TO),
+                smoothRamp(projectedMinNoInsulinThisCycle, FRONTLOAD_PROJ_MIN_FROM, FRONTLOAD_PROJ_MIN_TO),
+                smoothRamp(ctx.input.bgNow, FRONTLOAD_BG_FROM, FRONTLOAD_BG_TO),
+                smoothRamp(ctx.deltaToTarget, FRONTLOAD_ABOVE_TARGET_FROM, FRONTLOAD_ABOVE_TARGET_TO)
+            )
+            if (frontloadWeight >= FRONTLOAD_MIN_WEIGHT) {
+                val wanted = minOf(finalDose * FRONTLOAD_FRACTION * frontloadWeight, FRONTLOAD_MAX_PER_CYCLE_U)
+                val room = (FRONTLOAD_MAX_EXTRA_PER_EPISODE_U - episodeFrontloadExtraU).coerceAtLeast(0.0)
+                val extra = minOf(wanted - commandedDose, room)
+                if (extra > 0.05) {
+                    val beforeFrontload = commandedDose
+                    commandedDose += extra
+                    episodeFrontloadExtraU += extra
+                    status.append(
+                        "VROEGE DOSIS: ${"%.2f".format(beforeFrontload)}→${"%.2f".format(commandedDose)}U " +
+                            "(gewicht=${"%.2f".format(frontloadWeight)}, finalDose=${"%.2f".format(finalDose)}, " +
+                            "rΔ5m=${"%.2f".format(ctx.recentDelta5m)}, iobR=${"%.2f".format(ctx.iobRatio)}, " +
+                            "extra deze episode=${"%.2f".format(episodeFrontloadExtraU)}/" +
+                            "${"%.1f".format(FRONTLOAD_MAX_EXTRA_PER_EPISODE_U)}U)\n"
+                    )
+                }
+            }
+        }
+
+        // ─────────────────────────────────────────────
+        // 🛟 HERSTEL-BUFFER NA BIJNA-HYPO (12/10/2026)
+        // ─────────────────────────────────────────────
+        // Zie kdoc bij REBOUND_*. Staat na de vroege-dosis regel, zodat de buffer ook die
+        // extra eenheden begrenst, en vóór de IOB hard cap (die blijft van kracht).
+        // Alleen de dosis wordt kleiner, nooit groter. Het ingehouden deel komt later alsnog
+        // als de stijging doorzet, want de loop rekent elke cyclus opnieuw.
+        run {
+            val refMs = ctx.input.bgHistory.maxOfOrNull { it.first.millis } ?: return@run
+            while (reboundDoseLog.isNotEmpty() && refMs - reboundDoseLog.first().first > REBOUND_WINDOW_MIN * 60_000L) {
+                reboundDoseLog.removeFirst()
+            }
+            if (commandedDose <= 0.0) return@run
+            val lowestPoint = ctx.input.bgHistory
+                .filter { refMs - it.first.millis <= REBOUND_LOOKBACK_MIN * 60_000L }
+                .minByOrNull { it.second } ?: return@run
+            val lowestBg = lowestPoint.second
+            val lowestAgeMin = (refMs - lowestPoint.first.millis) / 60_000.0
+            val severity = smoothRamp(lowestBg, REBOUND_SEVERITY_BG_FROM, REBOUND_SEVERITY_BG_TO) *
+                smoothRamp(lowestAgeMin, REBOUND_AGE_FADE_FROM_MIN, REBOUND_AGE_FADE_TO_MIN)
+            if (severity < REBOUND_MIN_SEVERITY || input.effectiveISF <= 0.0) return@run
+            val riseFrac = smooth01((ctx.input.bgNow - lowestBg) / REBOUND_RISE_FULL_MMOL)
+            val bufferMmol = lerp(REBOUND_BUFFER_MMOL_NONE, REBOUND_BUFFER_MMOL_DEEP, severity)
+            val bufferU = bufferMmol / input.effectiveISF * (1.0 + REBOUND_RISE_GROWTH * riseFrac)
+            val alreadyGivenU = reboundDoseLog.sumOf { it.second }
+            val remainingU = (bufferU - alreadyGivenU).coerceAtLeast(0.0)
+            if (commandedDose > remainingU) {
+                val beforeBuffer = commandedDose
+                commandedDose = remainingU
+                status.append(
+                    "HERSTEL-BUFFER: ${"%.2f".format(beforeBuffer)}→${"%.2f".format(commandedDose)}U " +
+                        "(laagste BG ${REBOUND_LOOKBACK_MIN}m=${"%.1f".format(lowestBg)}, ernst=${"%.2f".format(severity)}, " +
+                        "stijging=${"%.2f".format(riseFrac)}, buffer=${"%.1f".format(bufferU)}U, " +
+                        "al gegeven=${"%.1f".format(alreadyGivenU)}U)\n"
+                )
+            }
+        }
+
+        // ─────────────────────────────────────────────
         // 🛡️ IOB HARD CAP + DYNAMIC OVERSHOOT
         // ─────────────────────────────────────────────
 
@@ -12017,6 +12267,10 @@ class FCLvNext(
 
         logRow.finalDose = finalDose
         logRow.commandedDose = commandedDose
+        // 12/10/2026 — herstel-buffer (REBOUND_*): onthoud de uiteindelijke dosis van deze cyclus.
+        if (commandedDose > 0.0) {
+            ctx.input.bgHistory.maxOfOrNull { it.first.millis }?.let { reboundDoseLog.addLast(it to commandedDose) }
+        }
         // 15/08/2026 — zie kdoc bij DOSE_RATIO_THRESHOLD/episodeCumulativeCommandedU
         // hierboven. Bewust hier, ná alle guards (hypo-rechttrekking, topGuard,
         // postpeak lockout, post-hypo-brake) die commandedDose nog konden

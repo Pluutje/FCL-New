@@ -50,9 +50,23 @@ object GvpCalculator {
     /** Minimum covered time for one day point (6 hours) */
     private const val MIN_COVERED_MIN_DAY = 360.0
 
-    private val zone: ZoneId = ZoneId.of("Europe/Amsterdam")
+    val zone: ZoneId = ZoneId.of("Europe/Amsterdam")
 
     private data class Point(val tsMs: Long, val mmol: Double)
+
+    /**
+     * One stats value per calendar day for raw (timestampMs, mmol) readings.
+     * Days without enough data are left out. Used for the long-term store.
+     */
+    fun dailyStatsFromReadings(readings: List<Pair<Long, Double>>): List<DailyGvp> {
+        val points = readings.filter { it.second > 0.0 }
+            .map { Point(it.first, it.second) }
+            .sortedBy { it.tsMs }
+        val byDay = points.groupBy { Instant.ofEpochMilli(it.tsMs).atZone(zone).toLocalDate() }
+        return byDay.entries.sortedBy { it.key }.mapNotNull { (day, list) ->
+            compute(list, MIN_COVERED_MIN_DAY)?.let { DailyGvp(day, it) }
+        }
+    }
 
     private fun toPoints(rows: List<LogRow>): List<Point> =
         rows.filter { it.bg > 0.0 }
@@ -67,30 +81,6 @@ object GvpCalculator {
         val points = toPoints(rows).filter { it.tsMs in startMs until endMs }
         return compute(points, MIN_COVERED_MIN_WINDOW)
     }
-
-    /** One stats value per calendar day for the last [days] days (days without enough data are left out). */
-    fun dailyStats(rows: List<LogRow>, days: Int, now: Instant = Instant.now()): List<DailyGvp> {
-        val today = now.atZone(zone).toLocalDate()
-        val firstDay = today.minusDays(days.toLong() - 1)
-        val byDay = toPoints(rows).groupBy { Instant.ofEpochMilli(it.tsMs).atZone(zone).toLocalDate() }
-        val result = ArrayList<DailyGvp>()
-        var day = firstDay
-        while (!day.isAfter(today)) {
-            val points = byDay[day]
-            if (points != null) {
-                val stats = compute(points, MIN_COVERED_MIN_DAY)
-                if (stats != null) result.add(DailyGvp(day, stats))
-            }
-            day = day.plusDays(1)
-        }
-        return result
-    }
-
-    /** Rolling average over the last [window] values (parallel to the input list). */
-    fun rollingAverage(values: List<Double>, window: Int = 14): List<Double> =
-        values.indices.map { i ->
-            values.subList(maxOf(0, i - window + 1), i + 1).average()
-        }
 
     private fun compute(points: List<Point>, minCoveredMin: Double): GvpStats? {
         if (points.size < 2) return null

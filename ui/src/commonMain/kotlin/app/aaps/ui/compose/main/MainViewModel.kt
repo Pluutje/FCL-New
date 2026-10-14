@@ -44,6 +44,7 @@ import app.aaps.core.interfaces.pump.defs.determineCorrectBolusStepSize
 import app.aaps.core.interfaces.resources.TextResolver
 import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.core.interfaces.rx.events.EventShowDialog
+import app.aaps.core.interfaces.navigation.ElementType
 import app.aaps.core.interfaces.scenes.ActiveSceneSync
 import app.aaps.core.interfaces.scenes.SceneActions
 import app.aaps.core.interfaces.scenes.SceneChainResolver
@@ -65,7 +66,6 @@ import app.aaps.core.ui.CoreUiStrings
 import app.aaps.core.ui.clientcontrol.failText
 import app.aaps.core.interfaces.rx.events.EventRefreshOverview
 import app.aaps.core.ui.compose.OverviewOverrideContent
-import app.aaps.core.ui.compose.icons.IcAction
 import app.aaps.core.ui.compose.icons.IcAutomation
 import app.aaps.core.ui.compose.icons.IcBolus
 import app.aaps.core.ui.compose.icons.IcCarbs
@@ -75,6 +75,7 @@ import app.aaps.core.ui.compose.icons.IcTtActivity
 import app.aaps.core.ui.compose.icons.IcTtEatingSoon
 import app.aaps.core.ui.compose.icons.IcTtHypo
 import app.aaps.core.ui.compose.icons.IcTtManual
+import app.aaps.core.ui.compose.navigation.icon
 import app.aaps.core.ui.extensions.toStringFull
 import app.aaps.ui.UiStrings
 import app.aaps.ui.compose.aboutDialog.AboutDialogData
@@ -82,6 +83,7 @@ import app.aaps.ui.compose.quickLaunch.QuickLaunchAction
 import app.aaps.ui.compose.quickLaunch.QuickLaunchResolver
 import app.aaps.ui.compose.quickLaunch.QuickLaunchSerializer
 import app.aaps.ui.compose.quickLaunch.ResolvedQuickLaunchItem
+import app.aaps.ui.compose.scenes.SceneIcons
 import app.aaps.ui.compose.tempTarget.toTTPresetsWithDisplayName
 import app.aaps.ui.compose.wizardDialog.showWizardBolusConfirmation
 import dev.zacsweers.metro.AppScope
@@ -849,6 +851,10 @@ class MainViewModel(
     fun formatDuration(ms: Long): String = dateUtil.timeRemainingString(ms, rh)
 
     /** QuickLaunch scene → ask the MASTER to PREPARE it, render the master's authored confirmation lines, commit on OK (role-transparent). */
+    /** The icon the user picked for the scene, or the generic scene icon when the scene is not known. */
+    private fun sceneIcon(iconKey: String?): ImageVector =
+        iconKey?.let { SceneIcons.fromKey(it).icon } ?: ElementType.SCENE.icon()
+
     fun requestSceneConfirmation(sceneId: String) {
         val title = rh.gs(CoreUiStrings.scene)
         viewModelScope.launch {
@@ -859,7 +865,7 @@ class MainViewModel(
                             // commitStart uses the executor's consume-once prepared.id token, so a double
                             // onOk (fast double-tap) is idempotent — the second commit hits an already-
                             // consumed id and is discarded.
-                            title = title, message = "", confirmationLines = prepared.lines, icon = IcAction,
+                            title = title, message = "", confirmationLines = prepared.lines, icon = sceneIcon(sceneStore.getScene(sceneId)?.icon),
                             onOk = { appScope.launch { sceneActions.commitStart(prepared.id) } })
                     )
 
@@ -887,7 +893,7 @@ class MainViewModel(
             if (target != null) ActionConfirmation(
                 title = rh.gs(CoreUiStrings.scene_deactivate),
                 message = message,
-                icon = IcAction,
+                icon = sceneIcon(activeState.scene.icon),
                 onConfirmAction = ConfirmableAction.DeactivateAndChainScene(target.id),
                 confirmLabel = rh.gs(CoreUiStrings.scene_skip_to_format, target.name),
                 secondaryAction = ConfirmableAction.DeactivateScene,
@@ -896,7 +902,7 @@ class MainViewModel(
             else ActionConfirmation(
                 title = rh.gs(CoreUiStrings.scene_deactivate),
                 message = message,
-                icon = IcAction,
+                icon = sceneIcon(activeState.scene.icon),
                 onConfirmAction = ConfirmableAction.DeactivateScene
             )
         }

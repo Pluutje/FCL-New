@@ -122,7 +122,12 @@ class PersistentCorrectionController(
         // paden — alleen de candidacy-poort wordt verruimd. Default false:
         // bestaande aanroepen (de "vlak/dalend"-persistCtrl) blijven exact
         // hetzelfde gedrag vertonen.
-        overrideCandidate: Boolean = false
+        overrideCandidate: Boolean = false,
+
+        // v142 (11/10/2026): 0..1, hoe lang de BG al hoog blijft zonder te dalen (zie highPlateauSince
+        // in FCLvNext.kt). Maakt de dosis tot +50% groter en de cooldown 1 cyclus korter vanaf 0,5.
+        // Default 0.0: andere aanroepen (sustainedRiseCtrl) blijven exact hetzelfde.
+        plateauBoost: Double = 0.0
     ): Result {
 
         // Plateau-hysterese bijwerken — ELKE cyclus, ook tijdens cooldown (zelfde
@@ -271,9 +276,10 @@ class PersistentCorrectionController(
         val extraCycles = (episodeCycles - confirmCycles).coerceAtLeast(0)
         val escalationFactor = (1.0 + (extraCycles / 2) * 0.10).coerceAtMost(1.30)
 
-        val dose = (baseRaw * escalationFactor)
+        val plateauMul = 1.0 + 0.5 * plateauBoost.coerceIn(0.0, 1.0)
+        val dose = (baseRaw * escalationFactor * plateauMul)
             .coerceAtLeast(0.0)
-            .coerceAtMost(maxBolusU * maxBolusFraction)
+            .coerceAtMost(maxBolusU * maxBolusFraction * plateauMul)
 
         if (dose < minDoseU) {
             return Result(
@@ -284,7 +290,7 @@ class PersistentCorrectionController(
         }
 
         lastFireTs = tsMillis
-        cooldownLeft = cooldownCycles
+        cooldownLeft = if (plateauBoost >= 0.5) max(1, cooldownCycles - 1) else cooldownCycles
 
         return Result(
             active = true,
@@ -292,7 +298,8 @@ class PersistentCorrectionController(
             doseU = dose,
             cooldownLeft = cooldownLeft,
             reason = "PERSIST: fire dose=${"%.2f".format(dose)}U delta=${"%.2f".format(deltaToTarget)} " +
-                "iobR=${"%.2f".format(iobRatio)} esc=${"%+.0f".format((escalationFactor - 1.0) * 100)}%",
+                "iobR=${"%.2f".format(iobRatio)} esc=${"%+.0f".format((escalationFactor - 1.0) * 100)}%" +
+                (if (plateauBoost > 0.01) " plateau=${"%.2f".format(plateauBoost)}" else ""),
             persistentCounter = persistentCounter,
             episodeCycles = episodeCycles,
             escalationFactor = escalationFactor

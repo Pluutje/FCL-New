@@ -516,6 +516,11 @@ class DetermineBasalFCL @Inject constructor(
         app.aaps.plugins.aps.openAPSFCL.vnext.advisor.ai.night.FclNightAiAdvisorScheduler
             .onCycle(context, isNight, profileFunction, profileRepository)
 
+        // Langetermijn-overzicht (dagwaarden uit AAPS-BG, 1 jaar): hooguit 1x per uur,
+        // op een achtergrondthread. Zie LongTermHistory.
+        app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.LongTermHistory
+            .onCycle(context, persistenceLayer)
+
         // ISF-auto-adjust (16/08/2026) — zelfde 1-regel-triggerpatroon als de
         // nacht-AI-adviseur hierboven; alle dedup/mode-logica zit in
         // FclIsfAutoAdjuster zelf. Standaard UIT (FclSystemMode.OFF), dus dit

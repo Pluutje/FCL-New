@@ -34,10 +34,12 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.DailyGvp
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.GvpCalculator
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.GvpStats
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.LogRow
+import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.LongTermHistory
+import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.OverviewPeriod
+import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.PeriodBucket
 import kotlin.math.ceil
 import kotlin.math.floor
 
@@ -81,7 +83,7 @@ private fun tirColor(tir: Double): Color = when {
 private val WINDOWS = listOf(7, 14, 30)
 
 /** One colored band in a per-day chart. */
-private data class Band(val from: Double, val to: Double, val color: Color)
+internal data class Band(val from: Double, val to: Double, val color: Color)
 
 /** Separate card under the CGP card. */
 @Composable
@@ -209,14 +211,29 @@ private fun GvpRij(
     }
 }
 
-/** Per-day GVP: dots colored by zone + line with the rolling 14-day average. */
+// ── Period charts (14 d / 30 d / 90 d / 1 year) ─────────────────────────────
+
+private val PeriodGreen2 = Color(0xFF7CB342)
+private val PeriodOrange = Color(0xFFE65100)
+
+/** Year view only: time order of each slot (the line is broken where time jumps back). */
+private fun yearOrders(buckets: List<PeriodBucket?>, period: OverviewPeriod): List<Int?>? =
+    if (period == OverviewPeriod.Y1) buckets.map { it?.order } else null
+
+/** Year view only: month numbers 1..12 under the x axis. */
+private fun yearLabels(period: OverviewPeriod): List<String>? =
+    if (period == OverviewPeriod.Y1) (1..12).map { it.toString() } else null
+
+/** GVP chart: dots colored by zone + average line. */
 @Composable
-fun GvpPerDagLijn(rows: List<LogRow>, modifier: Modifier = Modifier) {
-    val dagen: List<DailyGvp> = remember(rows) { GvpCalculator.dailyStats(rows, 30) }
-    val waarden = dagen.map { it.stats.gvpPct }
-    val yMax = maxOf(50.0, ceil((waarden.maxOrNull() ?: 50.0) / 10.0) * 10.0)
-    DagTrendCanvas(
+fun GvpPeriodLijn(buckets: List<PeriodBucket?>, period: OverviewPeriod, modifier: Modifier = Modifier) {
+    val waarden = buckets.map { it?.gvp }
+    val yMax = maxOf(50.0, ceil((waarden.filterNotNull().maxOrNull() ?: 50.0) / 10.0) * 10.0)
+    PeriodTrendCanvas(
         waarden = waarden,
+        lineWindow = period.lineWindow,
+        orders = yearOrders(buckets, period),
+        xLabels = yearLabels(period),
         yMin = 0.0,
         yMax = yMax,
         gridStep = 10.0,
@@ -230,13 +247,14 @@ fun GvpPerDagLijn(rows: List<LogRow>, modifier: Modifier = Modifier) {
     )
 }
 
-/** Per-day TIR: dots colored by zone + line with the rolling 14-day average. */
+/** TIR chart: dots colored by zone + average line. */
 @Composable
-fun TirPerDagLijn(rows: List<LogRow>, modifier: Modifier = Modifier) {
-    val dagen: List<DailyGvp> = remember(rows) { GvpCalculator.dailyStats(rows, 30) }
-    val waarden = dagen.map { it.stats.tirPct }
-    DagTrendCanvas(
-        waarden = waarden,
+fun TirPeriodLijn(buckets: List<PeriodBucket?>, period: OverviewPeriod, modifier: Modifier = Modifier) {
+    PeriodTrendCanvas(
+        waarden = buckets.map { it?.tirPct },
+        lineWindow = period.lineWindow,
+        orders = yearOrders(buckets, period),
+        xLabels = yearLabels(period),
         yMin = 0.0,
         yMax = 100.0,
         gridStep = 25.0,
@@ -250,9 +268,85 @@ fun TirPerDagLijn(rows: List<LogRow>, modifier: Modifier = Modifier) {
     )
 }
 
+/** Estimated HbA1c (mmol/mol) chart, from the mean glucose of each bucket. */
 @Composable
-private fun DagTrendCanvas(
-    waarden: List<Double>,
+fun Hba1cPeriodLijn(buckets: List<PeriodBucket?>, period: OverviewPeriod, modifier: Modifier = Modifier) {
+    val waarden = buckets.map { b -> b?.let { pctToMmolMol(estimateHba1cPct(it.meanMmol)) } }
+    val rawMin = waarden.filterNotNull().minOrNull() ?: 30.0
+    val rawMax = waarden.filterNotNull().maxOrNull() ?: 45.0
+    val yMin = floor(rawMin / 5.0) * 5.0
+    val yMaxRaw = ceil(rawMax / 5.0) * 5.0
+    val yMax = if (yMaxRaw - yMin < 10.0) yMin + 10.0 else yMaxRaw
+    PeriodTrendCanvas(
+        waarden = waarden,
+        lineWindow = period.lineWindow,
+        orders = yearOrders(buckets, period),
+        xLabels = yearLabels(period),
+        yMin = yMin,
+        yMax = yMax,
+        gridStep = 10.0,
+        bands = listOf(
+            Band(0.0, 42.0, GvpGreen),
+            Band(42.0, 53.0, PeriodGreen2),
+            Band(53.0, 64.0, GvpAmber),
+            Band(64.0, 75.0, PeriodOrange),
+            Band(75.0, 1000.0, GvpRed)
+        ),
+        dotColor = { v ->
+            when {
+                v <= 42.0 -> GvpGreen
+                v <= 53.0 -> PeriodGreen2
+                v <= 64.0 -> GvpAmber
+                v <= 75.0 -> PeriodOrange
+                else      -> GvpRed
+            }
+        },
+        modifier = modifier
+    )
+}
+
+/** PGR chart (lower = better). */
+@Composable
+fun PgrPeriodLijn(buckets: List<PeriodBucket?>, period: OverviewPeriod, modifier: Modifier = Modifier) {
+    val waarden = buckets.map { it?.pgr }
+    val yMax = ceil(waarden.filterNotNull().maxOrNull() ?: 3.0).coerceAtLeast(2.0)
+    PeriodTrendCanvas(
+        waarden = waarden,
+        lineWindow = period.lineWindow,
+        orders = yearOrders(buckets, period),
+        xLabels = yearLabels(period),
+        yMin = 1.0,
+        yMax = yMax,
+        gridStep = 1.0,
+        bands = listOf(
+            Band(1.0, 2.0, GvpGreen),
+            Band(2.0, 3.0, PeriodGreen2),
+            Band(3.0, 4.0, GvpAmber),
+            Band(4.0, 4.5, PeriodOrange),
+            Band(4.5, 1000.0, GvpRed)
+        ),
+        dotColor = { v ->
+            when {
+                v <= 2.0 -> GvpGreen
+                v <= 3.0 -> GvpAmber
+                v <= 4.0 -> PeriodOrange
+                else     -> GvpRed
+            }
+        },
+        modifier = modifier
+    )
+}
+
+/**
+ * Shared chart: one dot per bucket (empty buckets keep their place on the x axis),
+ * and a line with the average of the last [lineWindow] buckets.
+ */
+@Composable
+private fun PeriodTrendCanvas(
+    waarden: List<Double?>,
+    lineWindow: Int,
+    orders: List<Int?>?,
+    xLabels: List<String>?,
     yMin: Double,
     yMax: Double,
     gridStep: Double,
@@ -263,12 +357,12 @@ private fun DagTrendCanvas(
     val lijnKleur = MaterialTheme.colorScheme.secondary
     val gridKleur = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
     val labelKleur = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
-    val lijn = GvpCalculator.rollingAverage(waarden, 14)
+    val lijn = LongTermHistory.averageLine(waarden, lineWindow)
     val textMeasurer = rememberTextMeasurer()
 
-    if (waarden.size < 2) {
+    if (waarden.count { it != null } < 2) {
         Text(
-            "Not enough days with data yet.",
+            "Nog te weinig dagen met data.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -278,10 +372,11 @@ private fun DagTrendCanvas(
     Canvas(modifier = modifier) {
         val labelW = 32f
         val w = size.width - labelW
-        val h = size.height
+        val bottomPad = if (xLabels != null) 14f else 0f
+        val h = size.height - bottomPad
         val n = waarden.size
 
-        fun xOf(i: Int) = labelW + (i.toFloat() / (n - 1)) * w
+        fun xOf(i: Int) = labelW + if (n == 1) w / 2 else (i.toFloat() / (n - 1)) * w
         fun yOf(v: Double) = h - ((v.coerceIn(yMin, yMax) - yMin) / (yMax - yMin) * h).toFloat()
 
         bands.forEach { b ->
@@ -303,15 +398,29 @@ private fun DagTrendCanvas(
             level += gridStep
         }
 
+        if (xLabels != null) {
+            xLabels.forEachIndexed { i, t ->
+                val m = textMeasurer.measure(t, labelStyle)
+                drawText(textMeasurer, t, Offset(xOf(i) - m.size.width / 2f, h + 1f), labelStyle)
+            }
+        }
+
         val path = Path()
+        var first = true
+        var lastOrder = -1
         lijn.forEachIndexed { i, v ->
+            if (v == null) return@forEachIndexed
             val x = xOf(i)
             val y = yOf(v)
-            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+            val order = orders?.get(i) ?: 0
+            // New line when time jumps back (year view: previous year's months).
+            if (first || order < lastOrder) { path.moveTo(x, y); first = false } else path.lineTo(x, y)
+            lastOrder = order
         }
         drawPath(path, lijnKleur, style = Stroke(width = 2.5f))
 
         waarden.forEachIndexed { i, v ->
+            if (v == null) return@forEachIndexed
             val c = Offset(xOf(i), yOf(v))
             drawCircle(dotColor(v), radius = 5f, center = c)
             drawCircle(Color.White, radius = 2.5f, center = c)
