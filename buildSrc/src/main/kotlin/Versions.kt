@@ -39,6 +39,7 @@ object Versions {
     // downgrade-fix weer teniet.
     const val versionCode = 1598
 
+
     const val compileSdk = 37
     const val minSdk = 30
     const val targetSdk = 35
