@@ -259,9 +259,11 @@ enum class NotificationId(
     // Appended at the END for the same reason as above.
     COMBO_PUMP_ERROR_LOCKOUT(NORMAL, PUMP),
 
-    // The pump rounds the basal of the profile to its own step, and gives a little more or less per day (#2454).
+    // A scene ended, but its profile switch could not be undone, so the scene's percentage is still in force.
+    // The End Scene dialog does not show the result, so without this nothing said so. IMPORTANT: it changes
+    // insulin delivery until the user activates a profile, but nothing is delivered wrongly now.
     // Appended at the END for the same reason as above.
-    BASAL_ROUNDED_BY_PUMP(INFO, PROFILE);
+    SCENE_PROFILE_NOT_RESTORED(IMPORTANT, AUTOMATION);
 
     companion object {
 
