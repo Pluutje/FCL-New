@@ -1,5 +1,7 @@
 package app.aaps.ui.compose.main
 
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import app.aaps.core.data.model.ActiveSceneState
 import app.aaps.core.data.model.Scene
 import app.aaps.core.data.model.SceneEndAction
@@ -7,7 +9,10 @@ import app.aaps.core.interfaces.aps.Loop
 import app.aaps.core.interfaces.automation.Automation
 import app.aaps.core.interfaces.bolus.BatchExecutor
 import app.aaps.core.interfaces.bolus.WizardExecutor
+import app.aaps.core.interfaces.clientcontrol.ActionProgress
+import app.aaps.core.interfaces.clientcontrol.FailureReason
 import app.aaps.core.interfaces.configuration.Config
+import app.aaps.core.interfaces.configuration.InitProgress
 import app.aaps.core.interfaces.constraints.ConstraintsChecker
 import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.core.interfaces.iob.IobCobCalculator
@@ -23,6 +28,8 @@ import app.aaps.core.interfaces.profile.ProfileFunction
 import app.aaps.core.interfaces.protection.ProtectionCheck
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.rx.bus.RxBus
+import app.aaps.core.interfaces.rx.events.Event
+import app.aaps.core.interfaces.rx.events.EventShowDialog
 import app.aaps.core.interfaces.scenes.ActiveSceneSync
 import app.aaps.core.interfaces.scenes.SceneActions
 import app.aaps.core.interfaces.scenes.SceneChainResolver
@@ -35,18 +42,24 @@ import app.aaps.core.keys.BooleanKey
 import app.aaps.core.keys.StringNonKey
 import app.aaps.core.keys.interfaces.AppPlatform
 import app.aaps.core.keys.interfaces.Preferences
+import app.aaps.core.keys.interfaces.TextRef
 import app.aaps.core.keys.interfaces.VisibilityContext
 import app.aaps.core.objects.wizard.QuickWizard
+import app.aaps.ui.compose.quickLaunch.QuickLaunchAction
 import app.aaps.ui.compose.quickLaunch.QuickLaunchResolver
+import app.aaps.ui.compose.quickLaunch.QuickLaunchSerializer
+import app.aaps.ui.compose.quickLaunch.ResolvedQuickLaunchItem
 import com.google.common.truth.Truth.assertThat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.jupiter.api.AfterEach
@@ -55,6 +68,11 @@ import org.junit.jupiter.api.Test
 import org.mockito.Mock
 import org.mockito.MockitoAnnotations
 import org.mockito.kotlin.any
+import org.mockito.kotlin.argumentCaptor
+import org.mockito.kotlin.eq
+import org.mockito.kotlin.never
+import org.mockito.kotlin.times
+import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -110,6 +128,8 @@ internal class MainViewModelTest {
         whenever(overviewDataCache.runningModeFlow).thenReturn(MutableStateFlow<RunningModeDisplayData?>(null))
         whenever(overviewDataCache.tbrFlow).thenReturn(MutableStateFlow<TbrDisplayData?>(null))
         whenever(quickWizard.changes).thenReturn(MutableStateFlow(0))
+        // App init, also folded into chipStateFlow: the QuickWizard items are built once it completes.
+        whenever(config.initProgressFlow).thenReturn(MutableStateFlow(InitProgress(done = true)))
 
         // Active scene state and the scene catalog, read as fields (activeSceneState, sceneExpired.map,
         // activeSceneChainTargetName's combine).
@@ -120,6 +140,10 @@ internal class MainViewModelTest {
         whenever(preferences.observe(BooleanKey.GeneralSimpleMode)).thenReturn(MutableStateFlow(true))
         whenever(preferences.observe(BooleanKey.ApsUseSmb)).thenReturn(MutableStateFlow(false))
         whenever(preferences.observe(StringNonKey.QuickLaunchActions)).thenReturn(MutableStateFlow(""))
+        // Toolbar actions are valid unless a test says otherwise. The view model built here refreshes its
+        // toolbar when the first runTest runs the deferred collectors, and an unstubbed isValid (false)
+        // would then remove every action from the saved toolbar.
+        whenever(quickLaunchResolver.isValid(any())).thenReturn(true)
 
         sut = buildSut()
     }
@@ -229,5 +253,60 @@ internal class MainViewModelTest {
 
         whenever(config.platform).thenReturn(AppPlatform.Desktop)
         assertThat(sut.showBatteryHelp).isFalse()
+    }
+
+    /**
+     * A QuickWizard entry on the toolbar follows its overview button: outside its time window or in its
+     * cool-down it is hidden. It stays in the saved toolbar, so it comes back when it is active again.
+     */
+    @Test
+    fun `the toolbar hides a QuickWizard entry that is not active and keeps it saved`() = runTest {
+        val qw = QuickLaunchAction.QuickWizardAction("qw-1")
+        val configButton = QuickLaunchAction.QuickLaunchConfig
+        val json = QuickLaunchSerializer.toJson(listOf(QuickLaunchAction.Wizard, qw, configButton))
+        var qwActive = false
+        val changes = MutableStateFlow(0)
+        whenever(preferences.observe(StringNonKey.QuickLaunchActions)).thenReturn(MutableStateFlow(json))
+        whenever(quickWizard.changes).thenReturn(changes)
+        whenever(quickLaunchResolver.isShownNow(any())).thenAnswer { it.getArgument<QuickLaunchAction>(0) != qw || qwActive }
+        whenever(quickLaunchResolver.resolveItem(any())).thenAnswer {
+            ResolvedQuickLaunchItem(action = it.getArgument(0), label = "item", icon = Icons.Default.Add)
+        }
+        sut = buildSut()
+        backgroundScope.launch { sut.quickLaunchItems.collect {} }
+        runCurrent()
+
+        assertThat(sut.quickLaunchItems.value.map { it.action }).containsExactly(QuickLaunchAction.Wizard, configButton).inOrder()
+
+        // The time window opens (or the cool-down ends) and the entry is used or edited: it is back.
+        qwActive = true
+        changes.value = 1
+        runCurrent()
+
+        assertThat(sut.quickLaunchItems.value.map { it.action }).containsExactly(QuickLaunchAction.Wizard, qw, configButton).inOrder()
+        verify(preferences, never()).put(eq(StringNonKey.QuickLaunchActions), any<String>())
+    }
+
+    /**
+     * A switch the pump cannot take can pass the prepare and be refused by the commit. The toolbar dialog
+     * closed as if the switch was done; now it says why.
+     */
+    @Test
+    fun `a profile switch from the toolbar that the commit refuses says why`() = runTest {
+        whenever(rh.gs(any<TextRef>())).thenReturn("Profile switch")
+        whenever(batchExecutor.prepare(any(), any(), any())).thenReturn(ActionProgress.Prepared(id = 7L))
+        whenever(batchExecutor.commit(eq(7L), any(), any(), any()))
+            .thenReturn(ActionProgress.Rejected(FailureReason.ExecutionFailed, "The pump cannot take it"))
+
+        sut.requestProfileConfirmation("Basal", 150, 60)
+        advanceUntilIdle()
+        val confirmation = argumentCaptor<Event>()
+        verify(rxBus).send(confirmation.capture())
+        (confirmation.firstValue as EventShowDialog.OkCancel).onOk()
+        advanceUntilIdle()
+
+        val sent = argumentCaptor<Event>()
+        verify(rxBus, times(2)).send(sent.capture())
+        assertThat((sent.lastValue as EventShowDialog.Ok).message).isEqualTo("The pump cannot take it")
     }
 }

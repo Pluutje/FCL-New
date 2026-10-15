@@ -250,12 +250,21 @@ fun GvpPeriodLijn(buckets: List<PeriodBucket?>, period: OverviewPeriod, modifier
 /** TIR chart: dots colored by zone + average line. */
 @Composable
 fun TirPeriodLijn(buckets: List<PeriodBucket?>, period: OverviewPeriod, modifier: Modifier = Modifier) {
+    val waarden = buckets.map { it?.tirPct }
+    // The axis starts at 50%. Only when the lowest value is under 60% it goes lower:
+    // at least 10 points under the lowest value, rounded down to tens.
+    val laagste = waarden.filterNotNull().minOrNull()
+    val yMin = if (laagste != null && laagste < 60.0) {
+        (floor((laagste - 10.0) / 10.0) * 10.0).coerceAtLeast(0.0)
+    } else {
+        50.0
+    }
     PeriodTrendCanvas(
-        waarden = buckets.map { it?.tirPct },
+        waarden = waarden,
         lineWindow = period.lineWindow,
         orders = yearOrders(buckets, period),
         xLabels = yearLabels(period),
-        yMin = 0.0,
+        yMin = yMin,
         yMax = 100.0,
         gridStep = 25.0,
         bands = listOf(

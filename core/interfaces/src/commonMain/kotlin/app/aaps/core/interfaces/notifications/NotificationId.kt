@@ -252,7 +252,16 @@ enum class NotificationId(
 
     // One command has been running in the queue for too long, so nothing else reaches the pump (#5209).
     // Appended at the END for the same reason as above.
-    PUMP_DRIVER_NOT_RESPONDING(URGENT, PUMP);
+    PUMP_DRIVER_NOT_RESPONDING(URGENT, PUMP),
+
+    // The Combo reported an error, so the driver does not connect until the user has handled it. Its own
+    // id, so that this hint does not replace the card that names the error (COMBO_PUMP_ALARM) (#5263).
+    // Appended at the END for the same reason as above.
+    COMBO_PUMP_ERROR_LOCKOUT(NORMAL, PUMP),
+
+    // The pump rounds the basal of the profile to its own step, and gives a little more or less per day (#2454).
+    // Appended at the END for the same reason as above.
+    BASAL_ROUNDED_BY_PUMP(INFO, PROFILE);
 
     companion object {
 

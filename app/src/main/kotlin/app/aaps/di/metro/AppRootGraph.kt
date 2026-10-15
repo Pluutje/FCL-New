@@ -124,7 +124,7 @@ import app.aaps.implementation.lifecycle.ProcessLifecycleListener
 import app.aaps.implementation.maintenance.cloud.CloudStorageManager
 import app.aaps.implementation.notifications.SnackbarNotificationFallback
 import app.aaps.implementation.plugin.PluginStore
-import app.aaps.implementation.profile.ProfileSwitchExpiryScheduler
+import app.aaps.implementation.profile.ProfileSwitchScheduler
 import app.aaps.implementation.profile.ProfileSwitchSilentGate
 import app.aaps.implementation.resources.ResourceHelperImpl
 import app.aaps.implementation.scenes.ActiveSceneManager
@@ -166,7 +166,6 @@ import app.aaps.plugins.sync.tidepool.compose.TidepoolRepository
 import app.aaps.plugins.sync.tidepool.utils.RateLimit
 import app.aaps.plugins.sync.wear.WearPlugin
 import app.aaps.plugins.sync.xdrip.compose.XdripMvvmRepository
-import app.aaps.ui.activityMonitor.ActivityMonitor
 import app.aaps.ui.search.BuiltInSearchables
 import app.aaps.workflow.WorkflowChainData
 import dev.zacsweers.metro.AppScope
@@ -347,16 +346,13 @@ interface AppRootGraph : MetroViewModelMultibindings {
     val nsClientRepository: NSClientRepository
     val builtInSearchables: BuiltInSearchables
 
-    /** Read by `MainApp`. */
-    val activityMonitor: ActivityMonitor
-
     /** The one application scope. */
     @ApplicationScope val appScope: CoroutineScope
     val notificationManager: NotificationManager
     val apsResult: APSResult
     val pumpEnactResult: PumpEnactResult
     val profileSwitchSilentGate: ProfileSwitchSilentGate
-    val profileSwitchExpiryScheduler: ProfileSwitchExpiryScheduler
+    val profileSwitchScheduler: ProfileSwitchScheduler
     val snackbarNotificationFallback: SnackbarNotificationFallback
     val runningConfiguration: RunningConfiguration
     val runningConfigurationKeys: RunningConfigurationKeys

@@ -1233,6 +1233,17 @@ private const val FRONTLOAD_ABOVE_TARGET_FROM = 0.5     // mmol boven target
 private const val FRONTLOAD_ABOVE_TARGET_TO = 1.5       // gewicht volledig
 private const val FRONTLOAD_MIN_WEIGHT = 0.15         // onder dit gewicht doet de regel niets
 
+// ── Late re-entry vloer afbouwen (15/10/2026) ─────────────────────────────
+// AANLEIDING: 15/10 13:23-13:33 (Ecko): re-entry stond 5 cycli aan, bij elke cyclus werd de
+// vroege dosis opnieuw gestart als "stage 1" met doel 3,2 / 2,7 / 2,5 U. De BG steeg toen nog
+// maar 0,14-0,20 per 5 min, de top kwam 10-20 min later. Er ging 3,35 U in op de top.
+// Regel: in een re-entry, 30+ min na de maaltijdstart, telt de vloer maar voor een deel mee.
+// Het deel volgt de stijging (recentDelta5m) met een gladde ramp. Een echte nieuwe piek
+// (stijging 0,45+ per 5 min) houdt de volle vloer. Aan het begin van een maaltijd doet dit niets.
+private const val LATE_REENTRY_MIN_MEAL_MIN = 30        // min na maaltijdstart waarna de regel meedoet
+private const val LATE_REENTRY_DELTA5M_FROM = 0.10      // mmol/5 min: vloer-gewicht 0
+private const val LATE_REENTRY_DELTA5M_TO = 0.45        // mmol/5 min: vloer-gewicht 1
+
 // ── Herstel-buffer na een bijna-hypo (12/10/2026) ─────────────────────────
 // AANLEIDING: 12/10 22:23-22:38 (Ecko): BG zakte naar 4,7, daarna snel 4,9→7,9 (waarschijnlijk
 // snelle koolhydraten). Het systeem las dit als maaltijd en gaf 7,4 U in 15 minuten.
@@ -5476,7 +5487,7 @@ class FCLvNext(
     // "vNN-jjjj-mm-dd-uumm" (aanmaaktijdstip, geen omschrijving; die van
     // eerdere versies raakten toch achter). Alleen als het écht relevant
     // is een korte omschrijving toevoegen.
-    private val FCL_CODE_VERSION = "v143-2026-10-14-1000"
+    private val FCL_CODE_VERSION = "v144-2026-10-15-1800"
 
     // ── Restart-detectie (16/07/2026) ─────────────────────────────────
     // true op precies de EERSTE cyclus na het (her)starten van dit class-
@@ -8147,12 +8158,33 @@ class FCLvNext(
             !earlyResetThisCycle
         ) {
 
-            val cappedEarly = minOf(early.targetU, accessCap)
+            val accessCappedEarly = minOf(early.targetU, accessCap)
+            var cappedEarly = accessCappedEarly
 
-            if (cappedEarly < early.targetU) {
+            // Late re-entry: vloer afbouwen als de stijging al afvlakt (zie LATE_REENTRY_*).
+            val lateReentryMinutes = mealEpisodeStartTime?.let {
+                org.joda.time.Minutes.minutesBetween(it, now).minutes
+            } ?: 0
+            if ((reentryActiveThisCycle || isReentrySignal(ctx, now, config)) &&
+                lateReentryMinutes >= LATE_REENTRY_MIN_MEAL_MIN
+            ) {
+                val lateWeight = smoothRamp(
+                    ctx.recentDelta5m, LATE_REENTRY_DELTA5M_FROM, LATE_REENTRY_DELTA5M_TO
+                )
+                if (lateWeight < 0.99) {
+                    val beforeLate = cappedEarly
+                    cappedEarly *= lateWeight
+                    status.append(
+                        "LATE RE-ENTRY: vloer ${"%.2f".format(beforeLate)}→${"%.2f".format(cappedEarly)}U " +
+                            "(Δ5m=${"%.2f".format(ctx.recentDelta5m)} gewicht=${"%.0f".format(lateWeight * 100)}%)\n"
+                    )
+                }
+            }
+
+            if (accessCappedEarly < early.targetU) {
                 status.append(
                     "EARLY capped by ACCESS ($accessLevel): " +
-                        "${"%.2f".format(early.targetU)}→${"%.2f".format(cappedEarly)}U\n"
+                        "${"%.2f".format(early.targetU)}→${"%.2f".format(accessCappedEarly)}U\n"
                 )
             }
 

@@ -57,7 +57,7 @@ import app.aaps.di.mergePlugins
 import app.aaps.implementation.lifecycle.ProcessLifecycleListener
 import app.aaps.implementation.notifications.SnackbarNotificationFallback
 import app.aaps.implementation.plugin.PluginStore
-import app.aaps.implementation.profile.ProfileSwitchExpiryScheduler
+import app.aaps.implementation.profile.ProfileSwitchScheduler
 import app.aaps.implementation.resources.ResourceHelperImpl
 import app.aaps.implementation.utils.fabric.FabricPrivacyImpl
 import app.aaps.plugins.aps.loop.runningMode.RunningModeExpiryScheduler
@@ -71,7 +71,6 @@ import app.aaps.plugins.constraints.signatureVerifier.SignatureVerifierPlugin
 import app.aaps.plugins.source.di.SourceMetroGraph
 import app.aaps.plugins.sync.di.OpenHumansMetroBridge
 import app.aaps.plugins.sync.nsclientV3.NsIncomingDataProcessor
-import app.aaps.ui.activityMonitor.ActivityMonitor
 import dev.zacsweers.metro.MembersInjector
 import dev.zacsweers.metro.createGraphFactory
 import dev.zacsweers.metrox.viewmodel.MetroViewModelFactory
@@ -278,9 +277,8 @@ class MetroGraphs(
     val persistenceLayer: PersistenceLayer get() = root.persistenceLayer
     val appRepository: AppRepository get() = root.appRepository
     val constraintsChecker: ConstraintsChecker get() = root.constraintsChecker
-    val activityMonitor: ActivityMonitor get() = root.activityMonitor
     val notificationManager: NotificationManager get() = root.notificationManager
-    val profileSwitchExpiryScheduler: ProfileSwitchExpiryScheduler get() = root.profileSwitchExpiryScheduler
+    val profileSwitchScheduler: ProfileSwitchScheduler get() = root.profileSwitchScheduler
     val snackbarNotificationFallback: SnackbarNotificationFallback get() = root.snackbarNotificationFallback
     val activePlugin: ActivePlugin get() = root.activePlugin
     val pluginStore: PluginStore get() = root.pluginStore
