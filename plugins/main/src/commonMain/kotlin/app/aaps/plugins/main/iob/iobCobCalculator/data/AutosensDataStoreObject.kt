@@ -51,8 +51,11 @@ class AutosensDataStoreObject : AutosensDataStore {
         const val PHASE_SEED_MIN = 30L
 
         // Phase shift of the sensor, measured against the current anchor, from which the anchor moves
-        // (see reanchorOnPhaseShift). Same limit createBucketedData5min uses for its own re-anchor.
-        const val REANCHOR_MIN_OFFSET_SEC = 90L
+        // (see reanchorOnPhaseShift). Same limit as IRREGULAR_DATA_SEC: a reading further than this off
+        // the grid is not in its slot any more. It was 90 s, but a CareSens Air jump of 215 s sits only
+        // 85 s from the old grid (215 - 300), so it never counted, and for hours every bucket was
+        // interpolated 3m35s before the newest reading (15-10-2026).
+        const val REANCHOR_MIN_OFFSET_SEC = IRREGULAR_DATA_SEC
 
         // Autosens/COB data (table or stored fallback) older than this is treated as stale and not handed out.
         val MAX_AUTOSENS_AGE_MS = T.mins(11).msecs()
@@ -343,7 +346,7 @@ class AutosensDataStoreObject : AutosensDataStore {
      *
      * A single off-grid reading can be jitter, so the anchor only moves when the two newest readings
      * are a normal 5 minute step apart, both are off the old grid by more than
-     * [REANCHOR_MIN_OFFSET_SEC] (the same 90 seconds createBucketedData5min tolerates), and both agree
+     * [REANCHOR_MIN_OFFSET_SEC] (30 seconds), and both agree
      * on the same new phase. That is one reading (5 minutes) after the jump.
      *
      * Only called for irregular data. Regular 5 minute data is handled by createBucketedData5min, which

@@ -1820,15 +1820,17 @@ class AutosensDataStoreTest : TestBaseWithProfile() {
         val newest = T.mins(48).msecs()
         val tolerance = T.secs(AutosensDataStoreObject.IRREGULAR_DATA_SEC).msecs()
         autosensDataStore.bgReadings = readingsForRecalculatedPath(newest)
-        // One millisecond past the tolerance. That is a real phase mismatch, not jitter, so the newest
-        // grid point stays below the newest reading and no bucket is placed after the data.
+        // One millisecond past the tolerance. That is a real phase mismatch, not jitter. The two newest
+        // readings are a normal 5 minute step apart and both sit on that new phase, so the anchor moves
+        // to the newest reading (reanchorOnPhaseShift) and no bucket is placed after the data.
         autosensDataStore.referenceTime = newest - T.mins(5).msecs() + tolerance + 1
 
         autosensDataStore.createBucketedData(aapsLogger, dateUtil)
 
         val bucketed = autosensDataStore.bucketedData!!
-        assertThat(bucketed).hasSize(3)
-        assertThat(bucketed[0].timestamp).isEqualTo(newest - T.mins(5).msecs() + tolerance + 1)
+        assertThat(autosensDataStore.referenceTime).isEqualTo(newest)
+        assertThat(bucketed).hasSize(4)
+        assertThat(bucketed[0].timestamp).isEqualTo(newest)
     }
 
     /**
@@ -2019,8 +2021,8 @@ class AutosensDataStoreTest : TestBaseWithProfile() {
      * (CareSens Air, 14-10-2026). After that every reading sits 165 s later than the old grid.
      * Newest first. [newReadings] is the number of readings after the jump.
      */
-    private fun readingsAfterPhaseJump(newReadings: Int): List<GV> {
-        val jump = T.secs(165).msecs()
+    private fun readingsAfterPhaseJump(newReadings: Int, jumpSec: Long = 165): List<GV> {
+        val jump = T.secs(jumpSec).msecs()
         val fiveMin = T.mins(5).msecs()
         val firstNew = T.mins(60).msecs() + fiveMin + jump // 465 s after the last reading on the old phase
         val newer = (0 until newReadings).map { i -> firstNew + i * fiveMin }
@@ -2047,6 +2049,23 @@ class AutosensDataStoreTest : TestBaseWithProfile() {
         val bucketed = autosensDataStore.bucketedData!!
         assertThat(bucketed[0].timestamp).isEqualTo(newest)
         assertThat(bucketed[0].filledGap).isFalse()
+    }
+
+    @Test
+    fun aPhaseShiftOf215SecondsMovesTheAnchorToo() {
+        // CareSens Air 15-10-2026: a record 515 s after the previous one. 215 s later than the old grid
+        // is only 85 s away from the NEXT grid point, which the old 90 second limit did not count. The
+        // overview then showed "4 min ago" for hours, because bucketedData[0] was interpolated 3m35s
+        // before the newest reading.
+        val oldAnchor = T.mins(60).msecs()
+        autosensDataStore.referenceTime = oldAnchor
+        autosensDataStore.bgReadings = readingsAfterPhaseJump(2, jumpSec = 215)
+        val newest = autosensDataStore.bgReadings[0].timestamp
+
+        autosensDataStore.createBucketedData(aapsLogger, dateUtil)
+
+        assertThat(autosensDataStore.referenceTime).isEqualTo(newest)
+        assertThat(autosensDataStore.bucketedData!![0].timestamp).isEqualTo(newest)
     }
 
     @Test

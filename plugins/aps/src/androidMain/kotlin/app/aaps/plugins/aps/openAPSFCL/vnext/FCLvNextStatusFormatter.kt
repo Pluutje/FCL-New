@@ -117,6 +117,7 @@ class FCLvNextStatusFormatter(
 
 
 
+
     // ── Sectie 1: Situatie ─────────────────────
 
     private fun buildSituatieSectie(
