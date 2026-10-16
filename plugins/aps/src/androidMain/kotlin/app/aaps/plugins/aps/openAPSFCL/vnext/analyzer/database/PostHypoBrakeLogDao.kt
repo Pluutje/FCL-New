@@ -7,7 +7,7 @@ import androidx.room.Query
 
 /**
  * Dao voor post_hypo_brake_log — zelfde eenvoudige patroon als
- * IsfAutoAdjustLogDao/ProfileAutoAdjustLogDao. Zie kdoc bij
+ * ProfileAutoAdjustLogDao. Zie kdoc bij
  * PostHypoBrakeLogEntity voor de aanleiding (26/08/2026).
  */
 @Dao

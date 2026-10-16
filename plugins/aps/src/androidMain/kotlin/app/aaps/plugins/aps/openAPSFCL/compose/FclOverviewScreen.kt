@@ -8,6 +8,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.IntrinsicSize
@@ -96,12 +97,15 @@ import app.aaps.ui.compose.manageSheet.ManageSheetHost
 import app.aaps.ui.compose.manageSheet.ManageViewModel
 import app.aaps.ui.compose.overview.BgInfoSection
 import app.aaps.ui.compose.overview.graphs.BgGraphCompose
+import app.aaps.ui.compose.overview.graphs.GraphInspectOverlay
+import app.aaps.ui.compose.overview.graphs.GraphInspectState
 import app.aaps.ui.compose.overview.graphs.GraphViewModel
 import app.aaps.ui.compose.overview.graphs.INTERACTION_GRACE_MS
 import app.aaps.ui.compose.overview.graphs.MIN_GRAPH_ZOOM_MINUTES
 import app.aaps.ui.compose.overview.graphs.NiceScale
 import app.aaps.ui.compose.overview.graphs.OverrideBandSpec
 import app.aaps.ui.compose.overview.graphs.SecondaryGraphCompose
+import app.aaps.ui.compose.overview.graphs.graphInspectTouch
 import app.aaps.ui.compose.overview.graphs.timestampToX
 import com.patrykandpatrick.vico.compose.cartesian.Scroll
 import com.patrykandpatrick.vico.compose.cartesian.VicoScrollState
@@ -292,6 +296,13 @@ fun FclOverviewScreen(
 
     val now by graphViewModel.nowTimestamp.collectAsStateWithLifecycle()
     val derivedTimeRange by graphViewModel.derivedTimeRange.collectAsStateWithLifecycle()
+
+    // 16/10/2026 (de gebruiker) — lang indrukken op de BG-grafiek en schuiven toont boven de grafiek
+    // tijd, BG, IOB, COB, basaal en bolussen op dat punt, met een stippellijn in beide grafieken.
+    // Zelfde onderdelen als het standaard AAPS-hoofdscherm (GraphsSection.kt): de state wordt door
+    // de BG-grafiek gezet en door de IOB/basaal-grafiek gelezen.
+    val inspect = remember { GraphInspectState() }
+    val inspectBgReadings by graphViewModel.bgReadingsFlow.collectAsStateWithLifecycle()
 
     // 21/09/2026 (de gebruiker) — de Y-as-schaal van de BG-grafiek (fclBgYRange hieronder) bleek
     // niet meer mee te schalen zodra de gebruiker terugscrolde naar oudere data: hij was gekoppeld
@@ -489,20 +500,36 @@ fun FclOverviewScreen(
             onHeightChange = { h -> bgGraphHeight = h; prefs.edit().putInt(PREF_BG_HEIGHT, h).apply() },
             trailingText = "Target: " + targetValueText(targetLine.targets.lastOrNull()?.value)
         ) { graphModifier ->
-            BgGraphCompose(
-                viewModel = graphViewModel,
-                bgOverlays = listOf(SeriesType.PREDICTIONS, SeriesType.ACTIVITY),
-                scrollState = sharedScrollState,
-                zoomState = sharedZoomState,
-                derivedTimeRange = derivedTimeRange,
-                nowTimestamp = now,
-                visibleTimeRange = visibleWindow,
-                yRangeOverride = ::fclBgYRange,
-                inRangeColorOverride = DashBgInRangeColor,
-                highColorOverride = DashBgHighColor,
-                overrideBand = overrideBandSpec,
-                modifier = graphModifier
-            )
+            Box(modifier = Modifier.graphInspectTouch(inspect)) {
+                BgGraphCompose(
+                    viewModel = graphViewModel,
+                    bgOverlays = listOf(SeriesType.PREDICTIONS, SeriesType.ACTIVITY),
+                    scrollState = sharedScrollState,
+                    zoomState = sharedZoomState,
+                    derivedTimeRange = derivedTimeRange,
+                    nowTimestamp = now,
+                    visibleTimeRange = visibleWindow,
+                    yRangeOverride = ::fclBgYRange,
+                    inRangeColorOverride = DashBgInRangeColor,
+                    highColorOverride = DashBgHighColor,
+                    overrideBand = overrideBandSpec,
+                    inspect = inspect,
+                    modifier = graphModifier
+                )
+                // Eigen composable, zodat een vingerbeweging dit hele scherm niet opnieuw opbouwt.
+                // De pil staat boven de grafiek (over de titelregel heen), net als op het
+                // standaard scherm.
+                GraphInspectOverlay(
+                    inspect = inspect,
+                    graphViewModel = graphViewModel,
+                    bgReadings = inspectBgReadings,
+                    minTimestamp = derivedTimeRange?.first,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .offset(y = FCL_INSPECT_PILL_OFFSET)
+                        .padding(top = 2.dp, start = 36.dp, end = 36.dp)
+                )
+            }
         }
 
         // ── IOB/basaal-grafiek: eigen kaart, maar dezelfde scroll/zoom-status als de BG-grafiek
@@ -531,6 +558,7 @@ fun FclOverviewScreen(
                 nowTimestamp = now,
                 // 21/09/2026 (de gebruiker) — voedt bgVisibleTimeRange hierboven, zie kdoc daar.
                 onVisibleRangeChanged = { iobVisibleRange = it },
+                inspect = inspect,
                 modifier = graphModifier
             )
         }
@@ -873,6 +901,13 @@ private fun GraphHeightBottomSheet(height: Int, onHeightChange: (Int) -> Unit, o
  * huidige zichtbare tijdvenster (`visibleWindow` hierboven), niet geclampt tegen de
  * lowMark/highMark-instellingen.
  */
+/**
+ * 16/10/2026 — hoogte van de inspectie-pil t.o.v. de bovenkant van de BG-grafiek. Negatief: de pil
+ * komt boven de grafiek, over de titelregel ("BG" / "Target") heen, zolang de vinger op de grafiek
+ * ligt. Zelfde idee als INSPECT_PILL_OFFSET in GraphsSection.kt (die is daar private).
+ */
+private val FCL_INSPECT_PILL_OFFSET = (-30).dp
+
 private fun fclBgYRange(dataMin: Double, dataMax: Double): NiceScale {
     val minY = 2.0
     val maxY = if (dataMax > 10.0) ceil(dataMax + 2.0) else 12.0

@@ -364,6 +364,12 @@ fun CgpTrendKaart(context: Context) {
                  color = MaterialTheme.colorScheme.onSurfaceVariant)
             TirPeriodLijn(buckets, period, Modifier.fillMaxWidth().height(80.dp))
 
+            Divider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
+            Text("TDD (totale dagdosis, E per dag)",
+                 style = MaterialTheme.typography.labelSmall,
+                 color = MaterialTheme.colorScheme.onSurfaceVariant)
+            TddPeriodLijn(buckets, period, Modifier.fillMaxWidth().height(80.dp))
+
             Text(period.legend,
                  style = MaterialTheme.typography.labelSmall,
                  color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f))

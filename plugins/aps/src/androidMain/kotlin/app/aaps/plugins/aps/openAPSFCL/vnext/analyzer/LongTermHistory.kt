@@ -2,6 +2,7 @@ package app.aaps.plugins.aps.openAPSFCL.vnext.analyzer
 
 import android.content.Context
 import app.aaps.core.interfaces.db.PersistenceLayer
+import app.aaps.core.interfaces.stats.TddCalculator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -16,7 +17,13 @@ data class DayAgg(
     val pgr: Double,
     val gvp: Double,
     val tirPct: Double,
-    val hours: Double
+    val hours: Double,
+    /** Total daily dose in units for a whole day. NaN = not known (day not filled yet). */
+    val tdd: Double = Double.NaN,
+    val tddBasal: Double = Double.NaN,
+    val tddBolus: Double = Double.NaN,
+    /** Time below range (< 4.0 mmol/L), percent of the readings. NaN = not known (old line). */
+    val tbrPct: Double = Double.NaN
 )
 
 /** One chart point: the average of the stored days in one bucket. */
@@ -25,6 +32,8 @@ data class PeriodBucket(
     val pgr: Double,
     val gvp: Double,
     val tirPct: Double,
+    /** Average TDD of the days in this bucket that have one. NaN = no day with TDD. */
+    val tdd: Double = Double.NaN,
     /** Year view only: position in time (0 = oldest month, 11 = newest). Used to break the line. */
     val order: Int = 0
 )
@@ -51,7 +60,11 @@ object LongTermHistory {
 
     private const val PREFS = "fcl_long_term"
     private const val KEY_DAYS = "days_v1"
-    private const val KEY_BACKFILL = "backfill_v1_done"
+    // v2: the day lines now also hold TBR, so the BG lines are calculated once more.
+    private const val KEY_BACKFILL = "backfill_v2_done"
+    private const val KEY_TDD_BACKFILL = "tdd_backfill_v1_done"
+    /** Under this many units a day is treated as missing data. */
+    private const val MIN_VALID_TDD = 1.0
     private const val KEEP_DAYS = 400L
     private const val BACKFILL_DAYS = 185L
     private const val REFRESH_DAYS = 3L
@@ -75,13 +88,21 @@ object LongTermHistory {
         val p = line.split("|")
         if (p.size < 6) return null
         return try {
+            // Old lines have 6 fields. Lines with TDD have 3 more (total, basal, bolus).
+            // Lines with TBR have 1 more.
+            val hasTdd = p.size >= 9
             DayAgg(LocalDate.parse(p[0]), p[1].toDouble(), p[2].toDouble(),
-                   p[3].toDouble(), p[4].toDouble(), p[5].toDouble())
+                   p[3].toDouble(), p[4].toDouble(), p[5].toDouble(),
+                   if (hasTdd) p[6].toDouble() else Double.NaN,
+                   if (hasTdd) p[7].toDouble() else Double.NaN,
+                   if (hasTdd) p[8].toDouble() else Double.NaN,
+                   if (p.size >= 10) p[9].toDouble() else Double.NaN)
         } catch (_: Exception) { null }
     }
 
     private fun encodeLine(d: DayAgg): String =
-        "${d.date}|${d.meanMmol}|${d.pgr}|${d.gvp}|${d.tirPct}|${d.hours}"
+        "${d.date}|${d.meanMmol}|${d.pgr}|${d.gvp}|${d.tirPct}|${d.hours}" +
+            "|${d.tdd}|${d.tddBasal}|${d.tddBolus}|${d.tbrPct}"
 
     // ── Writing ───────────────────────────────────────────────────────────
 
@@ -89,12 +110,65 @@ object LongTermHistory {
     private fun merge(context: Context, newDays: List<DayAgg>) {
         if (newDays.isEmpty()) return
         val map = load(context).associateBy { it.date }.toMutableMap()
-        newDays.forEach { map[it.date] = it }
+        newDays.forEach { nieuw ->
+            // The BG refresh knows nothing about TDD: keep the TDD that is already stored.
+            val oud = map[nieuw.date]
+            map[nieuw.date] = if (oud != null && nieuw.tdd.isNaN()) {
+                nieuw.copy(tdd = oud.tdd, tddBasal = oud.tddBasal, tddBolus = oud.tddBolus)
+            } else nieuw
+        }
+        write(context, map)
+    }
+
+    /** Add TDD to days that are already stored (a day needs its BG line first). */
+    @Synchronized
+    private fun mergeTdd(context: Context, tdds: Map<LocalDate, TddDay>) {
+        if (tdds.isEmpty()) return
+        val map = load(context).associateBy { it.date }.toMutableMap()
+        tdds.forEach { (date, t) ->
+            val d = map[date] ?: return@forEach
+            map[date] = d.copy(tdd = t.total, tddBasal = t.basal, tddBolus = t.bolus)
+        }
+        write(context, map)
+    }
+
+    private fun write(context: Context, map: Map<LocalDate, DayAgg>) {
         val firstKeep = LocalDate.now(GvpCalculator.zone).minusDays(KEEP_DAYS)
         val text = map.values.filter { !it.date.isBefore(firstKeep) }
             .sortedBy { it.date }
             .joinToString("\n") { encodeLine(it) }
         prefs(context).edit().putString(KEY_DAYS, text).apply()
+    }
+
+    /** TDD of one whole day, in units. */
+    private data class TddDay(val total: Double, val basal: Double, val bolus: Double)
+
+    /**
+     * Read whole-day TDD from AAPS. The first time we go back [BACKFILL_DAYS] days (in blocks
+     * of 30 days, so one slow block does not stop the rest); after that only the last
+     * [REFRESH_DAYS] days. Today is never included, a day must be complete.
+     */
+    private suspend fun readTdd(tddCalculator: TddCalculator, backfill: Boolean): Map<LocalDate, TddDay> {
+        val result = HashMap<LocalDate, TddDay>()
+        val today = LocalDate.now(GvpCalculator.zone)
+        val blocks = if (backfill) ((BACKFILL_DAYS + 29) / 30).toInt() else 1
+        for (k in 0 until blocks) {
+            val days = if (backfill) 30L else REFRESH_DAYS
+            val endMs = today.minusDays(k * 30L).atStartOfDay(GvpCalculator.zone)
+                .toInstant().toEpochMilli()
+            val part = try {
+                tddCalculator.calculate(endMs, days, true)
+            } catch (_: Exception) { null } ?: continue
+            for (i in 0 until part.size()) {
+                val t = part.valueAt(i)
+                val total = if (t.totalAmount > 0.0) t.totalAmount else t.basalAmount + t.bolusAmount
+                // A day with (almost) no insulin means missing data, not a real day.
+                if (total < MIN_VALID_TDD) continue
+                val date = Instant.ofEpochMilli(part.keyAt(i)).atZone(GvpCalculator.zone).toLocalDate()
+                result[date] = TddDay(total, t.basalAmount, t.bolusAmount)
+            }
+        }
+        return result
     }
 
     /** Calculate the day lines from raw readings (timestampMs, mmol). */
@@ -107,14 +181,14 @@ object LongTermHistory {
             val bg = bgByDay[d.date]?.map { it.second } ?: return@mapNotNull null
             val score = CgpScoreCalculator.calculateFromBg(bg) ?: return@mapNotNull null
             DayAgg(d.date, d.stats.meanMmol, score.pgr, d.stats.gvpPct,
-                   d.stats.tirPct, d.stats.coveredHours)
+                   d.stats.tirPct, d.stats.coveredHours, tbrPct = d.stats.tbrPct)
         }
     }
 
     // ── Background maintenance (called from the loop cycle) ───────────────
 
     /** Cheap when nothing is due: runs at most once per hour, on a background thread. */
-    fun onCycle(context: Context, persistenceLayer: PersistenceLayer) {
+    fun onCycle(context: Context, persistenceLayer: PersistenceLayer, tddCalculator: TddCalculator) {
         val hourKey = System.currentTimeMillis() / 3_600_000L
         if (hourKey == lastRunHourKey || running) return
         lastRunHourKey = hourKey
@@ -134,6 +208,13 @@ object LongTermHistory {
                 merge(context, daysFromReadings(readings))
                 if (!done && readings.isNotEmpty()) {
                     prefs(context).edit().putBoolean(KEY_BACKFILL, true).apply()
+                }
+                // TDD after the BG lines: a TDD needs its day line to exist.
+                val tddDone = prefs(context).getBoolean(KEY_TDD_BACKFILL, false)
+                val tdds = readTdd(tddCalculator, backfill = !tddDone)
+                mergeTdd(context, tdds)
+                if (!tddDone && tdds.isNotEmpty()) {
+                    prefs(context).edit().putBoolean(KEY_TDD_BACKFILL, true).apply()
                 }
             } catch (_: Exception) {
                 // try again next hour
@@ -178,7 +259,8 @@ object LongTermHistory {
                 meanMmol = g.map { it.meanMmol }.average(),
                 pgr = g.map { it.pgr }.average(),
                 gvp = g.map { it.gvp }.average(),
-                tirPct = g.map { it.tirPct }.average()
+                tirPct = g.map { it.tirPct }.average(),
+                tdd = g.map { it.tdd }.filter { !it.isNaN() }.let { if (it.isEmpty()) Double.NaN else it.average() }
             )
         }
         if (period != OverviewPeriod.Y1) return result

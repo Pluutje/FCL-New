@@ -15,6 +15,7 @@ import app.aaps.core.interfaces.aps.RT
 import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.core.interfaces.plugin.ActivePlugin
 import app.aaps.core.interfaces.profile.ProfileUtil
+import app.aaps.core.interfaces.stats.TddCalculator
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.interfaces.utils.fabric.FabricPrivacy
 import app.aaps.core.keys.DoubleKey
@@ -87,6 +88,8 @@ class DetermineBasalFCL @Inject constructor(
     // app.aaps.implementation.profile, een module waar deze plugin geen
     // compile-afhankelijkheid van heeft; zie kdoc in FclNightBasalAutoAdjuster.kt.)
     private val profileRepository: app.aaps.core.interfaces.profile.ProfileRepository,
+    // Alleen voor LongTermHistory.onCycle(): dag-TDD voor het overzicht (16/10/2026).
+    private val tddCalculator: TddCalculator,
 
     ) {
 
@@ -519,15 +522,13 @@ class DetermineBasalFCL @Inject constructor(
         // Langetermijn-overzicht (dagwaarden uit AAPS-BG, 1 jaar): hooguit 1x per uur,
         // op een achtergrondthread. Zie LongTermHistory.
         app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.LongTermHistory
-            .onCycle(context, persistenceLayer)
-
-        // ISF-auto-adjust (16/08/2026) — zelfde 1-regel-triggerpatroon als de
-        // nacht-AI-adviseur hierboven; alle dedup/mode-logica zit in
-        // FclIsfAutoAdjuster zelf. Standaard UIT (FclSystemMode.OFF), dus dit
-        // is een goedkope no-op tot bewust aangezet — zie kdoc bij
-        // FclIsfAutoAdjuster voor de geverifieerde profiel-accessors.
-        app.aaps.plugins.aps.openAPSFCL.vnext.advisor.isf.FclIsfAutoAdjuster
-            .onCycle(context, profileFunction, profileRepository, cycleLogRepository)
+            .onCycle(context, persistenceLayer, tddCalculator)
+        // Dagsamenvatting van de dosering (instellingen, FCL-aandeel, limieten): bewaart wat het
+        // cyclus-log na 90 dagen weggooit, voor latere analyse van instellingen tegen resultaat.
+        app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.DoseContextHistory
+            .onCycle(context, cycleLogRepository,
+                     app.aaps.plugins.aps.openAPSFCL.vnext.logging.FCLvNextProfileParameterSnapshot.collectForHistory(preferences),
+                     profile.sens / 18.0)
 
         // Geleidelijke nacht-overgang (17/07/2026) — zie kdoc bij
         // FCLvNextDayNightHelper.minutesSinceNightStart() en

@@ -19,7 +19,7 @@ import java.time.format.DateTimeFormatter
  * de standaardwaarden te staan — merkbaar als een algoritme dat "minder
  * reageert" en hogere nachten, dagenlang, tot de learner het vanzelf weer
  * had teruggeleerd. Oorzaak: DFLearner en de verwante stores (VLearner via
- * DFLearner, FrontloadLearner, ISF-auto-adjust, nacht-basaal-auto-adjust,
+ * DFLearner, FrontloadLearner, nacht-basaal-auto-adjust,
  * de AI-parameter-overrides) staan allemaal in eigen, plugin-interne
  * SharedPreferences-bestanden — volledig los van AAPS' eigen
  * instellingen-export/import. Een verse installatie op een nieuwe telefoon
@@ -52,7 +52,6 @@ object FclLearnerBackup {
         "v_learner_prefs",                   // VLearner (volhoudendheid-leren)
         "fl_prefs",                          // FrontloadLearner
         "fcl_expert_prefs",                  // expert-modus, T1-versterking
-        "fcl_isf_auto_adjust_prefs",         // ISF-auto-adjust baseline/modus
         "fcl_night_basal_auto_adjust_prefs", // nacht-basaal-auto-adjust baseline/modus
         "fcl_ai_param_store",                // AI-goedgekeurde parameter-overrides (hoogste prioriteit, zie kdoc daar)
         "fcl_night_ai_advisor_prefs"         // laatste nacht-AI-adviesresultaat (cache, niet gevoelig)

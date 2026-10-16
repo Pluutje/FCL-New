@@ -135,4 +135,62 @@
     <string name="OchtendStartWeekend">Ochtendstart (weekend)</string>
     <string name="NachtStart">Nachtstart</string>
 
+    <!-- FCL vNext — Analyzer, TDD-kaart -->
+    <string name="fcl_tdd_title" comment="Card title. The emoji is the syringe.">💉 TDD (totale dagdosis)</string>
+    <string name="fcl_tdd_no_data">Nog geen TDD-data. Die wordt elk uur uit AAPS bijgewerkt.</string>
+    <string name="fcl_tdd_col_period">Periode</string>
+    <string name="fcl_tdd_col_average">Gemiddeld</string>
+    <string name="fcl_tdd_col_basal">Basaal</string>
+    <string name="fcl_tdd_period_days" comment="%1$d=number of days of the period. Example: 7 d">%1$d d</string>
+    <string name="fcl_tdd_period_days_partial" comment="%1$d=days of the period, %2$d=days that have data. Example: 90 d (56 d)">%1$d d (%2$d d)</string>
+    <string name="fcl_tdd_units_per_day" comment="%1$.1f=insulin units per day. Example: 37,0 E">%1$.1f E</string>
+    <string name="fcl_tdd_percent" comment="%1$.0f=percentage. Example: 91%">%1$.0f%%</string>
+    <string name="fcl_tdd_no_value">–</string>
+    <string name="fcl_tdd_no_period_data">geen data</string>
+
+    <string name="fcl_tdd_weekday_title" comment="%1$d=number of days of the window. Example: Per weekdag (laatste 90 d)">Per weekdag (laatste %1$d d)</string>
+    <string name="fcl_tdd_weekday_mean_line">Stippellijn = gemiddelde. Gekleurd = duidelijk en herhaald anders.</string>
+    <string name="fcl_tdd_weekday_none">Geen duidelijk weekdagpatroon: de verschillen zijn klein of te wisselend.</string>
+    <string name="fcl_tdd_weekday_not_enough">Nog te weinig dagen per weekdag voor een patroon.</string>
+    <string name="fcl_tdd_weekday_up_tar_higher" comment="%1$s=weekday name, %2$.0f=TDD percent higher, %3$.0f=TAR percent points higher">%1$s: TDD %2$.0f%% hoger en TAR %3$.0f punten hoger. Mogelijk is structureel meer insuline nodig: overweeg op deze dag een hogere max IOB of max SMB, of een ISF-correctie (of een eigen profiel).</string>
+    <string name="fcl_tdd_weekday_up_tar_ok" comment="%1$s=weekday name, %2$.0f=TDD percent higher">%1$s: TDD %2$.0f%% hoger, maar de TAR is niet hoger. Het systeem vangt dit op. Geen aanpassing nodig.</string>
+    <string name="fcl_tdd_weekday_down_tbr_higher" comment="%1$s=weekday name, %2$.0f=TDD percent lower, %3$.1f=TBR percent points higher">%1$s: TDD %2$.0f%% lager en TBR %3$.1f punten hoger. Mogelijk is structureel minder insuline nodig: overweeg op deze dag een lagere max IOB of max SMB, of een ISF-correctie (of een eigen profiel).</string>
+    <string name="fcl_tdd_weekday_down_tbr_ok" comment="%1$s=weekday name, %2$.0f=TDD percent lower">%1$s: TDD %2$.0f%% lager, maar de TBR is niet hoger. Lagere behoefte zonder probleem. Geen aanpassing nodig.</string>
+
+    <string name="fcl_tdd_weeks_title" comment="%1$d=number of blocks">Laatste %1$d weken (blokken van 7 dagen)</string>
+    <string name="fcl_tdd_weeks_legend">Onder de datum (begin van het blok), van boven naar onder: TIR, TAR, TBR en FCL-aandeel (deel van de insuline dat FCL zelf heeft afgegeven). Rood = TIR duidelijk lager dan het blok ervoor.</string>
+    <string name="fcl_tdd_weeks_not_enough">Nog te weinig dagen met TDD voor een weekoverzicht.</string>
+
+    <string name="fcl_tdd_advice_not_enough_title">Nog geen advies</string>
+    <string name="fcl_tdd_advice_not_enough" comment="%1$d=days needed recent, %2$d=recent window days, %3$d=days needed before, %4$d=base window days, %5$d=days now recent, %6$d=days now before">Er zijn te weinig dagen met TDD en TIR. Nodig: %1$d van de laatste %2$d dagen en %3$d van de %4$d dagen daarvoor (nu %5$d en %6$d).</string>
+    <string name="fcl_tdd_advice_noisy_title">Geen advies</string>
+    <string name="fcl_tdd_advice_noisy">De dagen verschillen te veel van elkaar om de weken eerlijk te vergelijken.</string>
+    <string name="fcl_tdd_advice_stable_title">Geen advies nodig</string>
+    <string name="fcl_tdd_advice_stable" comment="%1$d=recent days, %2$+.0f=TDD change percent, %3$d=days before">De TDD van de laatste %1$d dagen is stabiel (%2$+.0f%%) ten opzichte van de %3$d dagen daarvoor.</string>
+    <string name="fcl_tdd_advice_up_worse_title">Controleer de instellingen</string>
+    <string name="fcl_tdd_advice_up_worse" comment="%1$.0f=TDD percent higher, %2$.0f=TIR percent points lower, %3$d=days before">De TDD is %1$.0f%% hoger en de TIR is %2$.0f punten lager dan in de %3$d dagen ervoor. Meer insuline helpt dus niet genoeg. Controleer ISF en basaal, en denk aan ziekte, stress of een andere cannule of sensor.</string>
+    <string name="fcl_tdd_advice_up_ok_title">TDD hoger, TIR gelijk</string>
+    <string name="fcl_tdd_advice_up_ok" comment="%1$.0f=TDD percent higher">De TDD is %1$.0f%% hoger, maar de TIR is niet slechter. Het systeem vangt de grotere behoefte op. Geen aanpassing nodig.</string>
+    <string name="fcl_tdd_advice_down_ok_title">TDD lager</string>
+    <string name="fcl_tdd_advice_down_ok" comment="%1$.0f=TDD percent lower">De TDD is %1$.0f%% lager en de TIR is gelijk of beter. De behoefte is lager. Let op lage waarden en controleer of ISF en basaal niet te sterk zijn.</string>
+    <string name="fcl_tdd_advice_down_worse_title">Controleer de insulinedata</string>
+    <string name="fcl_tdd_advice_down_worse" comment="%1$.0f=TDD percent lower, %2$.0f=TIR percent points lower">De TDD is %1$.0f%% lager en de TIR is %2$.0f punten lager. Controleer eerst of insuline-data ontbreekt (bijvoorbeeld na een pompwissel) en of de dosering niet te voorzichtig is.</string>
+    <string name="fcl_tdd_changes_title">Effect van instellingswijzigingen</string>
+    <string name="fcl_tdd_changes_none" comment="%1$d=number of days. Example: 85">Geen wijziging van een doseerinstelling in de laatste %1$d dagen.</string>
+    <string name="fcl_tdd_change_head" comment="%1$s=date, %2$s=setting name, %3$s=old value, %4$s=new value. Example: 12/10: Sterkte 100% → 110%">%1$s: %2$s %3$s → %4$s</string>
+    <string name="fcl_tdd_change_no_before">Te weinig dagen met data vóór de wijziging.</string>
+    <string name="fcl_tdd_change_too_short" comment="%1$d=number of days. Example: 4">Nog te kort: er zijn minder dan %1$d dagen met data na de wijziging.</string>
+    <string name="fcl_tdd_change_before">Ervoor</string>
+    <string name="fcl_tdd_change_after">Erna</string>
+    <string name="fcl_tdd_change_result" comment="%1$s=Before or After label, %2$d=days, %3$s=TDD in units, %4$s=TIR, %5$s=TAR, %6$s=TBR, %7$s=FCL share. Example: Erna (7 d): TDD 40.2 E, TIR 78%, TAR 19%, TBR 3%, FCL 85%">%1$s (%2$d d): TDD %3$s E, TIR %4$s, TAR %5$s, TBR %6$s, FCL %7$s</string>
+    <string name="fcl_tdd_changes_warning" comment="%1$d=number of days. Example: 7">Gemiddelden van %1$d dagen voor en na de wijziging. Dit laat zien wat er gebeurde, niet dat de wijziging de oorzaak was: maaltijden, ziekte en sensorwissels spelen ook mee.</string>
+    <string name="fcl_tdd_param_sterkte">Sterkte</string>
+    <string name="fcl_tdd_param_timing">Timing</string>
+    <string name="fcl_tdd_param_volhoudendheid">Volhoudendheid</string>
+    <string name="fcl_tdd_param_nacht">Nachtfactor</string>
+    <string name="fcl_tdd_param_aaps_multiplier">AAPS-multiplier</string>
+    <string name="fcl_tdd_param_distribution">Doseerverdeling</string>
+    <string name="fcl_tdd_param_night_style">Nachtreactie</string>
+    <string name="fcl_tdd_hint_only">Dit is alleen een hint. Er wordt niets automatisch aangepast.</string>
+
 </resources>

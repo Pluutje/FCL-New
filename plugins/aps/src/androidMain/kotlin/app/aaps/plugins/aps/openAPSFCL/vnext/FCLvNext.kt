@@ -1244,6 +1244,42 @@ private const val LATE_REENTRY_MIN_MEAL_MIN = 30        // min na maaltijdstart 
 private const val LATE_REENTRY_DELTA5M_FROM = 0.10      // mmol/5 min: vloer-gewicht 0
 private const val LATE_REENTRY_DELTA5M_TO = 0.45        // mmol/5 min: vloer-gewicht 1
 
+// ── Override: afbouw van de factor + IOB-plafond bij afvlakkende stijging (16/10/2026) ──
+// AANLEIDING: maaltijd 16/10 13:25-15:00 met override (portie 5 U + factor 150%). Om 14:35 kwam
+// er 3,28 U bij (IOB al 5,8, stijging zakte al af); IOB op de top 8,6 U, daarna BG 4,4.
+// Gewone lunches van de gebruiker hadden 4-6 U IOB op de top.
+// De factor-afbouw werkt ALLEEN bij een actieve override (factor > 100%). Het IOB-plafond geldt voor
+// ELKE maaltijd (17/10/2026, backtest op 137 episodes van 7 dagen: 6 maaltijden geraakt, geen enkele
+// met een duidelijk hogere piek erna). Beide kunnen een dosis alleen verlagen, nooit verhogen.
+// "Stijging" = recentDelta5m gedeeld door de hoogste recentDelta5m van deze maaltijd.
+/** Maaltijd moet minstens zo lang lopen voor deze regels. */
+private const val OVR_LATE_MIN_MEAL_MIN = 30
+/** Hoogste recentDelta5m in de maaltijd moet minstens dit zijn, anders is "afvlakken" niet te meten. */
+private const val OVR_LATE_MIN_PEAK_DELTA = 0.30
+/** Factor-afbouw: bij stijging >= TO is de factor vol, bij <= FROM is hij helemaal afgebouwd. */
+private const val OVR_FADE_RATIO_FROM = 0.50
+private const val OVR_FADE_RATIO_TO = 0.85
+/** Factor waar het naartoe loopt als er al een portie is afgeleverd (terugbetaling). Anders 1,0. */
+private const val OVR_FADE_FLOOR_AFTER_PORTION = 0.70
+/** Afgeleverde portie (U) vanaf waar de factor onder 1,0 mag zakken. */
+private const val OVR_FADE_MIN_PORTION_U = 1.0
+/** Plafond wordt gezet zodra de stijging onder dit aandeel van de hoogste zakt. */
+private const val OVR_CEIL_ARM_RATIO = 0.85
+/** Plafond vervalt zodra de stijging weer boven dit aandeel komt (tweede golf). */
+private const val OVR_CEIL_DISARM_RATIO = 0.95
+/** Plafond = IOB op het moment van afvlakken + dit aandeel (met een minimum in U). */
+private const val OVR_CEIL_ALLOWANCE_FRAC = 0.15
+private const val OVR_CEIL_MIN_ALLOWANCE_U = 0.30
+/** Plafond geldt maximaal zo lang (min) na het zetten, en alleen zolang de BG nog stijgt. */
+private const val OVR_CEIL_WINDOW_MIN = 45
+private const val OVR_CEIL_MIN_DELTA5M = 0.05
+/**
+ * Plafond geldt alleen als de IOB de BG al ruim genoeg kan laten zakken: IOB x ISF moet minstens
+ * zoveel keer groter zijn als het stuk BG boven target (min 1 mmol). Zonder dit remde het plafond
+ * op 10/10 21:58 een explosieve stijging (IOB 2,6 U, 'dekking' 1,5x) terwijl de BG nog 2 mmol steeg.
+ */
+private const val OVR_CEIL_MIN_COVER = 3.0
+
 // ── Herstel-buffer na een bijna-hypo (12/10/2026) ─────────────────────────
 // AANLEIDING: 12/10 22:23-22:38 (Ecko): BG zakte naar 4,7, daarna snel 4,9→7,9 (waarschijnlijk
 // snelle koolhydraten). Het systeem las dit als maaltijd en gaf 7,4 U in 15 minuten.
@@ -6245,6 +6281,15 @@ class FCLvNext(
     private var episodeMaxDeltaTargetSoFar: Double = 0.0
     private var doseRatioElevatedSinceAt: DateTime? = null
 
+    // Override-regels bij afvlakkende stijging (16/10/2026), zie OVR_* constanten.
+    // Alleen in het geheugen: na een herstart begint de meting opnieuw, dat is veilig
+    // (zonder meting doen de regels niets).
+    private var ovrEpisodeKey: Long = 0L
+    private var ovrPeakDelta5m: Double = 0.0
+    private var ovrPortionDeliveredU: Double = 0.0
+    private var ovrCeilArmedAt: DateTime? = null
+    private var ovrCeilIobU: Double = 0.0
+
     // ── Nieuwe-maaltijd trog-detectie (RONDE 33, 03/08/2026, de gebruiker) ────────
     // AANLEIDING: incident 3/8 12:18-15:28 — ontbijt (piek 11:03, BG 10,6)
     // en lunch (12:18-14:13, BG 6,3→10,5) vielen samen tot ÉÉN doorlopende
@@ -10430,12 +10475,64 @@ class FCLvNext(
         // volledige duur verstreken is (auto-expire) -- geen aparte
         // "vergeten uit te zetten"-toestand mogelijk.
         val tempOverrideStatus = FclTempOverrideSettings.status(context, now.millis)
+
+        // ── Override-regels bij afvlakkende stijging (16/10/2026) — zie OVR_* constanten ──
+        // Meting per maaltijd: hoogste recentDelta5m, afgeleverde portie, en het moment waarop de
+        // stijging begon af te vlakken (dan wordt de IOB onthouden voor het plafond verderop).
+        val ovrEpisodeKeyNow = mealEpisodeStartTime?.millis ?: 0L
+        if (ovrEpisodeKeyNow != ovrEpisodeKey) {
+            // De portie wordt meestal al afgeleverd VOOR de maaltijd-episode begint (key 0 -> nieuw):
+            // die telling moet dan blijven staan. Pas bij een ander episode (of tussen maaltijden
+            // zonder override, zie hieronder) begint hij opnieuw.
+            if (ovrEpisodeKey != 0L) ovrPortionDeliveredU = 0.0
+            ovrEpisodeKey = ovrEpisodeKeyNow
+            ovrPeakDelta5m = 0.0
+            ovrCeilArmedAt = null
+            ovrCeilIobU = 0.0
+        }
+        if (ovrEpisodeKeyNow == 0L && !tempOverrideStatus.active) ovrPortionDeliveredU = 0.0
+        ovrPeakDelta5m = maxOf(ovrPeakDelta5m, ctx.recentDelta5m)
+        val ovrMealMinutes = mealEpisodeStartTime
+            ?.let { org.joda.time.Minutes.minutesBetween(it, now).minutes } ?: 0
+        val ovrLateMeasurable = ovrEpisodeKeyNow != 0L &&
+            ovrMealMinutes >= OVR_LATE_MIN_MEAL_MIN &&
+            ovrPeakDelta5m >= OVR_LATE_MIN_PEAK_DELTA
+        val ovrRiseRatio = if (ovrLateMeasurable) ctx.recentDelta5m / ovrPeakDelta5m else 1.0
+        if (ovrLateMeasurable) {
+            if (ovrCeilArmedAt == null && ovrRiseRatio < OVR_CEIL_ARM_RATIO) {
+                ovrCeilArmedAt = now
+                ovrCeilIobU = ctx.input.currentIOB
+                status.append(
+                    "OVERRIDE PLAFOND GEZET: stijging ${"%.0f".format(ovrRiseRatio * 100)}% van de hoogste, " +
+                        "IOB ${"%.2f".format(ovrCeilIobU)}U → plafond " +
+                        "${"%.2f".format(ovrCeilIobU + maxOf(ovrCeilIobU * OVR_CEIL_ALLOWANCE_FRAC, OVR_CEIL_MIN_ALLOWANCE_U))}U\n"
+                )
+            } else if (ovrCeilArmedAt != null && ovrRiseRatio >= OVR_CEIL_DISARM_RATIO) {
+                ovrCeilArmedAt = null
+                status.append("OVERRIDE PLAFOND VERVALLEN: stijging weer ${"%.0f".format(ovrRiseRatio * 100)}% van de hoogste\n")
+            }
+        }
+
         if (tempOverrideStatus.active && commandedDose > 0.0) {
             val beforeTempOverride = commandedDose
-            commandedDose *= tempOverrideStatus.effectiveMul
+            // Factor boven 100% loopt af naar 100% (of naar 70% als er al een portie is gegeven) zodra
+            // de stijging afvlakt. Factor van 100% of lager blijft precies zoals ingesteld.
+            var ovrMul = tempOverrideStatus.effectiveMul
+            if (ovrMul > 1.0 && ovrLateMeasurable) {
+                val keep = smoothRamp(ovrRiseRatio, OVR_FADE_RATIO_FROM, OVR_FADE_RATIO_TO)
+                val low = if (ovrPortionDeliveredU >= OVR_FADE_MIN_PORTION_U) OVR_FADE_FLOOR_AFTER_PORTION else 1.0
+                if (keep < 0.999) {
+                    ovrMul = lerp(low, ovrMul, keep)
+                    status.append(
+                        "OVERRIDE FACTOR AFBOUW: stijging ${"%.0f".format(ovrRiseRatio * 100)}% van de hoogste → " +
+                            "${"%.0f".format(tempOverrideStatus.effectiveMul * 100)}%→${"%.0f".format(ovrMul * 100)}%\n"
+                    )
+                }
+            }
+            commandedDose *= ovrMul
             status.append(
                 "TEMP OVERRIDE: ${"%.2f".format(beforeTempOverride)}→${"%.2f".format(commandedDose)}U " +
-                    "(doel ${tempOverrideStatus.targetPct}%, effectief ${"%.0f".format(tempOverrideStatus.effectiveMul * 100)}%, " +
+                    "(doel ${tempOverrideStatus.targetPct}%, effectief ${"%.0f".format(ovrMul * 100)}%, " +
                     "nog ${tempOverrideStatus.remainingMinutes} min)\n"
             )
         }
@@ -11859,6 +11956,30 @@ class FCLvNext(
         // gewoon open en wordt een volgende cyclus opnieuw (en, richting het
         // einde van de override, getaperd via erodeOutstandingPortions())
         // aangevraagd.
+        // ── IOB-plafond bij afvlakkende stijging (16-17/10/2026) — zie OVR_* constanten ──
+        // Gewone dosis (incl. vloer en top-ups) mag de IOB niet verder boven het plafond brengen zolang
+        // de stijging afvlakt maar de BG nog stijgt, max OVR_CEIL_WINDOW_MIN min na het zetten, en alleen
+        // als de IOB de BG al ruim dekt (OVR_CEIL_MIN_COVER). Geldt voor elke maaltijd. De
+        // override-portie komt hieronder daarna en valt er bewust niet onder. Alleen verlagen.
+        val ovrArmedAt = ovrCeilArmedAt
+        val ovrIobCover = ctx.input.currentIOB * ctx.input.effectiveISF /
+            maxOf(1.0, ctx.input.bgNow - ctx.input.targetBG)
+        if (ovrArmedAt != null && commandedDose > 0.0 &&
+            ctx.recentDelta5m > OVR_CEIL_MIN_DELTA5M &&
+            ovrIobCover >= OVR_CEIL_MIN_COVER &&
+            org.joda.time.Minutes.minutesBetween(ovrArmedAt, now).minutes <= OVR_CEIL_WINDOW_MIN
+        ) {
+            val ceilingIob = ovrCeilIobU + maxOf(ovrCeilIobU * OVR_CEIL_ALLOWANCE_FRAC, OVR_CEIL_MIN_ALLOWANCE_U)
+            val room = (ceilingIob - ctx.input.currentIOB).coerceAtLeast(0.0)
+            if (commandedDose > room) {
+                status.append(
+                    "OVERRIDE PLAFOND: ${"%.2f".format(commandedDose)}→${"%.2f".format(room)}U " +
+                        "(IOB ${"%.2f".format(ctx.input.currentIOB)} van plafond ${"%.2f".format(ceilingIob)})\n"
+                )
+                commandedDose = room
+            }
+        }
+
         val portionRequest = FclTempOverrideSettings.nextDuePortionRequest(context, now.millis)
         var portionRequestBeforeDose = 0.0
         var portionRequestAmount = 0.0
@@ -12042,6 +12163,8 @@ class FCLvNext(
             else
                 rawDelta.coerceIn(portionRequestAmount, 0.0)
             FclTempOverrideSettings.applyPortionDelivery(context, settlePortionId, portionDeliveredThisCycle, now.millis)
+            // Telt mee voor de factor-afbouw (terugbetaling): alleen positieve porties.
+            if (portionDeliveredThisCycle > 0.0) ovrPortionDeliveredU += portionDeliveredThisCycle
             if (kotlin.math.abs(portionDeliveredThisCycle - portionRequestAmount) > 0.001) {
                 status.append(
                     "PRESET PORTIE AFREKENING: ${"%.2f".format(portionDeliveredThisCycle)}U geleverd van " +

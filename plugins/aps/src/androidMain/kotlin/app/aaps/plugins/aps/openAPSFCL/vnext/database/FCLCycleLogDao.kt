@@ -42,4 +42,40 @@ interface FCLCycleLogDao {
     // (popup bij een klik op de laatste-dosis-tekst) op FclOverviewScreen.kt.
     @Query("SELECT * FROM fcl_cycle_log WHERE deliveredTotal > 0 ORDER BY timestampMs DESC LIMIT :limit")
     suspend fun getRecentDeliveries(limit: Int): List<FCLCycleLogEntity>
+
+    // Slim rows for the daily dose summary (analyzer/DoseContextHistory). Only the columns it
+    // needs, so a 90 day backfill does not load the wide entity.
+    @Query(
+        "SELECT timestampMs, sterktePct, timingPct, volhoudendheidPct, nachtFactorPct, " +
+            "doseDistributionStyle, nightResponseStyle, deliveredTotal, realDeliveredBasalU, " +
+            "realDeliveredBolusU, externalBolusU, aapsMultiplier, aigfPct, aigfBPct, " +
+            "activityInsulinPct, guardMaxSmbLimited, guardIobLimited, effectiveISF, iob, bolus " +
+            "FROM fcl_cycle_log WHERE timestampMs >= :fromMs AND timestampMs < :toMs " +
+            "ORDER BY timestampMs ASC"
+    )
+    suspend fun getDoseRows(fromMs: Long, toMs: Long): List<CycleDoseRow>
 }
+
+/** Columns of [FCLCycleLogEntity] used for the daily dose summary. Names match the columns. */
+data class CycleDoseRow(
+    val timestampMs: Long,
+    val sterktePct: Int,
+    val timingPct: Int,
+    val volhoudendheidPct: Int,
+    val nachtFactorPct: Int,
+    val doseDistributionStyle: String,
+    val nightResponseStyle: String,
+    val deliveredTotal: Double,
+    val realDeliveredBasalU: Double,
+    val realDeliveredBolusU: Double,
+    val externalBolusU: Double,
+    val aapsMultiplier: Double,
+    val aigfPct: Double,
+    val aigfBPct: Double,
+    val activityInsulinPct: Double,
+    val guardMaxSmbLimited: Boolean,
+    val guardIobLimited: Boolean,
+    val effectiveISF: Double,
+    val iob: Double,
+    val bolus: Double
+)

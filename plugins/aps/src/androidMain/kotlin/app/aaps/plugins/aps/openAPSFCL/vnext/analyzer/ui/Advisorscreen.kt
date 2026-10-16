@@ -133,17 +133,10 @@ fun AdvisorScreen(
                 )
             })
 
-            // ── 3. ISF: automatische ISF-bijstelling (19/08/2026) ────────
-            // Eigen tabblad, was voorheen bovenaan het Dag-tabblad — zie
-            // kdoc bij Dfcontroltab.kt voor de aanleiding (ISF-data bouwt
-            // bewust langzaam op, duwde Agressiviteit onnodig naar onderen).
-            add(InfoTabPage(s.isfLabel) {
-                val isfContext = androidx.compose.ui.platform.LocalContext.current
-                app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.ui.FclModeStatusLine(
-                    app.aaps.plugins.aps.openAPSFCL.vnext.advisor.isf.FclIsfAutoAdjustStore.getMode(isfContext),
-                    label = "ISF"
-                )
-                app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.ui.IsfAutoAdjustCard(isfContext)
+            // ── 3. TDD: gemiddelden en voorzichtig advies (16/10/2026) ───
+            // Staat op de plek van het oude ISF-tabblad (ISF-learner is verwijderd).
+            add(InfoTabPage(s.tddLabel) {
+                TddKaart(androidx.compose.ui.platform.LocalContext.current)
             })
 
             // ── Expert: Parameters, Backup en Analyse tabs ───────────────

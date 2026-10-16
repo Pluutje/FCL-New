@@ -26,9 +26,8 @@ import androidx.room.PrimaryKey
  * entity lijkt een vergelijkbare grens opnieuw geraakt te zijn, ondanks de
  * @Embedded-groepering. Om FCLCycleLogEntity niet verder te laten groeien,
  * staan deze 2 diagnostische velden daarom in deze eigen, kleine tabel —
- * hetzelfde bewezen patroon als isf_auto_adjust_log en
- * profile_auto_adjust_log (beide simpele CREATE TABLE-migraties, nooit een
- * crash veroorzaakt).
+ * hetzelfde bewezen patroon als profile_auto_adjust_log
+ * (simpele CREATE TABLE-migratie, nooit een crash veroorzaakt).
  *
  * Bij CSV-export (zie FCLCycleLogRepository.exportCsvLast7DaysInternal())
  * worden beide tabellen samengevoegd op timestampMs tot één regel, zodat de

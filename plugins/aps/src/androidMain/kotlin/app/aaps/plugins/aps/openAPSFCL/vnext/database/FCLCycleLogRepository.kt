@@ -51,6 +51,10 @@ class FCLCycleLogRepository @Inject constructor(
     private var lastLearnerRunHour: Int = -1
     private var lastCgpCalcHour: Int = -1   // berekening elke 2 uur
 
+    /** Slim rows in [fromMs, toMs) for the daily dose summary. */
+    suspend fun doseRows(fromMs: Long, toMs: Long): List<CycleDoseRow> =
+        dao.getDoseRows(fromMs, toMs)
+
     fun insert(entity: FCLCycleLogEntity) {
         scope.launch {
             dao.insert(entity)

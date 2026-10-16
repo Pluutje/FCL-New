@@ -40,4 +40,18 @@ object FCLvNextProfileParameterSnapshot {
         "nacht_start"           to preferences.get(StringKey.NachtStart),
         "weekend_dagen"         to preferences.get(StringKey.WeekendDagen),
     )
+
+    /**
+     * Everything worth keeping for later study of settings against results: the UI settings
+     * above, plus the learned values and the resistance / activity behaviour. Used for the
+     * daily dose summary only.
+     */
+    fun collectForHistory(preferences: Preferences): Map<String, Any> =
+        collect(preferences) + mapOf(
+            "max_smb_day_learned"  to preferences.get(DoubleKey.fcl_vnext_max_smb_day_learned),
+            "iob_brake_learned"    to preferences.get(DoubleKey.fcl_vnext_iob_brake_learned),
+            "resistance_behavior"  to preferences.get(StringKey.fcl_vnext_resistance_behavior),
+            "resistance_stability" to preferences.get(StringKey.fcl_vnext_resistance_stability),
+            "activity_behavior"    to preferences.get(StringKey.fcl_vnext_activity_behavior),
+        )
 }

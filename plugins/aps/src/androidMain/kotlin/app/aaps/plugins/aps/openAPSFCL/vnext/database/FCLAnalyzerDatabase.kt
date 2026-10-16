@@ -10,7 +10,6 @@ import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.BasalProfileHisto
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.EpisodeEntity
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.NightWindowEntity
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.ProfileAutoAdjustLogEntity
-import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.IsfAutoAdjustLogEntity
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.PostHypoBrakeLogEntity
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.ExplosiveRiseLogEntity
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.TempOverrideLogEntity
@@ -233,6 +232,15 @@ val MIGRATION_25_26 = object : Migration(25, 26) {
     }
 }
 
+// ── MIGRATION_26_27 (16/10/2026) ─────────────────────────────────────
+// De ISF-learner is verwijderd. De tabel isf_auto_adjust_log hoort niet meer
+// bij het schema, dus we laten hem vallen. Geen andere tabel verandert.
+val MIGRATION_26_27 = object : Migration(26, 27) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("DROP TABLE IF EXISTS `isf_auto_adjust_log`")
+    }
+}
+
 @Database(
     entities = [
         FCLCycleLogEntity::class,
@@ -240,7 +248,6 @@ val MIGRATION_25_26 = object : Migration(25, 26) {
         NightWindowEntity::class,
         BasalProfileHistoryEntity::class,
         ProfileAutoAdjustLogEntity::class,
-        IsfAutoAdjustLogEntity::class,
         PostHypoBrakeLogEntity::class,
         ExplosiveRiseLogEntity::class,
         TempOverrideLogEntity::class,
@@ -339,7 +346,9 @@ val MIGRATION_25_26 = object : Migration(25, 26) {
     // geen wijziging aan fcl_cycle_log of enige andere tabel) —
     // MIGRATION_25_26 hierboven. Zie kdoc bij TempOverrideLogEntity voor de
     // aanleiding (preset-extra-insuline naast het percentage in de CSV).
-    version = 26,
+    // v26->v27 (16/10/2026): isf_auto_adjust_log verwijderd (ISF-learner weg) —
+    // MIGRATION_26_27 hierboven laat de tabel vallen.
+    version = 27,
     exportSchema = false
 )
 abstract class FCLAnalyzerDatabase : RoomDatabase() {
@@ -349,7 +358,6 @@ abstract class FCLAnalyzerDatabase : RoomDatabase() {
     abstract fun nightWindowDao(): app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.NightWindowDao
     abstract fun basalProfileHistoryDao(): app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.BasalProfileHistoryDao
     abstract fun profileAutoAdjustLogDao(): app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.ProfileAutoAdjustLogDao
-    abstract fun isfAutoAdjustLogDao(): app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.IsfAutoAdjustLogDao
     abstract fun postHypoBrakeLogDao(): app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.PostHypoBrakeLogDao
     abstract fun explosiveRiseLogDao(): app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.ExplosiveRiseLogDao
     abstract fun tempOverrideLogDao(): app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.TempOverrideLogDao
@@ -368,7 +376,7 @@ abstract class FCLAnalyzerDatabase : RoomDatabase() {
                     FCLAnalyzerDatabase::class.java,
                     DB_NAME
                 )
-                    .addMigrations(MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26)
+                    .addMigrations(MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27)
                     .fallbackToDestructiveMigration(dropAllTables = true)
                     .build()
                     .also { INSTANCE = it }

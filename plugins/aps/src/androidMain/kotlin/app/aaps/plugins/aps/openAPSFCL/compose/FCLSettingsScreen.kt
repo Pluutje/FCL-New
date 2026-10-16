@@ -466,19 +466,6 @@ fun FCLSettingsScreen(
                     onDayModeChange = { app.aaps.plugins.aps.openAPSFCL.vnext.advisor.ai.FclAiAdvisorSettingsStore.setMode(ctx, it) },
                     onNightModeChange = { app.aaps.plugins.aps.openAPSFCL.vnext.advisor.ai.night.FclNightBasalAutoAdjustStore.setMode(ctx, it) }
                 )
-                // 16/08/2026 — ISF-auto-adjust: geen dag/nacht-as (ISF-metingen
-                // zijn niet aan nacht gebonden zoals de basaal-variant), dus de
-                // gewone, enkelvoudige FclModeSelectorCard i.p.v. de Dag/Nacht-
-                // variant hierboven. Kaartje zelf staat in de Learner-tab
-                // (IsfAutoAdjustCard, Dfcontroltab.kt) — hier alleen de bediening,
-                // zelfde plaatsingsprincipe als Learner/AI-adviseur hierboven.
-                app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.ui.FclModeSelectorCard(
-                    title = "ISF-auto-adjust",
-                    initialMode = app.aaps.plugins.aps.openAPSFCL.vnext.advisor.isf.FclIsfAutoAdjustStore.getMode(ctx),
-                    autoDescription = "Past het gemiddelde ISF-voorstel automatisch toe op het pompprofiel, in kleine stapjes met een harde grens",
-                    manualDescription = "Berekent een ISF-voorstel uit zuivere correctiemomenten, past pas toe na jouw goedkeuring",
-                    onModeChange = { app.aaps.plugins.aps.openAPSFCL.vnext.advisor.isf.FclIsfAutoAdjustStore.setMode(ctx, it) }
-                )
             }
         }
 

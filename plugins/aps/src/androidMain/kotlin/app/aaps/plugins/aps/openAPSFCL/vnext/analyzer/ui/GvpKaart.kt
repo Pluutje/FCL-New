@@ -277,6 +277,37 @@ fun TirPeriodLijn(buckets: List<PeriodBucket?>, period: OverviewPeriod, modifier
     )
 }
 
+/**
+ * TDD chart (units per day). One colour: there is no good or bad zone for a dose.
+ * Buckets without TDD stay empty, so a new history fills the chart from the right month on.
+ */
+@Composable
+fun TddPeriodLijn(buckets: List<PeriodBucket?>, period: OverviewPeriod, modifier: Modifier = Modifier) {
+    val waarden = buckets.map { b -> b?.tdd?.takeIf { !it.isNaN() } }
+    val data = waarden.filterNotNull()
+    val laagste = data.minOrNull() ?: 0.0
+    val hoogste = data.maxOrNull() ?: 40.0
+    // Round to tens, with some room, and keep a range of at least 20 units.
+    val yMin = (floor((laagste - 5.0) / 10.0) * 10.0).coerceAtLeast(0.0)
+    val yMaxRaw = ceil((hoogste + 5.0) / 10.0) * 10.0
+    val yMax = if (yMaxRaw - yMin < 20.0) yMin + 20.0 else yMaxRaw
+    val gridStep = if (yMax - yMin > 60.0) 20.0 else 10.0
+    PeriodTrendCanvas(
+        waarden = waarden,
+        lineWindow = period.lineWindow,
+        orders = yearOrders(buckets, period),
+        xLabels = yearLabels(period),
+        yMin = yMin,
+        yMax = yMax,
+        gridStep = gridStep,
+        bands = listOf(Band(yMin, yMax, TddBlue)),
+        dotColor = { TddBlue },
+        modifier = modifier
+    )
+}
+
+private val TddBlue = Color(0xFF42A5F5)
+
 /** Estimated HbA1c (mmol/mol) chart, from the mean glucose of each bucket. */
 @Composable
 fun Hba1cPeriodLijn(buckets: List<PeriodBucket?>, period: OverviewPeriod, modifier: Modifier = Modifier) {

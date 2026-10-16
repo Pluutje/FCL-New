@@ -48,8 +48,7 @@ import java.time.format.DateTimeFormatter
 // een oudere backup kan nooit per ongeluk een sindsdien toegevoegde
 // instelling wissen. Toch een expliciete bevestigingsdialoog, want dit
 // raakt wel degelijk dosis-bepalende staat (sterkte/timing/volhoudendheid
-// e.d.) — zelfde voorzichtigheidsprincipe als bij "Voorstel toepassen op de
-// pomp?" in IsfAutoAdjustCard.
+// e.d.).
 @Composable
 fun FclBackupRestoreCard() {
     val context = LocalContext.current
