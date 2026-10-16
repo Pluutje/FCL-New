@@ -50,13 +50,6 @@ class AutosensDataStoreObject : AutosensDataStore {
         // now rather than one it left hours ago.
         const val PHASE_SEED_MIN = 30L
 
-        // Phase shift of the sensor, measured against the current anchor, from which the anchor moves
-        // (see reanchorOnPhaseShift). Same limit as IRREGULAR_DATA_SEC: a reading further than this off
-        // the grid is not in its slot any more. It was 90 s, but a CareSens Air jump of 215 s sits only
-        // 85 s from the old grid (215 - 300), so it never counted, and for hours every bucket was
-        // interpolated 3m35s before the newest reading (15-10-2026).
-        const val REANCHOR_MIN_OFFSET_SEC = IRREGULAR_DATA_SEC
-
         // Autosens/COB data (table or stored fallback) older than this is treated as stale and not handed out.
         val MAX_AUTOSENS_AGE_MS = T.mins(11).msecs()
     }
@@ -268,7 +261,8 @@ class AutosensDataStoreObject : AutosensDataStore {
      * Pick the anchor from the phase the recent readings share, instead of from whichever reading
      * happens to be newest.
      *
-     * The anchor is set once and then kept for the life of the process, because the whole point of it
+     * The anchor is set once and then kept for the life of the process (only the temporary
+     * [reAnchorWhenTheNewestReadingsLeftTheGrid] moves it), because the whole point of it
      * is that autosens and COB keep the same 5 minute slots (issue #5066): the table is keyed by bucket
      * time, COB is chained from the previous bucket, and carbs are counted into the slot the grid
      * defines. So the one moment it is chosen has to be right, and [adjustToReferenceTime] chose it
@@ -292,6 +286,36 @@ class AutosensDataStoreObject : AutosensDataStore {
         val recent = readings.asSequence().takeWhile { it.timestamp >= from }.map { it.timestamp }.toList()
         val tolerance = T.secs(IRREGULAR_DATA_SEC).msecs()
         referenceTime = recent.maxBy { candidate -> recent.count { distanceToGrid(it, candidate) <= tolerance } }
+    }
+
+    /**
+     * TEMPORARY. Remove it with the bucketing rework planned in issue #5148 (an absolute grid for the
+     * cached data, fresh readings for the loop), which makes moving the grid unnecessary.
+     *
+     * The anchor is kept for the life of the process, and nothing moved it when the sensor phase moved.
+     * An xDrip+ source that sends every 5 minutes and 2 seconds drifts off the grid by 24 seconds an
+     * hour, and one missed reading can shift the phase by minutes. From then on `bucketedData[0]`, which the
+     * overview, the loop and wear read, was an interpolated value up to 4.5 minutes older than the newest
+     * reading, until AAPS was restarted.
+     *
+     * So when the two newest readings are both more than [IRREGULAR_DATA_SEC] off the grid and agree on
+     * one phase, the grid moves to the newest reading. Two readings, so that a single late one does not
+     * move it. Agreeing on one phase, so that a source faster than 5 minutes, which is off the grid most
+     * of the time anyway, never moves it (issue #5066).
+     *
+     * Moving the grid changes every bucket time, so the cached autosens data is keyed by a grid that is
+     * gone. It is thrown away and calculated again, the same as after a restart.
+     */
+    private fun reAnchorWhenTheNewestReadingsLeftTheGrid(readings: List<GV>, aapsLogger: AAPSLogger) {
+        val tolerance = T.secs(IRREGULAR_DATA_SEC).msecs()
+        val newest = readings[0].timestamp
+        val previous = readings[1].timestamp
+        val leftTheGrid = distanceToGrid(newest, referenceTime) > tolerance && distanceToGrid(previous, referenceTime) > tolerance
+        val onePhase = distanceToGrid(previous, newest) <= tolerance
+        if (!leftTheGrid || !onePhase) return
+        aapsLogger.debug("Newest readings left the 5 minute grid. Re-anchoring on the newest reading and recalculating autosens data.")
+        referenceTime = newest
+        reset()
     }
 
     /**
@@ -334,45 +358,8 @@ class AutosensDataStoreObject : AutosensDataStore {
         }
     }
 
-    /**
-     * Move the anchor when the sensor itself has shifted its 5 minute measurement phase.
-     *
-     * Some sensors (seen with CareSens Air, about once a day) write a record that is 7m45s instead of
-     * 5 minutes after the previous one. From then on all readings sit on a new phase, e.g. 165 s later.
-     * [referenceTime] lives as long as the process, so it keeps the old phase. [adjustToReferenceTime]
-     * then lands 135 s after the newest reading, [createBucketedDataRecalculated] steps back 5 minutes,
-     * and bucketedData[0] becomes a value interpolated 2m45s BEFORE the newest reading. Overview, loop
-     * and wear all read bucketedData[0], so they run on an old, interpolated value until a restart.
-     *
-     * A single off-grid reading can be jitter, so the anchor only moves when the two newest readings
-     * are a normal 5 minute step apart, both are off the old grid by more than
-     * [REANCHOR_MIN_OFFSET_SEC] (30 seconds), and both agree
-     * on the same new phase. That is one reading (5 minutes) after the jump.
-     *
-     * Only called for irregular data. Regular 5 minute data is handled by createBucketedData5min, which
-     * already re-anchors on its own.
-     *
-     * The cached autosens table was built on the old grid, so it is cleared with [reset].
-     */
-    private fun reanchorOnPhaseShift(aapsLogger: AAPSLogger) {
-        val readings = bgReadings
-        if (referenceTime == -1L || readings.size < 3) return
-        val tolerance = T.secs(IRREGULAR_DATA_SEC).msecs()
-        val minOffset = T.secs(REANCHOR_MIN_OFFSET_SEC).msecs()
-        val newest = readings[0].timestamp
-        val previous = readings[1].timestamp
-        if (abs(newest - previous - T.mins(5).msecs()) > tolerance) return // not a normal 5 minute step
-        if (distanceToGrid(newest, referenceTime) <= minOffset) return // still close to the anchor's grid
-        if (distanceToGrid(previous, referenceTime) <= minOffset) return // only the newest is off: maybe jitter
-        if (distanceToGrid(newest, previous) > tolerance) return // the two disagree: no stable new phase
-        aapsLogger.debug(LTag.AUTOSENS, "Sensor phase shifted. Re-anchoring bucket grid to the newest reading.")
-        referenceTime = newest
-        reset()
-    }
-
     override fun createBucketedData(aapsLogger: AAPSLogger, dateUtil: DateUtil) {
         val fiveMinData = isAbout5minData(aapsLogger)
-        if (!fiveMinData) reanchorOnPhaseShift(aapsLogger)
         if (lastUsed5minCalculation != null && lastUsed5minCalculation != fiveMinData) {
             // changing mode => clear cache
             aapsLogger.debug("Invalidating cached data because of changed mode.")
@@ -427,7 +414,9 @@ class AutosensDataStoreObject : AutosensDataStore {
         }
         val lastBg = readings[0]
         // The anchor is kept for the life of the process, so the one time it is chosen has to be right.
+        // Only the temporary re-anchor below moves it, when the newest readings have left the grid.
         if (referenceTime == -1L) seedReferenceTime()
+        else reAnchorWhenTheNewestReadingsLeftTheGrid(readings, aapsLogger)
         val newBucketedData = ArrayList<InMemoryGlucoseValue>()
         val adjustedTime = adjustToReferenceTime(lastBg.timestamp)
         // adjustToReferenceTime snaps to the NEAREST grid point, so the newest grid point can land after
@@ -442,7 +431,9 @@ class AutosensDataStoreObject : AutosensDataStore {
         // fresher than it is. That is the price of not being a full 5 minutes stale.
         //
         // A bigger overshoot is a real phase mismatch, not jitter, and still steps back. createBucketedData5min
-        // drops the anchor instead when it is that far out; this path has no such re-anchor.
+        // drops the anchor instead when it is that far out. This path moves it only when the two newest
+        // readings have left the grid (reAnchorWhenTheNewestReadingsLeftTheGrid, temporary), so a single
+        // late reading still steps back here.
         var currentTime =
             if (adjustedTime - lastBg.timestamp > T.secs(IRREGULAR_DATA_SEC).msecs()) adjustedTime - T.mins(5).msecs()
             else adjustedTime
