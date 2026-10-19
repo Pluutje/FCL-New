@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -265,6 +266,19 @@ private fun WeekBlocksSection(blocks: List<TddWeekBlock?>) {
         val barColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
         val dateFormat = remember { DateTimeFormatter.ofPattern("d/M") }
         Row(Modifier.fillMaxWidth()) {
+            // Label column: same row heights as the block columns, so every label sits left of its numbers.
+            Column(Modifier.width(40.dp)) {
+                Box(Modifier.height(VALUE_ROW))
+                Box(Modifier.height(BAR_AREA))
+                Text(" ", style = MaterialTheme.typography.labelSmall)
+                listOf(R.string.fcl_tdd_lbl_tir, R.string.fcl_tdd_lbl_tar,
+                       R.string.fcl_tdd_lbl_tbr, R.string.fcl_tdd_lbl_fcl).forEach { label ->
+                    Text(stringResource(label),
+                         style = MaterialTheme.typography.labelSmall,
+                         fontWeight = FontWeight.SemiBold,
+                         color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
             blocks.forEachIndexed { i, b ->
                 Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
                     Box(Modifier.height(VALUE_ROW), contentAlignment = Alignment.Center) {
@@ -344,6 +358,13 @@ private fun ChangesSection(changes: List<ParamChange>) {
                          style = MaterialTheme.typography.labelSmall)
                     Text(resultLine(stringResource(R.string.fcl_tdd_change_after), c.after),
                          style = MaterialTheme.typography.labelSmall)
+                    val conclusion = conclusionText(c, c.before, c.after)
+                    if (conclusion != null) {
+                        Text(conclusion,
+                             style = MaterialTheme.typography.labelMedium,
+                             fontWeight = FontWeight.SemiBold,
+                             modifier = Modifier.padding(top = 4.dp))
+                    }
                 }
             }
         }
@@ -382,6 +403,62 @@ private fun resultLine(label: String, r: PeriodResult): String {
     val fcl = if (r.fclSharePct.isNaN()) none else stringResource(R.string.fcl_tdd_percent, r.fclSharePct)
     return stringResource(R.string.fcl_tdd_change_result, label, r.days, "%.1f".format(r.tdd),
                           tir, tar, tbr, fcl)
+}
+
+private const val CONCL_TIR_POINTS = 2.0
+private const val CONCL_TBR_POINTS = 1.0
+private const val CONCL_TDD_PERCENT = 5.0
+
+/**
+ * Does more of this setting mean more insulin? True/false for the settings with a clear direction,
+ * null for the rest (those get the plain TIR verdict).
+ */
+private fun moreInsulin(c: ParamChange): Boolean? {
+    if (c.kind != ParamKind.STERKTE && c.kind != ParamKind.TIMING && c.kind != ParamKind.VOLHOUDENDHEID) return null
+    val from = c.from.toDoubleOrNull() ?: return null
+    val to = c.to.toDoubleOrNull() ?: return null
+    return if (to > from) true else if (to < from) false else null
+}
+
+/**
+ * Short verdict on a before/after pair. With a clear direction it asks: did the expected thing happen
+ * (more insulin: lower TAR; less insulin: lower TBR) and did the other side stay the same?
+ * Null when there is no TIR to compare.
+ */
+@Composable
+private fun conclusionText(c: ParamChange, before: PeriodResult, after: PeriodResult): String? {
+    if (before.tirPct.isNaN() || after.tirPct.isNaN()) return null
+    val tirDelta = after.tirPct - before.tirPct
+    val tirText = "%+.0f".format(tirDelta)
+    val more = moreInsulin(c)
+    val hasBands = !before.tarPct.isNaN() && !after.tarPct.isNaN() && !before.tbrPct.isNaN() && !after.tbrPct.isNaN()
+    val main = if (more != null && hasBands) {
+        val tarDelta = after.tarPct - before.tarPct
+        val tbrDelta = after.tbrPct - before.tbrPct
+        val tarText = "%+.0f".format(tarDelta)
+        val tbrText = "%+.0f".format(tbrDelta)
+        val improved = if (more) tarDelta <= -CONCL_TIR_POINTS else tbrDelta <= -CONCL_TBR_POINTS
+        val backwards = if (more) tarDelta >= CONCL_TIR_POINTS else tbrDelta >= CONCL_TBR_POINTS
+        val otherWorse = if (more) tbrDelta >= CONCL_TBR_POINTS else tarDelta >= CONCL_TIR_POINTS
+        when {
+            backwards -> stringResource(R.string.fcl_tdd_concl_back, tarText, tbrText)
+            otherWorse -> stringResource(R.string.fcl_tdd_concl_price, tarText, tbrText)
+            improved -> stringResource(R.string.fcl_tdd_concl_goal, tarText, tbrText)
+            else -> stringResource(R.string.fcl_tdd_concl_none, tarText, tbrText)
+        }
+    } else {
+        val tbrDelta = if (before.tbrPct.isNaN() || after.tbrPct.isNaN()) 0.0 else after.tbrPct - before.tbrPct
+        when {
+            tbrDelta >= CONCL_TBR_POINTS -> stringResource(R.string.fcl_tdd_concl_low, "%+.0f".format(tbrDelta), tirText)
+            tirDelta >= CONCL_TIR_POINTS -> stringResource(R.string.fcl_tdd_concl_better, tirText)
+            tirDelta <= -CONCL_TIR_POINTS -> stringResource(R.string.fcl_tdd_concl_worse, tirText)
+            else -> stringResource(R.string.fcl_tdd_concl_same, tirText)
+        }
+    }
+    val tddPercent = if (before.tdd > 0.0) (after.tdd - before.tdd) / before.tdd * 100.0 else 0.0
+    return if (abs(tddPercent) >= CONCL_TDD_PERCENT)
+        stringResource(R.string.fcl_tdd_concl_join, main, stringResource(R.string.fcl_tdd_concl_tdd, "%+.0f".format(tddPercent)))
+    else main
 }
 
 // ── Advice ────────────────────────────────────────────────────────────────

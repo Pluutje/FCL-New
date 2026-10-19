@@ -645,6 +645,39 @@ private const val HIGH_PLATEAU_LDM_FLOOR_MAX = 0.50
 private const val HIGH_PLATEAU_ABSORPTION_RELEASE_FRAC = 0.50
 private const val HIGH_PLATEAU_MAX_IOB_RATIO = 0.55
 
+// ── Plateau-houden (18/10/2026) ───────────────────────────────────────────
+// AANLEIDING: 18/10 20:41-21:21 (Ecko): BG 9,8 -> 11,5 met een trage, gelijkmatige stijging van 0,2 per
+// 5 min, 4 tot 6 mmol/L boven target. persistCtrl (slope <= 0,32) en sustainedRiseCtrl (slope <= 1,3)
+// vuurden allebei niet: de slope was 1,5 tot 2,7 mmol/u. FCL gaf kleine doses van 0,3 U per cyclus en
+// de IOB zakte van 6,4 naar 4,6 U, terwijl de BG bleef stijgen.
+// Twee onderdelen, beide met hetzelfde gewicht plateauHoldBoostThisCycle (0..1):
+//  1. de plateau-bodem van lateDecayMul wordt hoger (tot HOLD_LDM_EXTRA extra);
+//  2. een kleine extra dosis (max HOLD_MAX_STEP_U per cyclus) die de IOB richting de hoogste IOB van de
+//     laatste HOLD_PEAK_WINDOW_MIN minuten brengt. Het doel is HOLD_TARGET_BASE_FRAC van die piek en het
+//     mag tot HOLD_TARGET_BASE_FRAC + HOLD_TARGET_RISE_EXTRA_FRAC stijgen als de BG echt stijgt.
+// Het gewicht groeit met: tijd en hoogte (highPlateauFracThisCycle), hoever de BG boven target is,
+// en hoe laag de IOB-dekking is; en het is 0 bij een dalende BG.
+// Backtest (7 dagen): helpt 18/10; op 12/10 en 16/10 vuurde een eerdere, grotere versie vlak voor de
+// piek. Daarom een kleine stap (0,2 U) en een zachte opbouw.
+private var plateauHoldBoostThisCycle: Double = 0.0
+private var plateauHoldPeakIob: Double = 0.0
+private var plateauHoldPeakAt: DateTime? = null
+/** BG moet minstens zoveel boven target zijn voor het gewicht groter dan 0 wordt, en dit is de opbouwlengte. */
+private const val HOLD_NEED_START_MMOL = 4.5
+private const val HOLD_NEED_RAMP_MMOL = 2.0
+/** IOB x ISF / (BG boven target): vanaf dit niveau neemt het gewicht af, tot 0 na HOLD_COVER_RAMP. */
+private const val HOLD_COVER_START = 3.0
+private const val HOLD_COVER_RAMP = 1.5
+/** Stijging per 5 min waarbij het stijgingsdeel van het gewicht vol is; bij een vlakke BG is het laag. */
+private const val HOLD_RISE_START_DELTA5M = 0.03
+private const val HOLD_RISE_RAMP_DELTA5M = 0.12
+/** Extra bodem voor lateDecayMul bij gewicht 1. */
+private const val HOLD_LDM_EXTRA = 0.25
+private const val HOLD_PEAK_WINDOW_MIN = 90
+private const val HOLD_TARGET_BASE_FRAC = 0.95
+private const val HOLD_TARGET_RISE_EXTRA_FRAC = 0.20
+private const val HOLD_MAX_STEP_U = 0.30
+
 // v142: afbouw (teller, late_decay_mul, budget) resetten als er 15 min geen maaltijd is en weinig IOB.
 // 10/10 19:18-19:38: een klein bultje (0,10 U) liet late_decay_mul op 0,32 staan; de echte maaltijd
 // om 20:08 kreeg daardoor 6 cycli lang te kleine doses.
@@ -5523,7 +5556,7 @@ class FCLvNext(
     // "vNN-jjjj-mm-dd-uumm" (aanmaaktijdstip, geen omschrijving; die van
     // eerdere versies raakten toch achter). Alleen als het écht relevant
     // is een korte omschrijving toevoegen.
-    private val FCL_CODE_VERSION = "v144-2026-10-15-1800"
+    private val FCL_CODE_VERSION = "v145-2026-10-18-2230"
 
     // ── Restart-detectie (16/07/2026) ─────────────────────────────────
     // true op precies de EERSTE cyclus na het (her)starten van dit class-
@@ -8044,6 +8077,33 @@ class FCLvNext(
                         "gewicht=${"%.2f".format(highPlateauFracThisCycle)}\n"
                 )
             }
+
+            // Plateau-houden: hoogste IOB van de laatste HOLD_PEAK_WINDOW_MIN minuten bijhouden en
+            // het gewicht berekenen. Zie kdoc bij plateauHoldBoostThisCycle.
+            val holdIobNow = ctx.input.currentIOB
+            if (plateauHoldPeakAt == null ||
+                minutesSince(plateauHoldPeakAt, now) > HOLD_PEAK_WINDOW_MIN ||
+                holdIobNow >= plateauHoldPeakIob
+            ) {
+                plateauHoldPeakIob = holdIobNow
+                plateauHoldPeakAt = now
+            }
+            val holdNeedMmol = ctx.deltaToTarget
+            val holdCover = if (holdNeedMmol > 0.3 && ctx.input.effectiveISF > 0.0)
+                holdIobNow * ctx.input.effectiveISF / holdNeedMmol
+            else Double.MAX_VALUE
+            val holdNeedFactor = smooth01((holdNeedMmol - HOLD_NEED_START_MMOL) / HOLD_NEED_RAMP_MMOL)
+            val holdCoverFactor = 1.0 - smooth01((holdCover - HOLD_COVER_START) / HOLD_COVER_RAMP)
+            val holdRiseFactor = smooth01((ctx.recentDelta5m - HOLD_RISE_START_DELTA5M) / HOLD_RISE_RAMP_DELTA5M)
+            plateauHoldBoostThisCycle = if (ctx.recentDelta5m <= -0.05) 0.0
+            else highPlateauFracThisCycle * holdNeedFactor * holdCoverFactor * (0.5 + 0.5 * holdRiseFactor)
+            if (plateauHoldBoostThisCycle > 0.05) {
+                status.append(
+                    "PLATEAU-HOUDEN: gewicht=${"%.2f".format(plateauHoldBoostThisCycle)} " +
+                        "(plateau=${"%.2f".format(highPlateauFracThisCycle)} need=${"%.1f".format(holdNeedFactor)} " +
+                        "dekking=${"%.1f".format(holdCover)}x piek-IOB=${"%.2f".format(plateauHoldPeakIob)})\n"
+                )
+            }
         }
 
         tempOverrideRelaxesPeakBrake = FclTempOverrideSettings.status(context, now.millis).let { st ->
@@ -9943,7 +10003,8 @@ class FCLvNext(
                     highPlateauFracThisCycle > 0.0 &&
                     ctx.iobRatio < HIGH_PLATEAU_MAX_IOB_RATIO
                 ) {
-                    val plateauFloor = HIGH_PLATEAU_LDM_FLOOR_MAX * highPlateauFracThisCycle
+                    val plateauFloor = HIGH_PLATEAU_LDM_FLOOR_MAX * highPlateauFracThisCycle +
+                        HOLD_LDM_EXTRA * plateauHoldBoostThisCycle
                     if (lateDecayMul < plateauFloor) {
                         val voorPlateauFloor = lateDecayMul
                         lateDecayMul = plateauFloor
@@ -11929,6 +11990,32 @@ class FCLvNext(
                     "delta=${"%.2f".format(ctx.deltaToTarget)} slope=${"%.2f".format(ctx.slope)} " +
                     "commitFraction=${"%.2f".format(commitFraction)}\n"
             )
+        }
+
+        // ── Plateau-houden top-up (18/10/2026) — zie kdoc bij plateauHoldBoostThisCycle ──
+        // Zelfde plek als de SUSTAINED-RISE TOP-UP: erft de downtrend-gate en de absolute cap hieronder.
+        // De gewone dosis telt mee in de ruimte, dus dit is geen dubbele dosis.
+        if (!sustainedRiseResult.fired &&
+            plateauHoldBoostThisCycle > 0.05 &&
+            ctx.iobRatio < HIGH_PLATEAU_MAX_IOB_RATIO
+        ) {
+            val holdRiseFrac = smooth01((ctx.recentDelta5m - 0.10) / 0.30)
+            val holdTargetIob = plateauHoldPeakIob *
+                (HOLD_TARGET_BASE_FRAC + HOLD_TARGET_RISE_EXTRA_FRAC * holdRiseFrac)
+            val holdRoom = holdTargetIob - ctx.input.currentIOB - commandedDose
+            if (holdRoom > 0.0) {
+                val holdDose = plateauHoldBoostThisCycle * minOf(holdRoom, HOLD_MAX_STEP_U)
+                if (holdDose >= 0.05) {
+                    val voorHold = commandedDose
+                    commandedDose += holdDose
+                    status.append(
+                        "PLATEAU-HOUDEN TOP-UP: +${"%.2f".format(holdDose)}U " +
+                            "(${"%.2f".format(voorHold)}→${"%.2f".format(commandedDose)}U) " +
+                            "IOB ${"%.2f".format(ctx.input.currentIOB)} doel ${"%.2f".format(holdTargetIob)} " +
+                            "gewicht=${"%.2f".format(plateauHoldBoostThisCycle)}\n"
+                    )
+                }
+            }
         }
 
         // ─────────────────────────────────────────────

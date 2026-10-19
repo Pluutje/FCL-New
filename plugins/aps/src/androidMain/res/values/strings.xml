@@ -158,7 +158,21 @@
     <string name="fcl_tdd_weekday_down_tbr_ok" comment="%1$s=weekday name, %2$.0f=TDD percent lower">%1$s: TDD %2$.0f%% lager, maar de TBR is niet hoger. Lagere behoefte zonder probleem. Geen aanpassing nodig.</string>
 
     <string name="fcl_tdd_weeks_title" comment="%1$d=number of blocks">Laatste %1$d weken (blokken van 7 dagen)</string>
-    <string name="fcl_tdd_weeks_legend">Onder de datum (begin van het blok), van boven naar onder: TIR, TAR, TBR en FCL-aandeel (deel van de insuline dat FCL zelf heeft afgegeven). Rood = TIR duidelijk lager dan het blok ervoor.</string>
+    <string name="fcl_tdd_weeks_legend">FCL% = deel van de insuline dat FCL zelf heeft afgegeven. Rood = TIR duidelijk lager dan het blok ervoor.</string>
+    <string name="fcl_tdd_lbl_tir">TIR</string>
+    <string name="fcl_tdd_lbl_tar">TAR</string>
+    <string name="fcl_tdd_lbl_tbr">TBR</string>
+    <string name="fcl_tdd_lbl_fcl">FCL%</string>
+    <string name="fcl_tdd_concl_low" comment="%1$s=change in time below range in percentage points, %2$s=change in time in range in percentage points. Example: +1, -2">Let op: meer tijd te laag (TBR %1$s punten). TIR %2$s punten.</string>
+    <string name="fcl_tdd_concl_better" comment="%1$s=change in time in range in percentage points. Example: +5">Beter: TIR %1$s punten.</string>
+    <string name="fcl_tdd_concl_worse" comment="%1$s=change in time in range in percentage points. Example: -4">Slechter: TIR %1$s punten.</string>
+    <string name="fcl_tdd_concl_same" comment="%1$s=change in time in range in percentage points. Example: +1">Vrijwel gelijk: TIR %1$s punten.</string>
+    <string name="fcl_tdd_concl_goal" comment="%1$s=change in time above range, %2$s=change in time below range, both in percentage points. Example: -5, +0">Doet wat je verwacht: TAR %1$s, TBR %2$s punten.</string>
+    <string name="fcl_tdd_concl_price" comment="%1$s=change in time above range, %2$s=change in time below range, both in percentage points. Example: -5, +1">Let op: TAR %1$s, TBR %2$s punten.</string>
+    <string name="fcl_tdd_concl_none" comment="%1$s=change in time above range, %2$s=change in time below range, both in percentage points. Example: +0, +0">Nog geen merkbaar effect: TAR %1$s, TBR %2$s punten.</string>
+    <string name="fcl_tdd_concl_back" comment="%1$s=change in time above range, %2$s=change in time below range, both in percentage points. Example: +4, +0">Werkt niet zoals bedoeld: TAR %1$s, TBR %2$s punten.</string>
+    <string name="fcl_tdd_concl_join" comment="%1$s=first sentence, %2$s=second sentence">%1$s %2$s</string>
+    <string name="fcl_tdd_concl_tdd" comment="%1$s=change in daily insulin dose in percent. Example: +8">Dagdosis %1$s%%.</string>
     <string name="fcl_tdd_weeks_not_enough">Nog te weinig dagen met TDD voor een weekoverzicht.</string>
 
     <string name="fcl_tdd_advice_not_enough_title">Nog geen advies</string>
