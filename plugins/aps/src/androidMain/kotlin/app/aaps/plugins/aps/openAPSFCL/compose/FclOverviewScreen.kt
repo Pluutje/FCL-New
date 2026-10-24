@@ -911,7 +911,8 @@ private val FCL_INSPECT_PILL_OFFSET = (-30).dp
 private fun fclBgYRange(dataMin: Double, dataMax: Double): NiceScale {
     val minY = 2.0
     val maxY = if (dataMax > 10.0) ceil(dataMax + 2.0) else 12.0
-    return NiceScale(minY, maxY, (maxY - minY) / 4.0)
+    // NiceScale has no label step any more (upstream now picks the axis labels itself).
+    return NiceScale(minY, maxY)
 }
 
 /**
