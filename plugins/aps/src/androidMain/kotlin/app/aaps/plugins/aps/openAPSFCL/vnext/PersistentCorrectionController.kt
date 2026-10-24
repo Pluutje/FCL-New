@@ -62,6 +62,14 @@ class PersistentCorrectionController(
     // voorheen (1.0x, geen enkele wijziging).
     private var episodeCycles: Int = 0
 
+    /**
+     * Ends the cooldown that a fire just started. Used when the fire gave no insulin at the end of the
+     * cycle (a later guard made the dose zero), so the next cycle can try again.
+     */
+    fun cancelCooldown() {
+        cooldownLeft = 0
+    }
+
     data class Result(
         val active: Boolean,
         val fired: Boolean,

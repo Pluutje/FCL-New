@@ -678,6 +678,26 @@ private const val HOLD_TARGET_BASE_FRAC = 0.95
 private const val HOLD_TARGET_RISE_EXTRA_FRAC = 0.20
 private const val HOLD_MAX_STEP_U = 0.30
 
+// ── Commit-dekkingsrem (19/10/2026) ───────────────────────────────────────
+// AANLEIDING: 19/10 09:51, 12:46 en 14:46 (Ecko): een volle commit (2,5 tot 3,4 U) terwijl de IOB de BG
+// al 5 tot 8 keer dekte (IOB x ISF / (BG boven target)). De BG steeg daarna maar 0,6 tot 1,1 mmol/L en
+// kwam op 4,2 tot 4,8; de gebruiker moest het teveel wegeten. Bij de grote maaltijden (17/10 17:36,
+// 18/10 18:41, +9,4 en +5,2) was de dekking bij de commit maar 2,1 tot 2,6 keer. Op het moment van de
+// commit zijn de stijging en de verwachte piek niet te gebruiken om klein van groot te scheiden; de
+// dekking wel. Regel: de commit wordt vloeiend kleiner naarmate de IOB de BG meer dekt.
+// Backtest (7 dagen, 22 commits zonder override-porties): 8 commits worden kleiner (6 U per week);
+// 7 daarvan werden gevolgd door een lage waarde (4,9 of lager), 0 door een stijging van 3 of meer.
+// De constanten (start 3,0, afbouwlengte 5,0, maximale verlaging 0,5, ondergrens 0,5 mmol) en de formule
+// staan in CoverIsf.commitCoverRatio/commitBrake, zodat de Analyzer dezelfde berekening kan gebruiken.
+
+// ── v146: dekkings-ISF-factor (dynamische ISF voor de "hoeveel mmol dekt de IOB"-berekening) ──────────────
+// Bij een hoge BG werkt een eenheid insuline minder sterk dan de ISF van het profiel zegt (AutoISF en
+// DynISF doen dit ook). Gemeten in de logs (24 dagen Ecko, 8 dagen Gijs): "BG - IOB x ISF" voorspelt de
+// BG 3 uur later gemiddeld 8-11 mmol te laag; met een AutoISF-achtige factor is dat ruim de helft minder.
+// De factor is 1,0 bij target en zakt tot ~0,5 ver boven target. Alleen gebruikt waar de dekking
+// (IOB x ISF / (BG - target)) wordt berekend: commit-dekkingsrem, plateau-houden en het IOB-plafond bij
+// een override. De piek-IOB-rem blijft op de IOB-ratio. De curve staat in CoverIsf.kt.
+
 // v142: afbouw (teller, late_decay_mul, budget) resetten als er 15 min geen maaltijd is en weinig IOB.
 // 10/10 19:18-19:38: een klein bultje (0,10 U) liet late_decay_mul op 0,32 staan; de echte maaltijd
 // om 20:08 kreeg daardoor 6 cycli lang te kleine doses.
@@ -1713,6 +1733,45 @@ private const val POST_HYPO_BRAKE_FLAT_DISARM_TOLERANCE = 0.3 // mmol/L, toegest
 private const val POST_HYPO_BRAKE_RECENT_AGGRESSION_LOW = 3.5   // burst_10m + episodeHypoDebtU bij aanslaan, U
 private const val POST_HYPO_BRAKE_RECENT_AGGRESSION_HIGH = 4.5  // U
 private const val POST_HYPO_BRAKE_RECENT_AGGRESSION_MAX_DAMP = 0.60  // fractie, max. afremming van rampFrac
+
+// ── v147 (19/10/2026): post-hypo rem, drie aanpassingen ──────────────────────
+// Aanleiding: maaltijd 19/10 19:00. BG was 1 uur eerder 3,6-3,9. De eerste commit van 1,75 U werd
+// tot 0,33 U geknipt. Om 19:26 sloeg de rem opnieuw aan (de lage BG telde nog mee) en begon het
+// tellen van de stijging opnieuw bij 8,3.
+// 1. Een "recente lage BG" is nu <= 4,0 (was 4,4). Een BG van 4,0-4,4 vlak voor het eten is normaal.
+// 2. De rem slaat niet aan als de BG al zo veel boven de laagste waarde van het laatste uur staat dat
+//    de rem toch al helemaal los zou zijn (zelfde afstand als POST_HYPO_BRAKE_CATCHUP_RISE_AFTER_LOW).
+// 3. Bewijs van een grote maaltijd laat de rem eerder los: snelle stijging EN ruim boven de laagste waarde.
+private const val POST_HYPO_RECENT_LOW_MMOL = 4.0
+private const val POST_HYPO_LOW_WINDOW_POINTS = 13          // ~60 min bij 5 min per punt
+private const val POST_HYPO_RELEASE_SLOPE_START = 4.0       // mmol/u: hier begint het bewijs
+private const val POST_HYPO_RELEASE_SLOPE_FULL = 8.0        // mmol/u: hier is de snelheid volledig bewezen
+private const val POST_HYPO_RELEASE_RISE_START = 2.5        // mmol boven de laagste BG van het laatste uur
+private const val POST_HYPO_RELEASE_RISE_FULL = 4.5
+/** Een commit telt alleen mee voor de afbouw als minstens deze fractie van de bedoelde dosis wordt afgegeven. */
+private const val COMMIT_COUNT_MIN_DELIVERED_FRAC = 0.5
+
+// 4. Milde bodem voor lateDecayMul zolang de BG duidelijk stijgt ver boven target (19/10: lateDecayMul
+//    0,15-0,4 terwijl de BG van 9 naar 12 steeg).
+private const val RISING_LDM_FLOOR = 0.35
+private const val RISING_LDM_MIN_ABOVE_TARGET = 3.0   // mmol boven target
+private const val RISING_LDM_MIN_DELTA5M = 0.2        // mmol per 5 min
+private const val RISING_LDM_MIN_SLOPE = 2.0          // mmol/u
+// Bij een zeer steile stijging (20/10 en 22/10 lunch: 5-12 mmol/u) wordt de bodem hoger en begint hij al eerder.
+private const val RISING_LDM_STEEP_SLOPE_START = 4.0  // mmol/u: hier begint de verhoging
+private const val RISING_LDM_STEEP_SLOPE_FULL = 6.0   // mmol/u: hier is hij volledig
+private const val RISING_LDM_STEEP_FLOOR = 0.60       // bodem bij een volledig steile stijging
+private const val RISING_LDM_STEEP_MIN_ABOVE_TARGET = 1.5   // mmol boven target bij een volledig steile stijging
+
+// 5. Minimale dosis die meegroeit met het tekort (energy_total - IOB), alleen bij een stijgende BG ver
+//    boven target. 19/10 20:06-20:36: 0,15 U per cyclus terwijl energy_total 5-6 U en IOB 3,5 U was.
+private const val SHORTFALL_DOSE_FRAC = 0.35
+private const val SHORTFALL_DOSE_MIN_U = 0.20
+private const val SHORTFALL_DOSE_MAX_U = 0.70
+private const val SHORTFALL_MIN_ABOVE_TARGET = 3.0    // mmol boven target
+private const val SHORTFALL_MAX_BG = 14.0             // mmol/L, hierboven niet meer
+private const val SHORTFALL_MIN_DELTA5M = 0.12        // mmol per 5 min
+private const val SHORTFALL_MAX_IOB_RATIO = 0.5
 
 // ─────────────────────────────────────────────
 // WatchingFrontload delta-to-target ramp (05/07/2026)
@@ -5556,7 +5615,7 @@ class FCLvNext(
     // "vNN-jjjj-mm-dd-uumm" (aanmaaktijdstip, geen omschrijving; die van
     // eerdere versies raakten toch achter). Alleen als het écht relevant
     // is een korte omschrijving toevoegen.
-    private val FCL_CODE_VERSION = "v145-2026-10-18-2230"
+    private val FCL_CODE_VERSION = "v148-2026-10-24-1500"
 
     // ── Restart-detectie (16/07/2026) ─────────────────────────────────
     // true op precies de EERSTE cyclus na het (her)starten van dit class-
@@ -8090,7 +8149,7 @@ class FCLvNext(
             }
             val holdNeedMmol = ctx.deltaToTarget
             val holdCover = if (holdNeedMmol > 0.3 && ctx.input.effectiveISF > 0.0)
-                holdIobNow * ctx.input.effectiveISF / holdNeedMmol
+                holdIobNow * ctx.input.effectiveISF * CoverIsf.factor(ctx.input.bgNow, ctx.input.targetBG) / holdNeedMmol
             else Double.MAX_VALUE
             val holdNeedFactor = smooth01((holdNeedMmol - HOLD_NEED_START_MMOL) / HOLD_NEED_RAMP_MMOL)
             val holdCoverFactor = 1.0 - smooth01((holdCover - HOLD_COVER_START) / HOLD_COVER_RAMP)
@@ -8977,6 +9036,8 @@ class FCLvNext(
 
 
         var didCommitThisCycle = false
+        // v147: de commit-dosis zoals die bedoeld was, vóór de latere remmen (zie teller-correctie na de post-hypo rem).
+        var commitIntendedThisCycle = 0.0
 
         status.append(mealSignal.reason + "\n")
         status.append("CommitAllowed=${if (commitAllowed) "YES" else "NO"}\n")
@@ -10015,6 +10076,39 @@ class FCLvNext(
                     }
                 }
 
+                // v147: milde bodem zolang de BG duidelijk blijft stijgen ver boven target. Zie
+                // RISING_LDM_FLOOR. Gemeten op 24 dagen: +0,5 U per dag, minuten boven 10 gehalveerd.
+                // Bij een steile stijging (slope 4-6 mmol/u en hoger) gaat de bodem geleidelijk naar
+                // RISING_LDM_STEEP_FLOOR en telt de drempel boven target al vanaf RISING_LDM_STEEP_MIN_ABOVE_TARGET.
+                val risingSteepFrac = smooth01(
+                    (ctx.recentSlope - RISING_LDM_STEEP_SLOPE_START) /
+                        (RISING_LDM_STEEP_SLOPE_FULL - RISING_LDM_STEEP_SLOPE_START)
+                )
+                // Dynamisch (23/10/2026, zie SteepRiseGuards): de verhoging verdwijnt weer als er net veel is
+                // gegeven of de IOB-ratio al hoog is.
+                val floorRef = if (episodePeakCommitU > 1e-9) episodePeakCommitU else config.maxSMB * 0.4
+                val risingSteepKeep = risingSteepFrac * SteepRiseGuards.floorKeep(
+                    deliveredInLastMinutes(now, SteepRiseGuards.FLOOR_WINDOW_MIN), floorRef, ctx.iobRatio
+                )
+                val risingLdmFloor = lerp(RISING_LDM_FLOOR, RISING_LDM_STEEP_FLOOR, risingSteepKeep)
+                val risingMinAbove = lerp(RISING_LDM_MIN_ABOVE_TARGET, RISING_LDM_STEEP_MIN_ABOVE_TARGET, risingSteepKeep)
+                if (allowCommitBoost && commitAccessOk &&
+                    !curveConfirmtOmslag &&
+                    ctx.input.bgNow >= ctx.input.targetBG + risingMinAbove &&
+                    ctx.recentDelta5m >= RISING_LDM_MIN_DELTA5M &&
+                    ctx.recentSlope >= RISING_LDM_MIN_SLOPE &&
+                    ctx.iobRatio < HIGH_PLATEAU_MAX_IOB_RATIO &&
+                    !postHypoBrakeActive &&
+                    lateDecayMul < risingLdmFloor
+                ) {
+                    val voorRisingFloor = lateDecayMul
+                    lateDecayMul = risingLdmFloor
+                    status.append(
+                        "LATEDECAYMUL STIJGING-BODEM (v147): ${"%.2f".format(voorRisingFloor)}->${"%.2f".format(lateDecayMul)} " +
+                            "(delta5m=${"%.2f".format(ctx.recentDelta5m)} slope=${"%.1f".format(ctx.recentSlope)})\n"
+                    )
+                }
+
                 // Onthoud de volledig-aangepaste stand van dit cyclus voor als een
                 // latere cyclus het commit-blok overslaat (zie kdoc bij
                 // lastKnownLateDecayMul hierboven).
@@ -10231,6 +10325,24 @@ class FCLvNext(
                     1.0 - 0.65 * smooth01(firstUnanchoredProgress)
                 }
 
+                // Rem op de bypass (23/10/2026, zie SteepRiseGuards): na een grote eerste commit mag
+                // bgStijgtNogFors finalDose niet opnieuw ongeplafonneerd doorlaten als er in de laatste
+                // 15 minuten al ongeveer het piekcommit-bedrag is gegeven. De grens loopt op naarmate de BG
+                // verder boven target komt, zodat een echt grote maaltijd zijn ruimte houdt.
+                // Incident 23/10 22:11-22:21: 3 commits van 3,4-3,5 U achter elkaar (10,5 U in 15 minuten).
+                val bypassGivenRecentU = deliveredInLastMinutes(now, SteepRiseGuards.BYPASS_WINDOW_MIN)
+                val bypassLimitU = SteepRiseGuards.bypassLimitU(episodePeakCommitU, ctx.deltaToTarget)
+                val bypassLimited = bgStijgtNogFors && commitNr > 1 && episodePeakAnchored &&
+                    bypassGivenRecentU >= bypassLimitU
+                if (bypassLimited) {
+                    status.append(
+                        "BYPASS-REM: ${"%.2f".format(bypassGivenRecentU)}U in ${SteepRiseGuards.BYPASS_WINDOW_MIN}m " +
+                            ">= grens ${"%.2f".format(bypassLimitU)}U (piekcommit ${"%.2f".format(episodePeakCommitU)}U) " +
+                            "-> geen ongeplafonneerde finalDose\n"
+                    )
+                }
+                val bgStijgtNogForsBypassOk = bgStijgtNogFors && !bypassLimited
+                val bgStijgtNogForsNaderendEff = if (bypassLimited) 0.0 else bgStijgtNogForsNaderend
                 val cappedFinalDose = if (commitNr <= 1) {
                     finalDose
                 } else if (!episodePeakAnchored) {
@@ -10300,9 +10412,9 @@ class FCLvNext(
                         )
                     }
                     finalDose.coerceAtMost(cap)
-                } else if (bgStijgtNogFors && bgStijgtNogForsBypassStrength >= 1.0) {
+                } else if (bgStijgtNogForsBypassOk && bgStijgtNogForsBypassStrength >= 1.0) {
                     finalDose
-                } else if (bgStijgtNogFors) {
+                } else if (bgStijgtNogForsBypassOk) {
                     finalDose.coerceAtMost(episodePeakCommitU * bgStijgtNogForsBypassStrength)
                 } else {
                     // 20/09/2026 (de gebruiker) -- decelTrendFactor ook hier meegenomen,
@@ -10310,11 +10422,11 @@ class FCLvNext(
                     // decelTrendFactor tot nu toe niet, dus kon cappedFinalDose ook in de
                     // ANCHORED episode de maxOf winnen van een allang afgebouwde commitDose.
                     val normaalGeplafonneerd = finalDose.coerceAtMost(episodePeakCommitU * lateDecayMul * decelTrendFactor)
-                    if (bgStijgtNogForsNaderend > 0.001) {
+                    if (bgStijgtNogForsNaderendEff > 0.001) {
                         val geblend = normaalGeplafonneerd +
-                            bgStijgtNogForsNaderend * (finalDose - normaalGeplafonneerd)
+                            bgStijgtNogForsNaderendEff * (finalDose - normaalGeplafonneerd)
                         status.append(
-                            "BGSTIJGT-NOG-FORS NADEREND ×${"%.2f".format(bgStijgtNogForsNaderend)}: " +
+                            "BGSTIJGT-NOG-FORS NADEREND ×${"%.2f".format(bgStijgtNogForsNaderendEff)}: " +
                                 "${"%.2f".format(normaalGeplafonneerd)}->${"%.2f".format(geblend)}U\n"
                         )
                         geblend
@@ -10388,10 +10500,48 @@ class FCLvNext(
                 val aigfCommitBoost = if (aigfEnabled && episodeAigfBPct < 100.0 - 1e-9)
                     (100.0 / episodeAigfBPct)
                 else 1.0
-                val committedDose = preAigfCommittedDose * aigfCommitBoost
+                val committedDoseBeforeCoverBrake = preAigfCommittedDose * aigfCommitBoost
                 if (aigfCommitBoost > 1.0 + 1e-9) {
                     status.append("AIGF-B COMMIT BOOST ×${"%.2f".format(aigfCommitBoost)} (aigf-b=${"%.1f".format(episodeAigfBPct)})\n")
                 }
+                // Commit-dekkingsrem: zie kdoc boven CoverIsf.commitBrake. Werkt op de uiteindelijke
+                // commit, dus ook als die uit finalDose komt i.p.v. uit de commit-formule.
+                val commitCoverBrake = run {
+                    if (committedDoseBeforeCoverBrake <= 0.0 ||
+                        ctx.input.currentIOB <= 0.0 ||
+                        ctx.input.effectiveISF <= 0.0
+                    ) return@run 1.0
+                    val coverRatio = CoverIsf.commitCoverRatio(
+                        ctx.input.currentIOB, ctx.input.effectiveISF,
+                        CoverIsf.factor(ctx.input.bgNow, ctx.input.targetBG),
+                        ctx.input.bgNow - ctx.input.targetBG
+                    )
+                    val brakeCurve = CoverIsf.commitBrake(coverRatio)
+                    // Proef (standaard uit, zie CoverTrial): aan het begin van een maaltijd een zachtere rem,
+                    // met de gemeten dekking. Nooit lager dan de rem van de curve; geen effect bij een
+                    // post-hypo-rem (de hypo-controles verderop gelden altijd).
+                    val brake = CoverTrial.brakeForCommit(
+                        context, now.millis, ctx.input.bgNow, ctx.input.targetBG, ctx.input.currentIOB,
+                        ctx.input.effectiveISF, ctx.recentSlope, committedDoseBeforeCoverBrake, brakeCurve,
+                        blocked = postHypoBrakeActive
+                    )
+                    if (brake > brakeCurve + 1e-9) {
+                        status.append(
+                            "DEKKINGSPROEF: rem ×${"%.2f".format(brakeCurve)}→×${"%.2f".format(brake)} " +
+                                "(sterkte ${"%.2f".format(CoverTrial.strength(context))}) " +
+                                "+${"%.2f".format(committedDoseBeforeCoverBrake * (brake - brakeCurve))}U\n"
+                        )
+                    }
+                    if (brake < 0.99) {
+                        status.append(
+                            "COMMIT-DEKKINGSREM: ×${"%.2f".format(brake)} " +
+                                "(IOB ${"%.2f".format(ctx.input.currentIOB)} dekt de BG ${"%.1f".format(coverRatio)}x) " +
+                                "${"%.2f".format(committedDoseBeforeCoverBrake)}→${"%.2f".format(committedDoseBeforeCoverBrake * brake)}U\n"
+                        )
+                    }
+                    brake
+                }
+                val committedDose = committedDoseBeforeCoverBrake * commitCoverBrake
                 logRow.commitDoseFinal = committedDose
                 // 10/09/2026 — zie kdoc bij lastKnownCommitDoseFinalU-declaratie:
                 // alleen HIER bijwerken (dus alleen als deze tak echt draait), zodat
@@ -10404,8 +10554,10 @@ class FCLvNext(
                 // taper-clamp niet meer vastzetten. Zolang de drempel niet gehaald
                 // is, blijft episodePeakCommitU op 0 (→ cappedFinalDose hierboven
                 // blijft ongeplafonneerd tot een écht grote commit gebeurt).
-                if (committedDose >= config.maxSMB * PEAK_ANCHOR_THRESHOLD_FRAC) {
-                    episodePeakCommitU = maxOf(episodePeakCommitU, committedDose)
+                // Het anker gebruikt de dosis VOOR de dekkingsrem: de rem is geen oordeel over de
+                // maaltijdgrootte, en later in de episode mogen de plafonds niet meezakken.
+                if (committedDoseBeforeCoverBrake >= config.maxSMB * PEAK_ANCHOR_THRESHOLD_FRAC) {
+                    episodePeakCommitU = maxOf(episodePeakCommitU, committedDoseBeforeCoverBrake)
                 }
 
 
@@ -10442,6 +10594,7 @@ class FCLvNext(
                     }
 
                     didCommitThisCycle = true
+                    commitIntendedThisCycle = committedDose
                     // Alleen tellen als early floor deze cyclus niet al telde
                     if (!earlyFiredThisCycle) episodeCommitCount++
                     // 14/08/2026: zie kdoc bij episodeAnyRealDeliveryDone
@@ -11021,11 +11174,16 @@ class FCLvNext(
         // corrigeren) krijgt hierdoor nog steeds tijdig weer volledige toegang
         // — dit wapen-pad maakt de rem alleen sneller/vaker AAN, nooit langer
         // dicht dan de bestaande vrijgave-logica al toestaat.
-        val recentlyLow =
-            ctx.input.bgHistory.sortedBy { it.first.millis }.takeLast(9).any { it.second <= 4.4 }
+        val bgSorted = ctx.input.bgHistory.sortedBy { it.first.millis }
+        val recentlyLow = bgSorted.takeLast(9).any { it.second <= POST_HYPO_RECENT_LOW_MMOL }
+        // v147: laagste BG van het laatste uur, voor de re-arm-stop en het eerder loslaten hieronder.
+        val lowestBgLastHour = bgSorted.takeLast(POST_HYPO_LOW_WINDOW_POINTS).minOfOrNull { it.second }
+            ?: ctx.input.bgNow
+        val riseFromLowestLastHour = (ctx.input.bgNow - lowestBgLastHour).coerceAtLeast(0.0)
         val hypoDebtArm =
             episodeHypoDebtU > 0.01 && ctx.iobRatio >= POST_HYPO_BRAKE_ARM_MIN_IOB_RATIO
-        val recentLowArm = recentlyLow
+        // v147: geen nieuwe aanslag door een lage BG als de BG daar al ver vandaan is gestegen.
+        val recentLowArm = recentlyLow && riseFromLowestLastHour < POST_HYPO_BRAKE_CATCHUP_RISE_AFTER_LOW
 
         // 06/10/2026 (de gebruiker): de rem mag niet meer aanslaan als de BG al ruim boven target zit
         // (zelfde grens als het loslaten, POST_HYPO_BRAKE_DISARM_ABOVE_TARGET). Zonder deze grens liet hij
@@ -11202,12 +11360,30 @@ class FCLvNext(
                 if (postHypoBrakeArmedByRecentLow)
                     lerp(POST_HYPO_BRAKE_CATCHUP_RISE_AFTER_LOW, POST_HYPO_BRAKE_CATCHUP_RISE_AFTER_LOW_CONFIDENT, genuineMealConfidence)
                 else POST_HYPO_BRAKE_CATCHUP_RISE
+            // v147: bewijs van een grote maaltijd. Snelle stijging EN ruim boven de laagste BG van het
+            // laatste uur. Beide moeten kloppen. In de log van 24 dagen (36 maaltijden met rem) greep dit
+            // bij 8 grote maaltijden in en bij 0 grote maaltijden met een lage BG erna. De rem blijft staan
+            // bij een kleine stijging, ook als de BG snel stijgt (bv. glucosetabletten).
+            val releaseEvidence = smooth01(
+                (ctx.recentSlope - POST_HYPO_RELEASE_SLOPE_START) /
+                    (POST_HYPO_RELEASE_SLOPE_FULL - POST_HYPO_RELEASE_SLOPE_START)
+            ) * smooth01(
+                (riseFromLowestLastHour - POST_HYPO_RELEASE_RISE_START) /
+                    (POST_HYPO_RELEASE_RISE_FULL - POST_HYPO_RELEASE_RISE_START)
+            ) * postHypoBrakeRampDamp
+            if (releaseEvidence > 0.01) {
+                status.append(
+                    "POST-HYPO BRAKE: maaltijd-bewijs=${"%.2f".format(releaseEvidence)} " +
+                        "(slope=${"%.1f".format(ctx.recentSlope)}, ${"%.1f".format(riseFromLowestLastHour)} mmol boven laagste van het uur)\n"
+                )
+            }
             if (slopeOk && bgFloorOk && riseSinceBrake > 0.001) {
                 val rampX = (riseSinceBrake / catchupRise).coerceIn(0.0, 1.0)
                 // v141: lineair i.p.v. kwadratisch (was rampX * rampX). 9/10: de rem liet pas los
                 // op de top (0,32 / 1,08 / 2,00 U van 3,5-4,4 U gewenst). Bewust NIET gemeten vanaf de
                 // laagste waarde: bij een rebound van 3,8 zou de rem dan al bij het aanslaan bijna vrij zijn.
-                val rampFrac = rampX * postHypoBrakeRampDamp
+                // v147: wel een tweede weg, via releaseEvidence hierboven (alleen bij snelle stijging).
+                val rampFrac = maxOf(rampX * postHypoBrakeRampDamp, releaseEvidence)
                 val cap = config.smallCorrectionMaxU +
                     (commandedDose - config.smallCorrectionMaxU).coerceAtLeast(0.0) * rampFrac
                 commandedDose = commandedDose.coerceAtMost(cap)
@@ -11227,7 +11403,10 @@ class FCLvNext(
                     )
                 }
             } else {
-                commandedDose = commandedDose.coerceAtMost(config.smallCorrectionMaxU)
+                // v147: ook als de gewone vrijgave dicht is, geeft maaltijd-bewijs een deel vrij.
+                val closedCap = config.smallCorrectionMaxU +
+                    (commandedDose - config.smallCorrectionMaxU).coerceAtLeast(0.0) * releaseEvidence
+                commandedDose = commandedDose.coerceAtMost(closedCap)
                 if (before > commandedDose) {
                     status.append(
                         "POST-HYPO BRAKE: ${"%.2f".format(before)}→${"%.2f".format(commandedDose)}U " +
@@ -11255,6 +11434,19 @@ class FCLvNext(
                 "POST-HYPO BRAKE: commit telt niet mee voor afbouw (geleverd ${"%.2f".format(commandedDose)} " +
                     "van ${"%.2f".format(doseBeforePostHypoBrake)} U), teller=$episodeCommitCount, " +
                     "budget -${"%.2f".format(budgetBack)} U\n"
+            )
+        } else if (didCommitThisCycle && !earlyFiredThisCycle && commitIntendedThisCycle > 0.0 &&
+            commandedDose < COMMIT_COUNT_MIN_DELIVERED_FRAC * commitIntendedThisCycle &&
+            episodeCommitCount > 1
+        ) {
+            // v147: dezelfde regel voor ALLE remmen, niet alleen de post-hypo rem. Een commit waarvan
+            // minder dan de helft echt wordt afgegeven telt niet mee voor de afbouw (lateDecayMul).
+            // De dosis hier is na alle remmen die vóór dit punt komen; remmen die later komen zijn
+            // niet meegeteld.
+            episodeCommitCount--
+            status.append(
+                "COMMIT telt niet mee voor afbouw (geleverd ${"%.2f".format(commandedDose)} " +
+                    "van ${"%.2f".format(commitIntendedThisCycle)} U), teller=$episodeCommitCount\n"
             )
         }
 
@@ -12018,6 +12210,34 @@ class FCLvNext(
             }
         }
 
+        // ── Tekort-minimum (v147, 19/10/2026) ──
+        // Als de BG ver boven target nog stijgt en het model nog duidelijk meer insuline wil dan er
+        // actief is (energyTotal - IOB), dan is de minimale dosis niet 0,15 U maar een deel van dat tekort.
+        // Alleen een ondergrens: een grotere gewone dosis blijft zoals hij is. Niet bij een rem, hypo,
+        // lockout of piek-onderdrukking. Erft de downtrend-gate en de absolute cap hieronder.
+        // 24 dagen log: +0,5 U per dag, piek 10,8 -> 10,0, minuten boven 10 van 45 naar 27.
+        if (mealSignal.state == MealState.CONFIRMED &&
+            !postHypoBrakeActive && !logRow.hypoActive && !postPeak.lockout &&
+            !suppressForPeak && postPeak.peakBrake.reason == "NONE" &&
+            ctx.input.bgNow >= ctx.input.targetBG + SHORTFALL_MIN_ABOVE_TARGET &&
+            ctx.input.bgNow <= SHORTFALL_MAX_BG &&
+            ctx.recentDelta5m >= SHORTFALL_MIN_DELTA5M &&
+            ctx.iobRatio <= SHORTFALL_MAX_IOB_RATIO
+        ) {
+            val shortfallU = (energyTotal - ctx.input.currentIOB).coerceAtLeast(0.0)
+            val shortfallDose = (SHORTFALL_DOSE_FRAC * shortfallU)
+                .coerceIn(SHORTFALL_DOSE_MIN_U, SHORTFALL_DOSE_MAX_U)
+            if (commandedDose < shortfallDose) {
+                val voorTekort = commandedDose
+                commandedDose = shortfallDose
+                status.append(
+                    "TEKORT-MINIMUM (v147): ${"%.2f".format(voorTekort)}→${"%.2f".format(commandedDose)}U " +
+                        "(energie ${"%.2f".format(energyTotal)} - IOB ${"%.2f".format(ctx.input.currentIOB)} = " +
+                        "${"%.2f".format(shortfallU)}U tekort)\n"
+                )
+            }
+        }
+
         // ─────────────────────────────────────────────
         // 🎯 PRESET EXTRA-INSULINE PORTIES (24/09/2026, de gebruiker; HERZIEN
         // 24/09/2026 ronde 3 — retry + erosie i.p.v. one-shot)
@@ -12049,7 +12269,8 @@ class FCLvNext(
         // als de IOB de BG al ruim dekt (OVR_CEIL_MIN_COVER). Geldt voor elke maaltijd. De
         // override-portie komt hieronder daarna en valt er bewust niet onder. Alleen verlagen.
         val ovrArmedAt = ovrCeilArmedAt
-        val ovrIobCover = ctx.input.currentIOB * ctx.input.effectiveISF /
+        val ovrIobCover = ctx.input.currentIOB * ctx.input.effectiveISF *
+            CoverIsf.factor(ctx.input.bgNow, ctx.input.targetBG) /
             maxOf(1.0, ctx.input.bgNow - ctx.input.targetBG)
         if (ovrArmedAt != null && commandedDose > 0.0 &&
             ctx.recentDelta5m > OVR_CEIL_MIN_DELTA5M &&
@@ -12342,12 +12563,16 @@ class FCLvNext(
         )
 
 
-        val shouldDeliver =
-            if (persistentOverrideActive) {
-                persistResult.fired && effectiveDeliveredNow >= minDeliveryU
-            } else {
-                effectiveDeliveredNow >= minDeliveryU
-            }
+        // v148: the persist cooldown only blocks the persist dose itself. A commit or an override portion
+        // that passed its own guards must be delivered. Before, `should_deliver` was false during a persist
+        // cooldown, so the dose was counted as given but never reached the pump (24/10/2026: 8.7 U).
+        val shouldDeliver = effectiveDeliveredNow >= minDeliveryU
+
+        // A persist fire that ended with no insulin (a later guard made it zero) must not start a cooldown.
+        if (persistResult.fired && !shouldDeliver) {
+            persistCtrl.cancelCooldown()
+            status.append("PERSIST: fire gave 0 U, cooldown cancelled\n")
+        }
 
         val rescueSignal = updateRescueDetection(
             ctx = ctx,

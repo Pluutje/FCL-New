@@ -136,7 +136,17 @@ fun AdvisorScreen(
             // ── 3. TDD: gemiddelden en voorzichtig advies (16/10/2026) ───
             // Staat op de plek van het oude ISF-tabblad (ISF-learner is verwijderd).
             add(InfoTabPage(s.tddLabel) {
-                TddKaart(androidx.compose.ui.platform.LocalContext.current)
+                val tddContext = androidx.compose.ui.platform.LocalContext.current
+                TddKaart(tddContext)
+            })
+
+            // ── 4. Dekking: gemeten werking van de IOB + proef (23/10/2026) ───
+            add(InfoTabPage("Dekking") {
+                val coverContext = androidx.compose.ui.platform.LocalContext.current
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    CoverTrialKaart(coverContext)
+                    CoverIsfKaart(coverContext)
+                }
             })
 
             // ── Expert: Parameters, Backup en Analyse tabs ───────────────

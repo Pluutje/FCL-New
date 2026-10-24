@@ -81,8 +81,34 @@ object FclTempOverrideSettings {
         val active: Boolean,
         val targetPct: Int,
         val effectiveMul: Double,
-        val remainingMinutes: Int
+        val remainingMinutes: Int,
+        /** v148: shift of the target in mmol/L right now (already faded out like the percentage). 0.0 when not active. */
+        val targetShiftMmol: Double = 0.0
     )
+
+    /**
+     * Combines the target shift of the step counter and the one of the override (v148). Alone, each
+     * counts fully. When both raise the target, the result is the highest one plus 1 mmol (never more
+     * than the sum). The step counter only ever raises the target; a lowering override is just added.
+     */
+    fun combineTargetShifts(activityShiftMmol: Double, overrideShiftMmol: Double): Double {
+        val a = activityShiftMmol
+        val b = overrideShiftMmol
+        return if (a > 0.0 && b > 0.0) minOf(a + b, maxOf(a, b) + COMBINED_SHIFT_EXTRA_MMOL) else a + b
+    }
+
+    /** Extra shift (mmol/L) on top of the highest one when the step counter and the override both raise the target. */
+    const val COMBINED_SHIFT_EXTRA_MMOL = 1.0
+    /** Range and step of the target shift of a preset (mmol/L). Negative = lower target (meal), positive = higher target (sport). */
+    const val MIN_TARGET_SHIFT_MMOL = -2.0
+    const val MAX_TARGET_SHIFT_MMOL = 3.0
+    const val TARGET_SHIFT_STEP_MMOL = 0.1
+    private const val KEY_TARGET_SHIFT = "active_target_shift_mmol"
+
+    private fun getTargetShiftMmol(context: Context): Double =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getFloat(KEY_TARGET_SHIFT, 0f).toDouble()
+            .coerceIn(MIN_TARGET_SHIFT_MMOL, MAX_TARGET_SHIFT_MMOL)
 
     fun getPercentage(context: Context): Int =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -139,6 +165,7 @@ object FclTempOverrideSettings {
             .remove(KEY_ACTIVE_EXTRA_IS_POSITIVE)
             .remove(KEY_LOW_COMMIT_STREAK_START_MS)
             .remove(KEY_PORTION_DELIVERY_LOG_JSON)
+            .remove(KEY_TARGET_SHIFT)
             .putBoolean(KEY_PAUSED, false)
             .remove(KEY_PAUSE_STARTED_MS)
             .apply()
@@ -191,7 +218,13 @@ object FclTempOverrideSettings {
         val mul = 1.0 + (targetFrac - 1.0) * eased
 
         val remainingMinutes = ((durationMs - elapsedMs) / 60_000L).toInt().coerceAtLeast(0)
-        return Status(active = true, targetPct = targetPct, effectiveMul = mul, remainingMinutes = remainingMinutes)
+        return Status(
+            active = true,
+            targetPct = targetPct,
+            effectiveMul = mul,
+            remainingMinutes = remainingMinutes,
+            targetShiftMmol = getTargetShiftMmol(context) * eased
+        )
     }
 
     /** Korte helper voor de FCLvNext.kt-hook: alleen de multiplier, 1.0 als de override niet actief is. */
@@ -333,7 +366,10 @@ object FclTempOverrideSettings {
     /** 27/09/2026 (de gebruiker — sterkte-balk op de BG-grafiek): logje van afleveringsmomenten, zie [PortionDelivery]. */
     private const val KEY_PORTION_DELIVERY_LOG_JSON = "portion_delivery_log_json"
 
-    const val PRESET_COUNT = 3
+    /** v148: the user can have 0 to MAX_PRESETS presets (before: 3 fixed slots that could not be removed). */
+    const val MAX_PRESETS = 5
+    private const val KEY_NEXT_PRESET_ID = "next_preset_id"
+    private const val KEY_PRESETS_LIST_MIGRATED = "presets_list_migrated_v148"
     const val MAX_PORTION_COUNT = 3
     /** Instelbereik extra insuline per portie: -5..+5 E, in stappen van 0,05 E (slider-stap). */
     const val MIN_EXTRA_INSULIN_U = -5.0
@@ -409,7 +445,9 @@ object FclTempOverrideSettings {
         /** Per portie: "altijd geven" (standaard uit), zie [OverridePortion.alwaysGive]. */
         val portionAlwaysGive: List<Boolean> = List(MAX_PORTION_COUNT) { false },
         /** Vrije tekstregel onder de preset-knop (extra uitleg voor de gebruiker). Mag leeg zijn. */
-        val note: String = ""
+        val note: String = "",
+        /** v148: shift of the target in mmol/L while the preset runs (fades out like the percentage). 0 = no shift. */
+        val targetShiftMmol: Double = 0.0
     ) {
         /** Som van de daadwerkelijk actieve (eerste [portionCount]) porties — voor UI-samenvatting en het teken (+/-). */
         val totalExtraInsulinU: Double get() = portionAmountsU.take(portionCount).sum()
@@ -418,10 +456,25 @@ object FclTempOverrideSettings {
     private fun defaultPreset(id: Int): OverridePreset =
         OverridePreset(id = id, name = "Preset ${id + 1}")
 
+    /** An empty preset for the "add" button. It is only stored when the user taps Save ([savePreset]). */
+    fun newPresetDraft(context: Context): OverridePreset {
+        val id = nextPresetId(context)
+        val number = getPresets(context).size + 1
+        return OverridePreset(id = id, name = "Preset $number")
+    }
+
+    /** An id that was used before is never used again, so old log lines and a running override stay clear. */
+    private fun nextPresetId(context: Context): Int {
+        val stored = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt(KEY_NEXT_PRESET_ID, 0)
+        val maxExisting = getPresets(context).maxOfOrNull { it.id }?.plus(1) ?: 0
+        return maxOf(stored, maxExisting)
+    }
+
     /** Niet-ingesteld = percentage/duur nog op standaard EN alle actieve porties nog op 0 E. Zo'n preset-knop is niet klikbaar. */
     fun isConfigured(preset: OverridePreset): Boolean =
         preset.percentage != DEFAULT_PCT ||
             preset.durationMinutes != DEFAULT_DURATION_MIN ||
+            preset.targetShiftMmol != 0.0 ||
             preset.portionAmountsU.take(preset.portionCount).any { it != 0.0 }
 
     private fun OverridePreset.toJson(): JSONObject = JSONObject().apply {
@@ -434,6 +487,7 @@ object FclTempOverrideSettings {
         put("portionDelaysMin", JSONArray(portionDelaysMin))
         put("portionAlwaysGive", JSONArray(portionAlwaysGive))
         put("note", note)
+        put("targetShiftMmol", targetShiftMmol)
     }
 
     private fun presetFromJson(obj: JSONObject, fallbackId: Int): OverridePreset {
@@ -461,39 +515,67 @@ object FclTempOverrideSettings {
             portionAlwaysGive = (0 until MAX_PORTION_COUNT).map { i ->
                 obj.optJSONArray("portionAlwaysGive")?.optBoolean(i, false) ?: false
             },
-            note = obj.optString("note", "")
+            note = obj.optString("note", ""),
+            targetShiftMmol = obj.optDouble("targetShiftMmol", 0.0)
+                .coerceIn(MIN_TARGET_SHIFT_MMOL, MAX_TARGET_SHIFT_MMOL)
         )
     }
 
     /**
-     * Alle 3 presets, in slot-volgorde (0,1,2). Een nog nooit opgeslagen slot
-     * krijgt een neutrale default ("Preset N", 100%, alle porties 0 E) — zo
-     * hoeft de UI nergens een null-geval te behandelen.
+     * Alle bestaande presets (0 tot [MAX_PRESETS]), in de volgorde waarin ze zijn opgeslagen.
      */
     fun getPresets(context: Context): List<OverridePreset> {
-        val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(KEY_PRESETS_JSON, null) ?: return (0 until PRESET_COUNT).map { defaultPreset(it) }
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val raw = prefs.getString(KEY_PRESETS_JSON, null) ?: return emptyList()
         val stored = try {
             val arr = JSONArray(raw)
-            (0 until arr.length()).associate { i ->
-                val obj = arr.getJSONObject(i)
-                val id = obj.optInt("id", i)
-                id to presetFromJson(obj, i)
-            }
+            (0 until arr.length()).map { i -> presetFromJson(arr.getJSONObject(i), i) }
         } catch (e: Exception) {
-            emptyMap()
+            emptyList()
         }
-        return (0 until PRESET_COUNT).map { id -> stored[id] ?: defaultPreset(id) }
+        if (prefs.getBoolean(KEY_PRESETS_LIST_MIGRATED, false)) return stored
+
+        // One-time clean-up (v148): the old version always kept 3 slots. Slots the user never set up
+        // (default name, nothing configured) are removed. Used ids are never given out again.
+        val kept = stored.filter { isConfigured(it) || it.name != defaultPreset(it.id).name }
+        prefs.edit()
+            .putString(KEY_PRESETS_JSON, JSONArray().also { arr -> kept.forEach { arr.put(it.toJson()) } }.toString())
+            .putInt(KEY_NEXT_PRESET_ID, maxOf(prefs.getInt(KEY_NEXT_PRESET_ID, 0), (stored.maxOfOrNull { it.id } ?: -1) + 1))
+            .putBoolean(KEY_PRESETS_LIST_MIGRATED, true)
+            .apply()
+        return kept
     }
 
-    /** Slaat één preset op (overschrijft het slot met hetzelfde id), laat de andere 2 ongemoeid. */
+    /**
+     * Saves one preset: replaces the preset with the same id, or adds it as a new one (at most
+     * [MAX_PRESETS]). The other presets are not changed.
+     */
     fun savePreset(context: Context, preset: OverridePreset) {
-        val updated = getPresets(context).map { if (it.id == preset.id) preset else it }
+        val current = getPresets(context)
+        val updated = when {
+            current.any { it.id == preset.id } -> current.map { if (it.id == preset.id) preset else it }
+            current.size < MAX_PRESETS -> current + preset
+            else -> current
+        }
+        writePresets(context, updated, nextId = maxOf(nextPresetId(context), preset.id + 1))
+    }
+
+    /**
+     * Removes a preset. A running override that was started from it is NOT stopped: it keeps its own
+     * percentage and portions, only its name is no longer known.
+     */
+    fun deletePreset(context: Context, presetId: Int) {
+        writePresets(context, getPresets(context).filter { it.id != presetId }, nextId = nextPresetId(context))
+    }
+
+    private fun writePresets(context: Context, presets: List<OverridePreset>, nextId: Int) {
         val arr = JSONArray()
-        updated.forEach { arr.put(it.toJson()) }
+        presets.forEach { arr.put(it.toJson()) }
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
             .putString(KEY_PRESETS_JSON, arr.toString())
+            .putInt(KEY_NEXT_PRESET_ID, nextId)
+            .putBoolean(KEY_PRESETS_LIST_MIGRATED, true)
             .apply()
     }
 
@@ -508,6 +590,7 @@ object FclTempOverrideSettings {
         start(context, preset.percentage, preset.durationMinutes)
 
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        prefs.edit().putFloat(KEY_TARGET_SHIFT, preset.targetShiftMmol.toFloat()).apply()
         val portions = (0 until preset.portionCount)
             .map { i ->
                 OverridePortion(

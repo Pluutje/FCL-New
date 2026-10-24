@@ -38,6 +38,7 @@ import kotlin.math.roundToInt
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.plugins.aps.openAPSFCL.vnext.FCLvNextDayNightHelper
 import app.aaps.plugins.aps.openAPSFCL.vnext.FclNachtOvergangSettings
+import app.aaps.plugins.aps.openAPSFCL.vnext.FclTempOverrideSettings
 import app.aaps.plugins.aps.openAPSFCL.vnext.FclWakeDetector
 import app.aaps.plugins.aps.openAPSFCL.vnext.FCLvNext
 import app.aaps.plugins.aps.openAPSFCL.vnext.FCLvNextInput
@@ -482,7 +483,13 @@ class DetermineBasalFCL @Inject constructor(
         sensMgdl /= (activity.insulinPercentage / 100.0)
 
         // target correctie (mmol → mg/dL)
-        targetMgdl += activity.targetAdjust * 18.0
+        // v148: the Tijdelijke aanpassing (override) can shift the target too (fades out like its percentage).
+        // Both together: the highest shift + 1 mmol at most, see combineTargetShifts. The total stays inside
+        // the AAPS limits for a temp target (72 to 200 mg/dL). No AAPS temp target is made.
+        val overrideTargetShiftMmol = FclTempOverrideSettings.status(context, currentTime).targetShiftMmol
+        val combinedTargetShiftMmol =
+            FclTempOverrideSettings.combineTargetShifts(activity.targetAdjust, overrideTargetShiftMmol)
+        targetMgdl = (targetMgdl + combinedTargetShiftMmol * 18.0).coerceIn(72.0, 200.0)
 
         // ─────────────────────────────────────────────
         // 🍽️⏰ MAALTIJD-TIJD-ANTICIPATIE — VERWIJDERD (29/07/2026)
@@ -529,6 +536,9 @@ class DetermineBasalFCL @Inject constructor(
             .onCycle(context, cycleLogRepository,
                      app.aaps.plugins.aps.openAPSFCL.vnext.logging.FCLvNextProfileParameterSnapshot.collectForHistory(preferences),
                      profile.sens / 18.0)
+        // Gemeten IOB-dekkingsfactor per BG-klasse (alleen meten en tonen, past de curve niet aan).
+        app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.CoverIsfHistory
+            .onCycle(context, cycleLogRepository)
 
         // Geleidelijke nacht-overgang (17/07/2026) — zie kdoc bij
         // FCLvNextDayNightHelper.minutesSinceNightStart() en

@@ -54,7 +54,28 @@ interface FCLCycleLogDao {
             "ORDER BY timestampMs ASC"
     )
     suspend fun getDoseRows(fromMs: Long, toMs: Long): List<CycleDoseRow>
+
+    // Slim rows for the measured IOB cover factor (analyzer/CoverIsfHistory).
+    @Query(
+        "SELECT timestampMs, bg, target, iob, effectiveISF, recentSlope, deliveredTotal, commitDoseFinal, codeVersion " +
+            "FROM fcl_cycle_log WHERE timestampMs >= :fromMs AND timestampMs < :toMs " +
+            "ORDER BY timestampMs ASC"
+    )
+    suspend fun getCoverRows(fromMs: Long, toMs: Long): List<CycleCoverRow>
 }
+
+/** Columns of [FCLCycleLogEntity] used to measure the IOB cover factor. Names match the columns. */
+data class CycleCoverRow(
+    val timestampMs: Long,
+    val bg: Double,
+    val target: Double,
+    val iob: Double,
+    val effectiveISF: Double,
+    val recentSlope: Double,
+    val deliveredTotal: Double,
+    val commitDoseFinal: Double,
+    val codeVersion: String
+)
 
 /** Columns of [FCLCycleLogEntity] used for the daily dose summary. Names match the columns. */
 data class CycleDoseRow(

@@ -191,7 +191,7 @@
     <string name="fcl_tdd_advice_down_worse" comment="%1$.0f=TDD percent lower, %2$.0f=TIR percent points lower">De TDD is %1$.0f%% lager en de TIR is %2$.0f punten lager. Controleer eerst of insuline-data ontbreekt (bijvoorbeeld na een pompwissel) en of de dosering niet te voorzichtig is.</string>
     <string name="fcl_tdd_changes_title">Effect van instellingswijzigingen</string>
     <string name="fcl_tdd_changes_none" comment="%1$d=number of days. Example: 85">Geen wijziging van een doseerinstelling in de laatste %1$d dagen.</string>
-    <string name="fcl_tdd_change_head" comment="%1$s=date, %2$s=setting name, %3$s=old value, %4$s=new value. Example: 12/10: Sterkte 100% → 110%">%1$s: %2$s %3$s → %4$s</string>
+    <string name="fcl_tdd_change_head" comment="%1$s=first day with the new value, %2$s=setting name, %3$s=old value, %4$s=new value. Example: From 12/10: Sterkte 100% → 110%">Vanaf %1$s: %2$s %3$s → %4$s</string>
     <string name="fcl_tdd_change_no_before">Te weinig dagen met data vóór de wijziging.</string>
     <string name="fcl_tdd_change_too_short" comment="%1$d=number of days. Example: 4">Nog te kort: er zijn minder dan %1$d dagen met data na de wijziging.</string>
     <string name="fcl_tdd_change_before">Ervoor</string>
@@ -201,10 +201,63 @@
     <string name="fcl_tdd_param_sterkte">Sterkte</string>
     <string name="fcl_tdd_param_timing">Timing</string>
     <string name="fcl_tdd_param_volhoudendheid">Volhoudendheid</string>
-    <string name="fcl_tdd_param_nacht">Nachtfactor</string>
     <string name="fcl_tdd_param_aaps_multiplier">AAPS-multiplier</string>
     <string name="fcl_tdd_param_distribution">Doseerverdeling</string>
     <string name="fcl_tdd_param_night_style">Nachtreactie</string>
     <string name="fcl_tdd_hint_only">Dit is alleen een hint. Er wordt niets automatisch aangepast.</string>
+
+    <string name="fcl_cover_title">Gemeten werking van de IOB</string>
+    <string name="fcl_cover_summary" comment="%1$d=measured percent, %2$d=curve percent. Example: 14 and 55">In de praktijk dekt de IOB nu ongeveer %1$d%% van wat de ISF van het profiel zegt, bij een BG van 3 mmol of meer boven target. De vaste curve van het algoritme gaat uit van ongeveer %2$d%%.</string>
+    <string name="fcl_cover_summary_why">Dat verschil is normaal. De gemeten waarde is netto: hij bevat ook de koolhydraten die nog worden opgenomen en wat het algoritme zelf deed. Daarom kan hij niet zomaar als dekking worden gebruikt. De dosering gebruikt nog steeds de vaste curve.</string>
+    <string name="fcl_cover_intro" comment="%1$d=number of days. Example: 28">Gemeten: hoeveel de BG na 3 uur is gedaald, vergeleken met wat de ISF zegt (1,00 = precies zoals de ISF). Alleen als de IOB 1,5 E of meer is en de BG boven target. Tussen haakjes het aantal metingen. Laatste %1$d dagen.</string>
+    <string name="fcl_cover_col_class">BG boven target</string>
+    <string name="fcl_cover_col_flat">Vlak/dalend</string>
+    <string name="fcl_cover_col_rising">Stijgend</string>
+    <string name="fcl_cover_col_curve">Curve</string>
+    <string name="fcl_cover_cell" comment="%1$.2f=measured factor, %2$d=number of measurements. Example: 0.15 (89)">%1$.2f (%2$d)</string>
+    <string name="fcl_cover_class_range" comment="%1$.1f=lower edge, %2$.1f=upper edge, both in mmol/L above target. Example: 1.5 – 3.0 mmol">%1$.1f – %2$.1f mmol</string>
+    <string name="fcl_cover_class_open" comment="%1$.1f=lower edge in mmol/L above target. Example: 7.0+ mmol">%1$.1f+ mmol</string>
+    <string name="fcl_cover_factor" comment="%1$.2f=factor. Example: 0.67">%1$.2f</string>
+    <string name="fcl_cover_no_data">Nog te weinig metingen. De metingen worden vanaf nu bewaard.</string>
+    <string name="fcl_cover_shadow_title">Wat als de gemeten waarde gebruikt was?</string>
+    <string name="fcl_cover_shadow_intro" comment="%1$.2f=lowest factor used. Example: 0.40">Alleen een berekening, er wordt niets mee gedoseerd. De dekkingsrem op de commit zou dan de gemeten waarde gebruiken, maar niet lager dan %1$.2f en niet hoger dan de curve. Per commit wordt gekeken naar de BG in de 3 uur erna, na de dosis die echt is gegeven.</string>
+    <string name="fcl_cover_shadow_none" comment="%1$d=number of days. Example: 7">Nog geen commits met dekkingsrem in de laatste %1$d dagen.</string>
+    <string name="fcl_cover_shadow_total" comment="%1$d=days, %2$d=commits that would be bigger, %3$d=all commits, %4$.1f=extra units, %5$.1f=extra units per day">Laatste %1$d dagen: %2$d van %3$d commits zouden groter zijn geweest, samen %4$.1f E extra (%5$.1f E per dag).</string>
+    <string name="fcl_cover_shadow_high" comment="%1$d=number of commits">Bij %1$d daarvan werd de BG daarna 11 of hoger. De extra insuline had dat waarschijnlijk lager gehouden.</string>
+    <string name="fcl_cover_shadow_low" comment="%1$d=number of commits">Bij %1$d daarvan was de BG daarna al laag. De extra insuline had die waarschijnlijk onder 4,0 gebracht.</string>
+    <string name="fcl_cover_shadow_zero">De dekkingsrem had in deze periode geen verschil gemaakt.</string>
+    <string name="fcl_cover_shadow_note">Een schatting. Ze gaat uit van een deel van de werking van de ISF binnen 3 uur. Pas na meer weken data is er een betrouwbaar beeld.</string>
+    <string name="fcl_cover_trend_title">Verloop per week</string>
+    <string name="fcl_cover_trend_intro" comment="%1$.1f=lowest BG class edge in mmol/L above target. Example: 3.0">Gemiddelde van de metingen per week, alleen voor een BG van %1$.1f mmol of meer boven target. Zo zie je of de waarde stabiel blijft. Tussen haakjes het aantal metingen. Het einde van elke week staat links.</string>
+    <string name="fcl_trial_title">Proef: gemeten dekking bij het begin van een maaltijd</string>
+    <string name="fcl_trial_state_on">Aan</string>
+    <string name="fcl_trial_state_off">Uit. De dosering verandert niet.</string>
+    <string name="fcl_trial_intro">Aan het begin van een maaltijd (snelle stijging, BG niet ver boven target) geeft de dekkingsrem een deel van de commit terug, volgens de gemeten dekking. De sterkte begint klein en gaat omhoog als er geen lage BG volgt. Na een lage BG halveert de sterkte direct.</string>
+    <string name="fcl_trial_strength" comment="%1$d=strength percent, %2$d=maximum percent. Example: 25 and 75">Sterkte nu: %1$d%% (maximum %2$d%%)</string>
+    <string name="fcl_trial_progress" comment="%1$d=clean commits so far, %2$d=commits needed. Example: 4 and 10">%1$d van %2$d commits zonder lage BG voor de volgende stap omhoog</string>
+    <string name="fcl_trial_hold" comment="%1$s=date. Example: 30 okt">Geen verhoging tot %1$s (na een lage BG).</string>
+    <string name="fcl_trial_last_low" comment="%1$s=date, %2$.1f=lowest BG, %3$d=new strength percent">Laatste wijziging op %1$s: BG %2$.1f na een commit, sterkte gehalveerd naar %3$d%%.</string>
+    <string name="fcl_trial_last_up" comment="%1$s=date, %2$d=new strength percent">Laatste wijziging op %1$s: sterkte omhoog naar %2$d%%.</string>
+    <string name="fcl_trial_results_title" comment="%1$d=days. Example: 7">Resultaat laatste %1$d dagen</string>
+    <string name="fcl_trial_results_none">Nog geen commits die door de proef groter zijn gemaakt.</string>
+    <string name="fcl_trial_results" comment="%1$d=commits, %2$.1f=extra units, %3$d=judged commits">%1$d commits kregen samen %2$.1f E extra. Daarvan zijn %3$d beoordeeld (3 uur erna).</string>
+    <string name="fcl_trial_results_lows" comment="%1$d=lows, %2$d=highs">Daarna een BG onder 3,9: %1$d. Daarna een BG van 11 of hoger: %2$d.</string>
+    <string name="fcl_trial_settings_title">Instellingen</string>
+    <string name="fcl_trial_set_start">Startsterkte</string>
+    <string name="fcl_trial_set_step">Stap omhoog</string>
+    <string name="fcl_trial_set_max">Maximale sterkte</string>
+    <string name="fcl_trial_set_batch">Commits zonder lage BG per stap</string>
+    <string name="fcl_trial_set_hold">Geen verhoging na een lage BG</string>
+    <string name="fcl_trial_set_low">Grens lage BG</string>
+    <string name="fcl_trial_set_cap_commit">Maximaal extra per commit</string>
+    <string name="fcl_trial_set_cap_day">Maximaal extra per dag</string>
+    <string name="fcl_trial_set_slope">Alleen bij een stijging van minstens</string>
+    <string name="fcl_trial_set_above">Alleen tot zoveel boven target</string>
+    <string name="fcl_trial_settings_note">Deze waarden staan nu vast. In een volgende versie kunnen ze hier met schuiven worden aangepast.</string>
+    <string name="fcl_trial_pct" comment="%1$d=percent. Example: 25%">%1$d%%</string>
+    <string name="fcl_trial_days" comment="%1$d=days. Example: 7 dagen">%1$d dagen</string>
+    <string name="fcl_trial_mmol" comment="%1$.1f=mmol/L. Example: 3.9 mmol">%1$.1f mmol</string>
+    <string name="fcl_trial_units" comment="%1$.1f=units. Example: 0.5 E">%1$.1f E</string>
+    <string name="fcl_trial_slope" comment="%1$.1f=mmol/L per hour. Example: 4.0 mmol/u">%1$.1f mmol/u</string>
 
 </resources>

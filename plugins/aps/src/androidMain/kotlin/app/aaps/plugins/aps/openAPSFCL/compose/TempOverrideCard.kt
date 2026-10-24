@@ -16,11 +16,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -36,6 +39,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderColors
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -47,6 +51,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import app.aaps.plugins.aps.openAPSFCL.vnext.BgUnits
 import app.aaps.plugins.aps.openAPSFCL.vnext.FclTempOverrideSettings
 import app.aaps.plugins.aps.openAPSFCL.vnext.FclTempOverrideSettings.OverridePreset
 import kotlinx.coroutines.delay
@@ -184,9 +189,32 @@ fun TempOverrideCard(
 
                     var presets by remember { mutableStateOf(FclTempOverrideSettings.getPresets(ctx)) }
                     var editingPresetId by remember { mutableStateOf<Int?>(null) }
+                    // A new preset is only kept in memory until the user taps Save.
+                    var pendingNewPreset by remember { mutableStateOf<OverridePreset?>(null) }
+                    var presetToDelete by remember { mutableStateOf<OverridePreset?>(null) }
+                    val shownPresets = presets + listOfNotNull(pendingNewPreset)
+
+                    presetToDelete?.let { toDelete ->
+                        AlertDialog(
+                            onDismissRequest = { presetToDelete = null },
+                            title = { Text("Preset wissen?") },
+                            text = { Text("Weet je zeker dat je '${toDelete.name}' wilt wissen? Dit kan niet ongedaan worden gemaakt.") },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    FclTempOverrideSettings.deletePreset(ctx, toDelete.id)
+                                    presets = FclTempOverrideSettings.getPresets(ctx)
+                                    editingPresetId = null
+                                    presetToDelete = null
+                                }) { Text("Wissen") }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { presetToDelete = null }) { Text("Annuleren") }
+                            }
+                        )
+                    }
 
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        presets.forEach { preset ->
+                        shownPresets.forEach { preset ->
                             PresetRow(
                                 preset = preset,
                                 isEditing = editingPresetId == preset.id,
@@ -197,15 +225,37 @@ fun TempOverrideCard(
                                     tempOverrideDurationMin = FclTempOverrideSettings.getDurationMinutes(ctx)
                                 },
                                 onEditToggle = {
+                                    if (editingPresetId == preset.id && pendingNewPreset?.id == preset.id) pendingNewPreset = null
                                     editingPresetId = if (editingPresetId == preset.id) null else preset.id
                                 },
                                 onSave = { updated ->
                                     FclTempOverrideSettings.savePreset(ctx, updated)
                                     presets = FclTempOverrideSettings.getPresets(ctx)
+                                    pendingNewPreset = null
                                     editingPresetId = null
                                 },
-                                onCancelEdit = { editingPresetId = null }
+                                onCancelEdit = {
+                                    if (pendingNewPreset?.id == preset.id) pendingNewPreset = null
+                                    editingPresetId = null
+                                },
+                                // A preset that is not saved yet has nothing to delete.
+                                onDelete = if (preset.id == pendingNewPreset?.id) null else ({ presetToDelete = preset })
                             )
+                        }
+
+                        if (shownPresets.size < FclTempOverrideSettings.MAX_PRESETS) {
+                            OutlinedButton(
+                                onClick = {
+                                    val draft = FclTempOverrideSettings.newPresetDraft(ctx)
+                                    pendingNewPreset = draft
+                                    editingPresetId = draft.id
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Preset toevoegen")
+                            }
                         }
                     }
 
@@ -412,6 +462,14 @@ private fun PresetInfoTable(preset: OverridePreset, modifier: Modifier = Modifie
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        if (preset.targetShiftMmol != 0.0) {
+            val isMgdl = BgUnits.isMgdl(LocalContext.current)
+            Text(
+                "Doel ${BgUnits.formatDelta(preset.targetShiftMmol, isMgdl, decimals = 1)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
         val activePortions = (0 until preset.portionCount).mapNotNull { i ->
             val amount = preset.portionAmountsU.getOrElse(i) { 0.0 }
             if (amount == 0.0) null else Triple(i + 1, amount, preset.portionDelaysMin.getOrElse(i) { 0 })
@@ -450,6 +508,7 @@ private fun PresetRow(
     onEditToggle: () -> Unit,
     onSave: (OverridePreset) -> Unit,
     onCancelEdit: () -> Unit,
+    onDelete: (() -> Unit)?,
     modifier: Modifier = Modifier
 ) {
     val configured = FclTempOverrideSettings.isConfigured(preset)
@@ -509,7 +568,8 @@ private fun PresetRow(
             PresetEditor(
                 preset = preset,
                 onSave = onSave,
-                onCancel = onCancelEdit
+                onCancel = onCancelEdit,
+                onDelete = onDelete
             )
         }
     }
@@ -528,6 +588,7 @@ private fun PresetEditor(
     preset: OverridePreset,
     onSave: (OverridePreset) -> Unit,
     onCancel: () -> Unit,
+    onDelete: (() -> Unit)?,
     modifier: Modifier = Modifier
 ) {
     var name by remember(preset.id) { mutableStateOf(preset.name) }
@@ -542,6 +603,8 @@ private fun PresetEditor(
     }
 
     var note by remember(preset.id) { mutableStateOf(preset.note) }
+    var targetShift by remember(preset.id) { mutableStateOf(preset.targetShiftMmol) }
+    val isMgdl = BgUnits.isMgdl(LocalContext.current)
     var portionAlways by remember(preset.id) {
         mutableStateOf((0 until FclTempOverrideSettings.MAX_PORTION_COUNT).map { i -> preset.portionAlwaysGive.getOrElse(i) { false } })
     }
@@ -592,6 +655,27 @@ private fun PresetEditor(
             },
             valueRange = FclTempOverrideSettings.MIN_DURATION_MIN.toFloat()..FclTempOverrideSettings.MAX_DURATION_MIN.toFloat(),
             step = 30f
+        )
+
+        Text(
+            "Doel verschuiven: ${BgUnits.formatDelta(targetShift, isMgdl, decimals = 1)}",
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Medium
+        )
+        StepperSlider(
+            value = targetShift.toFloat(),
+            onValueChange = { v ->
+                targetShift = (round(v * 10f) / 10f).toDouble()
+                    .coerceIn(FclTempOverrideSettings.MIN_TARGET_SHIFT_MMOL, FclTempOverrideSettings.MAX_TARGET_SHIFT_MMOL)
+            },
+            valueRange = FclTempOverrideSettings.MIN_TARGET_SHIFT_MMOL.toFloat()..FclTempOverrideSettings.MAX_TARGET_SHIFT_MMOL.toFloat(),
+            step = FclTempOverrideSettings.TARGET_SHIFT_STEP_MMOL.toFloat()
+        )
+        Text(
+            "Hoger doel = voorzichtiger (bijv. sport), lager doel = minder geremd (bijv. maaltijd). " +
+                "Loopt aan het eind vanzelf terug naar normaal.",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
         Text("Aantal porties", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
@@ -676,7 +760,8 @@ private fun PresetEditor(
                             portionAmountsU = portionAmounts,
                             portionDelaysMin = portionDelays,
                             portionAlwaysGive = portionAlways,
-                            note = note.trim()
+                            note = note.trim(),
+                            targetShiftMmol = targetShift
                         )
                     )
                 },
@@ -688,6 +773,17 @@ private fun PresetEditor(
             }
             OutlinedButton(onClick = onCancel, modifier = Modifier.weight(1f)) {
                 Text("Annuleren")
+            }
+        }
+        if (onDelete != null) {
+            OutlinedButton(
+                onClick = onDelete,
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Preset wissen")
             }
         }
     }

@@ -1,12 +1,16 @@
 package app.aaps.plugins.aps.openAPSFCL.vnext.database
 
 import android.content.Context
+import app.aaps.plugins.aps.openAPSFCL.vnext.CoverIsf
+import app.aaps.plugins.aps.openAPSFCL.vnext.CoverTrial
 import app.aaps.plugins.aps.openAPSFCL.vnext.FclActiveConfigBridge
+import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.CoverIsfHistory
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.DFLearner
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.EpisodeDetector
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.EpisodeMetricsBuilder
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.FrontloadLearner
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.FclLearnerBackup
+import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.GvpCalculator
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.toLogRow
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.PostHypoBrakeLogEntity
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.ExplosiveRiseLogEntity
@@ -18,6 +22,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.io.File
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import dev.zacsweers.metro.AppScope
@@ -54,6 +59,10 @@ class FCLCycleLogRepository @Inject constructor(
     /** Slim rows in [fromMs, toMs) for the daily dose summary. */
     suspend fun doseRows(fromMs: Long, toMs: Long): List<CycleDoseRow> =
         dao.getDoseRows(fromMs, toMs)
+
+    /** Slim rows in [fromMs, toMs) to measure the IOB cover factor. */
+    suspend fun coverRows(fromMs: Long, toMs: Long): List<CycleCoverRow> =
+        dao.getCoverRows(fromMs, toMs)
 
     fun insert(entity: FCLCycleLogEntity) {
         scope.launch {
@@ -777,6 +786,15 @@ class FCLCycleLogRepository @Inject constructor(
         val fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'").withZone(ZoneOffset.UTC)
         val fmtLocal = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(java.time.ZoneId.of("Europe/Amsterdam"))
 
+        // Gemeten dekkingswaarden voor de schaduwkolommen (een keer per export lezen).
+        val shadowTable = try {
+            CoverIsfHistory.shadowTable(CoverIsfHistory.load(context), LocalDate.now(GvpCalculator.zone))
+        } catch (_: Exception) {
+            CoverIsfHistory.emptyShadowTable()
+        }
+
+        val trialEvents = try { CoverTrial.loadEvents(context) } catch (_: Exception) { emptyList() }
+
         file.bufferedWriter().use { writer ->
             writer.write(csvHeader(sep))
             writer.newLine()
@@ -803,7 +821,8 @@ class FCLCycleLogRepository @Inject constructor(
                         vroegeStijging?.curveConfirmtOmslag ?: false,
                         persist?.active ?: false, persist?.fired ?: false,
                         persist?.persistentCounter ?: 0, persist?.doseU ?: 0.0,
-                        persist?.escalationFactor ?: 1.0, persist?.reason ?: ""
+                        persist?.escalationFactor ?: 1.0, persist?.reason ?: "",
+                        shadowTable, trialEvents
                     )
                 )
                 writer.newLine()
@@ -908,7 +927,13 @@ private fun csvHeader(sep: String): String = listOf(
     "reentry_active", "recent_sensor_noise", "accel_declining_from_rise_peak", "curve_confirmt_omslag",
     // ── PERSISTENT CORRECTION DIAGNOSTIEK (21/09/2026) ──
     "persist_active", "persist_fired", "persist_counter", "persist_dose_u", "persist_escalation",
-    "persist_reason"
+    "persist_reason",
+    // ── IOB-DEKKING (19/10/2026) — afgeleid uit bg/target/iob/effective_isf, zie CoverIsf ──
+    "cover_isf_factor", "iob_cover_static", "iob_cover_dyn", "iob_cover_mmol",
+    // ── SCHADUW (23/10/2026) — "wat als de gemeten dekkingswaarde was gebruikt", alleen bij een commit ──
+    "shadow_cover_factor", "shadow_commit_brake_now", "shadow_commit_brake", "shadow_extra_u",
+    // ── PROEF (23/10/2026) — extra insuline van de dekkingsproef (CoverTrial) in deze cyclus ──
+    "cover_trial_s", "cover_trial_extra_u"
 ).joinToString(sep)
 
 // ── CSV regel — delta_target afgeleid als bg - target ────────────────────
@@ -942,11 +967,20 @@ private fun FCLCycleLogEntity.toCsvLine(
     persistCounter: Int,
     persistDoseU: Double,
     persistEscalation: Double,
-    persistReason: String
+    persistReason: String,
+    shadowTable: Array<DoubleArray>,
+    trialEvents: List<CoverTrial.Event>
 ): String {
+    val trialEvent = CoverTrial.nearest(trialEvents, timestampMs, 150_000L)
     val ts = fmt.format(Instant.ofEpochMilli(timestampMs))
     val tsLocal = fmtLocal.format(Instant.ofEpochMilli(timestampMs))
     val deltaTarget = glucoseIob.bg - glucoseIob.target
+    val coverFactor = CoverIsf.factor(glucoseIob.bg, glucoseIob.target)
+    val coverStatic = glucoseIob.iob * model.effectiveISF / (glucoseIob.bg - glucoseIob.target).coerceAtLeast(0.5)
+    val shadow = CoverIsfHistory.shadowForRow(
+        glucoseIob.bg, glucoseIob.target, glucoseIob.iob, model.effectiveISF, trends.recentSlope,
+        forensic.commitDoseFinal, context.codeVersion, shadowTable
+    )
 
     fun d2(v: Double) = "%.2f".format(v)
     fun d3(v: Double) = "%.3f".format(v)
@@ -1047,6 +1081,17 @@ private fun FCLCycleLogEntity.toCsvLine(
         bool(curveConfirmtOmslag),
         // ── PERSISTENT CORRECTION DIAGNOSTIEK (21/09/2026) ──
         bool(persistActive), bool(persistFired), persistCounter, d2(persistDoseU),
-        d2(persistEscalation), persistReason.replace(";", ",")
+        d2(persistEscalation), persistReason.replace(";", ","),
+        // ── IOB-DEKKING (19/10/2026) ──
+        // Afgeleid bij het exporteren, dus geen extra kolommen in de database. De factor komt uit de curve
+        // van de versie die de CSV maakt; de ruwe bg/target/iob/effective_isf staan er ook in.
+        d3(coverFactor), d2(coverStatic), d2(coverStatic * coverFactor), d2(glucoseIob.iob * model.effectiveISF * coverFactor),
+        // ── SCHADUW (23/10/2026) ──
+        // Alleen een berekening, de dosering gebruikt dit niet. Zie CoverIsfHistory.shadowForRow. Leeg stuk
+        // (factor 0, rem 1,000, extra 0,00) als er geen commit was of de versie nog geen dekkingsrem had.
+        d3(shadow?.factor ?: 0.0), d3(shadow?.brakeNow ?: 1.0), d3(shadow?.brakeShadow ?: 1.0), d2(shadow?.extraU ?: 0.0),
+        // ── PROEF (23/10/2026) ── 0 / 0,00 als de proef deze cyclus niets toevoegde. Bij een proef-cyclus is
+        // commit_dose_final al inclusief de extra dosis, dus de shadow-kolommen daarvan niet meetellen.
+        d2(trialEvent?.strength ?: 0.0), d2(trialEvent?.extraU ?: 0.0)
     ).joinToString(sep)
 }

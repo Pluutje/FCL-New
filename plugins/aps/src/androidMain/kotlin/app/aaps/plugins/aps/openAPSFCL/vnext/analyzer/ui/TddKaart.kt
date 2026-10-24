@@ -380,7 +380,6 @@ private fun paramName(kind: ParamKind): String = stringResource(
         ParamKind.STERKTE -> R.string.fcl_tdd_param_sterkte
         ParamKind.TIMING -> R.string.fcl_tdd_param_timing
         ParamKind.VOLHOUDENDHEID -> R.string.fcl_tdd_param_volhoudendheid
-        ParamKind.NACHT_FACTOR -> R.string.fcl_tdd_param_nacht
         ParamKind.AAPS_MULTIPLIER -> R.string.fcl_tdd_param_aaps_multiplier
         ParamKind.DISTRIBUTION_STYLE -> R.string.fcl_tdd_param_distribution
         ParamKind.NIGHT_STYLE -> R.string.fcl_tdd_param_night_style

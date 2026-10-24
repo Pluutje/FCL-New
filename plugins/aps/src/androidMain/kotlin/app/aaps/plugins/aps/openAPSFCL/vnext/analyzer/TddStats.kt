@@ -50,7 +50,7 @@ data class TddWeekBlock(
 
 /** A dosing setting that is followed per day. */
 enum class ParamKind(val isPercent: Boolean) {
-    STERKTE(true), TIMING(true), VOLHOUDENDHEID(true), NACHT_FACTOR(true),
+    STERKTE(true), TIMING(true), VOLHOUDENDHEID(true),
     AAPS_MULTIPLIER(true), DISTRIBUTION_STYLE(false), NIGHT_STYLE(false)
 }
 
@@ -323,7 +323,6 @@ object TddStats {
         ParamKind.STERKTE -> d.sterktePct.toString()
         ParamKind.TIMING -> d.timingPct.toString()
         ParamKind.VOLHOUDENDHEID -> d.volhoudendheidPct.toString()
-        ParamKind.NACHT_FACTOR -> d.nachtFactorPct.toString()
         ParamKind.AAPS_MULTIPLIER -> d.aapsMultiplierPct.toString()
         ParamKind.DISTRIBUTION_STYLE -> d.distributionStyle
         ParamKind.NIGHT_STYLE -> d.nightStyle
