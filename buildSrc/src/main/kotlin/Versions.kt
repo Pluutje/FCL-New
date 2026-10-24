@@ -4,7 +4,6 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 @Suppress("ConstPropertyName")
 object Versions {
 
-
     // On change edit aaps-ci.yml
     // 09/09/2026 (de gebruiker) — nieuw schema: "4.0<letter>-v<generatie>-v<buildnummer>".
     // Het buildnummer loopt voortaan gelijk op met FCL_STATUS_VERSION (FCLvNextStatusFormatter.kt)
