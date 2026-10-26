@@ -5,7 +5,7 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.MarqueeDefaults
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.heightIn
@@ -36,7 +36,6 @@ import app.aaps.core.ui.compose.stringResourceOrNull
  * @see CobChipZeroPreview
  * @see CobChipBlinkingPreview
  */
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun CobChip(
     state: CobUiState,
@@ -52,8 +51,13 @@ internal fun CobChip(
 
     // When carbs are required, flash only the icon (attention cue) and let the text scroll
     // (basicMarquee) instead of wrapping — so the numbers stay crisp/readable while the icon blinks.
+    // The scroll repeats for as long as carbs are required. With the default 3 runs it stops at the
+    // start of the text, and the required amount at the end stays cut off (#5322). Without carbs
+    // required the default stays, so a normal COB text that does not fit does not scroll forever.
     // Niet relevant tijdens een actieve Temp Override (carbsReq gaat over COB, niet over de override).
-    val iconAlphaModifier = if (state.carbsReq > 0 && !state.tempOverrideActive) {
+    val carbsRequiredNow = state.carbsReq > 0 && !state.tempOverrideActive
+    val marqueeIterations = if (carbsRequiredNow) Int.MAX_VALUE else MarqueeDefaults.Iterations
+    val iconAlphaModifier = if (carbsRequiredNow) {
         val infiniteTransition = rememberInfiniteTransition(label = "cobBlink")
         val alphaState = infiniteTransition.animateFloat(
             initialValue = 1f,
@@ -114,7 +118,7 @@ internal fun CobChip(
                 maxLines = 1,
                 modifier = Modifier
                     .padding(start = if (showIcon) AapsSpacing.medium else 0.dp)
-                    .basicMarquee()
+                    .basicMarquee(iterations = marqueeIterations)
             )
         }
     }

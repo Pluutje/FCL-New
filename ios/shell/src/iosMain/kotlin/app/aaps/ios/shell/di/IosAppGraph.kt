@@ -1,5 +1,6 @@
 package app.aaps.ios.shell.di
 
+import app.aaps.core.interfaces.alerts.EatReminder
 import app.aaps.core.interfaces.overview.TempOverrideStatusProvider
 import app.aaps.core.interfaces.bgQualityCheck.BgQualityCheck
 import app.aaps.core.interfaces.clientcontrol.ClientControlActionDispatcher
@@ -151,6 +152,7 @@ interface IosAppGraph : MetroViewModelMultibindings {
     val periodicMaintenance: PeriodicMaintenance
     // Turns a snackbar into a notification when no screen is up to show it. Shared with Android.
     val snackbarNotificationFallback: SnackbarNotificationFallback
+    val eatReminder: EatReminder
     val appScope: CoroutineScope
     val swDefinition: SWDefinition
     val builtInSearchables: BuiltInSearchables
