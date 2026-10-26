@@ -660,6 +660,20 @@ private const val HIGH_PLATEAU_MAX_IOB_RATIO = 0.55
 // Backtest (7 dagen): helpt 18/10; op 12/10 en 16/10 vuurde een eerdere, grotere versie vlak voor de
 // piek. Daarom een kleine stap (0,2 U) en een zachte opbouw.
 private var plateauHoldBoostThisCycle: Double = 0.0
+
+// v150: langzame, aanhoudende stijging terwijl de IOB laag is (26/10/2026 nacht: BG 6,1 -> 9,1 in 4 uur,
+// slope ~0,9, na worst en kaas). Alle bestaande bodems eisten een snellere stijging of een hoger niveau, dus
+// late_decay_mul bleef 0,12-0,22 en er ging maar 0,15 U per cyclus uit terwijl 0,7 U gewenst was.
+// Gewicht 0..1, groeit geleidelijk met: stijging over het laatste uur, hoogte boven target, lage IOB-ratio.
+private var slowRiseWeightThisCycle: Double = 0.0
+private const val SLOW_RISE_WINDOW_MIN = 60
+private const val SLOW_RISE_START_MMOL = 0.3      // stijging over het venster waar het gewicht begint
+private const val SLOW_RISE_RAMP_MMOL = 0.8       // en hier is het volledig (1,1 mmol per uur)
+private const val SLOW_RISE_HEIGHT_START = 1.5    // mmol boven target
+private const val SLOW_RISE_HEIGHT_RAMP = 1.5
+private const val SLOW_RISE_IOB_START = 0.25      // iobRatio waar het gewicht afneemt
+private const val SLOW_RISE_IOB_RAMP = 0.20
+private const val SLOW_RISE_LDM_FLOOR = 0.50      // zelfde plafond als HIGH_PLATEAU_LDM_FLOOR_MAX
 private var plateauHoldPeakIob: Double = 0.0
 private var plateauHoldPeakAt: DateTime? = null
 /** BG moet minstens zoveel boven target zijn voor het gewicht groter dan 0 wordt, en dit is de opbouwlengte. */
@@ -1762,6 +1776,11 @@ private const val RISING_LDM_STEEP_SLOPE_START = 4.0  // mmol/u: hier begint de 
 private const val RISING_LDM_STEEP_SLOPE_FULL = 6.0   // mmol/u: hier is hij volledig
 private const val RISING_LDM_STEEP_FLOOR = 0.60       // bodem bij een volledig steile stijging
 private const val RISING_LDM_STEEP_MIN_ABOVE_TARGET = 1.5   // mmol boven target bij een volledig steile stijging
+// v149 (24/10/2026 23:51): geen harde knip meer. De bodem groeit geleidelijk in over deze afstand boven de
+// drempel, en met de slope en delta5m. Daarvoor sprong late_decay_mul in 1 cyclus van 0,12 naar 0,35 (3,5 U).
+private const val RISING_LDM_RAMP_MMOL = 1.5
+private const val RISING_LDM_SLOPE_RAMP = 1.0         // mmol/u, begint 0,5 onder RISING_LDM_MIN_SLOPE
+private const val RISING_LDM_DELTA_RAMP = 0.2         // mmol per 5 min, begint 0,1 onder RISING_LDM_MIN_DELTA5M
 
 // 5. Minimale dosis die meegroeit met het tekort (energy_total - IOB), alleen bij een stijgende BG ver
 //    boven target. 19/10 20:06-20:36: 0,15 U per cyclus terwijl energy_total 5-6 U en IOB 3,5 U was.
@@ -5615,7 +5634,7 @@ class FCLvNext(
     // "vNN-jjjj-mm-dd-uumm" (aanmaaktijdstip, geen omschrijving; die van
     // eerdere versies raakten toch achter). Alleen als het écht relevant
     // is een korte omschrijving toevoegen.
-    private val FCL_CODE_VERSION = "v148-2026-10-24-1500"
+    private val FCL_CODE_VERSION = "v150-2026-10-26-1300"
 
     // ── Restart-detectie (16/07/2026) ─────────────────────────────────
     // true op precies de EERSTE cyclus na het (her)starten van dit class-
@@ -8130,6 +8149,23 @@ class FCLvNext(
             val timeFrac = smooth01((plateauMin - HIGH_PLATEAU_TIME_START_MIN) / HIGH_PLATEAU_TIME_RAMP_MIN)
             val heightFrac = smooth01((ctx.deltaToTarget - HIGH_PLATEAU_MIN_DELTA_MMOL) / HIGH_PLATEAU_HEIGHT_RAMP_MMOL)
             highPlateauFracThisCycle = timeFrac * heightFrac
+
+            // v150: langzame stijging bij lage IOB, zie kdoc bij slowRiseWeightThisCycle.
+            val slowRiseRef = ctx.input.bgHistory.sortedBy { it.first.millis }.lastOrNull {
+                now.millis - it.first.millis >= SLOW_RISE_WINDOW_MIN * 60_000L - 150_000L
+            }
+            slowRiseWeightThisCycle = if (slowRiseRef == null) 0.0 else {
+                val riseOverWindow = bgNowPlateau - slowRiseRef.second
+                val riseFrac = smooth01((riseOverWindow - SLOW_RISE_START_MMOL) / SLOW_RISE_RAMP_MMOL)
+                val heightFracSlow = smooth01((ctx.deltaToTarget - SLOW_RISE_HEIGHT_START) / SLOW_RISE_HEIGHT_RAMP)
+                val lowIobFrac = 1.0 - smooth01((ctx.iobRatio - SLOW_RISE_IOB_START) / SLOW_RISE_IOB_RAMP)
+                // Niet meer stijgend (laatste 5 min): gewicht loopt geleidelijk naar 0.
+                val stillRisingFrac = smooth01((ctx.recentDelta5m + 0.05) / 0.10)
+                riseFrac * heightFracSlow * lowIobFrac * stillRisingFrac
+            }
+            if (slowRiseWeightThisCycle > 0.05) {
+                status.append("LANGZAME STIJGING: gewicht=${"%.2f".format(slowRiseWeightThisCycle)}\n")
+            }
             if (highPlateauFracThisCycle > 0.05) {
                 status.append(
                     "HOOG PLATEAU: ${plateauMin} min boven target+${"%.0f".format(HIGH_PLATEAU_MIN_DELTA_MMOL)} zonder dalen, " +
@@ -10076,6 +10112,30 @@ class FCLvNext(
                     }
                 }
 
+                // v150: bodem bij een langzame, aanhoudende stijging met lage IOB. Geleidelijk (gewicht 0..1),
+                // en met dezelfde rem als de steile bodem (net veel gegeven of hoge IOB-ratio).
+                if (allowCommitBoost && commitAccessOk &&
+                    !curveConfirmtOmslag &&
+                    !postHypoBrakeActive &&
+                    slowRiseWeightThisCycle > 0.001 &&
+                    lateDecayMul < SLOW_RISE_LDM_FLOOR
+                ) {
+                    val slowFloorKeep = SteepRiseGuards.floorKeep(
+                        deliveredInLastMinutes(now, SteepRiseGuards.FLOOR_WINDOW_MIN),
+                        if (episodePeakCommitU > 1e-9) episodePeakCommitU else config.maxSMB * 0.4,
+                        ctx.iobRatio
+                    )
+                    val slowWeight = slowRiseWeightThisCycle * slowFloorKeep
+                    if (slowWeight > 0.001) {
+                        val voorSlowRise = lateDecayMul
+                        lateDecayMul = lerp(lateDecayMul, SLOW_RISE_LDM_FLOOR, slowWeight)
+                        status.append(
+                            "LATEDECAYMUL LANGZAME-STIJGING-BODEM (v150): ${"%.2f".format(voorSlowRise)}->${"%.2f".format(lateDecayMul)} " +
+                                "(gewicht=${"%.2f".format(slowWeight)})\n"
+                        )
+                    }
+                }
+
                 // v147: milde bodem zolang de BG duidelijk blijft stijgen ver boven target. Zie
                 // RISING_LDM_FLOOR. Gemeten op 24 dagen: +0,5 U per dag, minuten boven 10 gehalveerd.
                 // Bij een steile stijging (slope 4-6 mmol/u en hoger) gaat de bodem geleidelijk naar
@@ -10087,25 +10147,37 @@ class FCLvNext(
                 // Dynamisch (23/10/2026, zie SteepRiseGuards): de verhoging verdwijnt weer als er net veel is
                 // gegeven of de IOB-ratio al hoog is.
                 val floorRef = if (episodePeakCommitU > 1e-9) episodePeakCommitU else config.maxSMB * 0.4
-                val risingSteepKeep = risingSteepFrac * SteepRiseGuards.floorKeep(
+                val risingFloorKeep = SteepRiseGuards.floorKeep(
                     deliveredInLastMinutes(now, SteepRiseGuards.FLOOR_WINDOW_MIN), floorRef, ctx.iobRatio
                 )
+                val risingSteepKeep = risingSteepFrac * risingFloorKeep
                 val risingLdmFloor = lerp(RISING_LDM_FLOOR, RISING_LDM_STEEP_FLOOR, risingSteepKeep)
                 val risingMinAbove = lerp(RISING_LDM_MIN_ABOVE_TARGET, RISING_LDM_STEEP_MIN_ABOVE_TARGET, risingSteepKeep)
+                // v149: de bodem werkt met een gewicht van 0 tot 1 i.p.v. aan/uit. Afstand boven de drempel,
+                // slope en delta5m groeien geleidelijk in. De rem (net veel gegeven, hoge IOB-ratio) geldt nu
+                // ook voor de basisbodem.
+                val risingAboveFrac = smooth01(
+                    (ctx.input.bgNow - (ctx.input.targetBG + risingMinAbove)) / RISING_LDM_RAMP_MMOL
+                )
+                val risingSlopeFrac = smooth01(
+                    (ctx.recentSlope - (RISING_LDM_MIN_SLOPE - 0.5)) / RISING_LDM_SLOPE_RAMP
+                )
+                val risingDeltaFrac = smooth01(
+                    (ctx.recentDelta5m - (RISING_LDM_MIN_DELTA5M - 0.1)) / RISING_LDM_DELTA_RAMP
+                )
+                val risingWeight = risingAboveFrac * minOf(risingSlopeFrac, risingDeltaFrac) * risingFloorKeep
                 if (allowCommitBoost && commitAccessOk &&
                     !curveConfirmtOmslag &&
-                    ctx.input.bgNow >= ctx.input.targetBG + risingMinAbove &&
-                    ctx.recentDelta5m >= RISING_LDM_MIN_DELTA5M &&
-                    ctx.recentSlope >= RISING_LDM_MIN_SLOPE &&
-                    ctx.iobRatio < HIGH_PLATEAU_MAX_IOB_RATIO &&
                     !postHypoBrakeActive &&
+                    risingWeight > 0.001 &&
                     lateDecayMul < risingLdmFloor
                 ) {
                     val voorRisingFloor = lateDecayMul
-                    lateDecayMul = risingLdmFloor
+                    lateDecayMul = lerp(lateDecayMul, risingLdmFloor, risingWeight)
                     status.append(
-                        "LATEDECAYMUL STIJGING-BODEM (v147): ${"%.2f".format(voorRisingFloor)}->${"%.2f".format(lateDecayMul)} " +
-                            "(delta5m=${"%.2f".format(ctx.recentDelta5m)} slope=${"%.1f".format(ctx.recentSlope)})\n"
+                        "LATEDECAYMUL STIJGING-BODEM (v149): ${"%.2f".format(voorRisingFloor)}->${"%.2f".format(lateDecayMul)} " +
+                            "(gewicht=${"%.2f".format(risingWeight)} delta5m=${"%.2f".format(ctx.recentDelta5m)} " +
+                            "slope=${"%.1f".format(ctx.recentSlope)})\n"
                     )
                 }
 

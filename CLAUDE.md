@@ -158,6 +158,10 @@ reported `NO-SOURCE`. That was wrong by the time anyone read it, and it caused w
   PR text, UI strings and chat, write plain, simple English. Many readers and contributors are
   non-native speakers. Prefer short common words and short sentences; avoid idioms, slang, rare
   vocabulary, and needlessly complex phrasing. Clear over clever.
+- **Algorithm changes: no hard steps, use gradual transitions** — Every new or changed threshold in
+  the dosing code must fade in and out (`smooth01` ramp, `lerp`) over a range, not switch on or off at
+  one value. A hard step gave a 3x dose jump in one cycle (24/10 23:51). When you touch an existing
+  hard `if (x >= limit)` gate, make it gradual in the same change and say so.
 - **Think critically, don't just agree** — Before implementing, evaluate whether the agreed approach
   is actually the best solution. Challenge assumptions, point out potential issues, suggest better
   alternatives. The user may miss something too. Ask "Is this the best way?" before writing code.
