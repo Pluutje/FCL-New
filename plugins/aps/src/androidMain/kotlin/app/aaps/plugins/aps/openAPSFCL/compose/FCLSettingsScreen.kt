@@ -25,7 +25,7 @@ import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.PermissionController
 import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.core.interfaces.rx.events.EventRefreshOverview
-import app.aaps.core.interfaces.sharedPreferences.SP
+import app.aaps.core.interfaces.sharedPreferences.KeyValueStore
 import app.aaps.core.keys.DoubleKey
 import app.aaps.core.keys.StringKey
 import app.aaps.core.keys.interfaces.Preferences
@@ -52,7 +52,7 @@ import kotlinx.coroutines.withContext
 @Composable
 fun FCLSettingsScreen(
     preferences: Preferences,
-    sp: SP,
+    sp: KeyValueStore,
     // 08/09/2026 (de gebruiker) — true als dit scherm net geopend is via een
     // tik op de update-melding (zie FclUpdateNotificationHelper.kt); klapt de
     // Updates-sectie hieronder direct open i.p.v. dat de gebruiker 'm zelf

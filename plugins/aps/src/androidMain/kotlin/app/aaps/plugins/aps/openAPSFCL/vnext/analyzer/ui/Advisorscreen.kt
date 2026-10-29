@@ -140,12 +140,15 @@ fun AdvisorScreen(
                 TddKaart(tddContext)
             })
 
-            // ── 4. Dekking: gemeten werking van de IOB + proef (23/10/2026) ───
-            add(InfoTabPage("Dekking") {
+            // ── 4. Experimenteel: proeven en metingen, elke kaart met een eigen titel (29/10/2026) ───
+            // Elke kaart zegt zelf of hij de dosering aanpast of alleen signaleert.
+            add(InfoTabPage("Experimenteel") {
                 val coverContext = androidx.compose.ui.platform.LocalContext.current
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     CoverTrialKaart(coverContext)
                     CoverIsfKaart(coverContext)
+                    CoverShadowKaart(coverContext)
+                    InsulinTimingKaart(coverContext)
                 }
             })
 

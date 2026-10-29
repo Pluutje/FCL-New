@@ -560,6 +560,23 @@ private val peakEstimator = PeakEstimatorContext()
 
 private var lastCommitAt: DateTime? = null
 private var lastCommitDose: Double = 0.0
+
+// v151 (27/10/2026): size and time of the last real commit (>= 0.40 U). Used only by the
+// post-commit ceiling for non-commit doses (see POST_COMMIT_*). Not saved: after a restart
+// there is no ceiling, which is the old behaviour.
+private var postCommitRefU: Double = 0.0
+private var postCommitRefAt: DateTime? = null
+
+// v151: right after a commit, a normal (non-commit) dose may not be bigger than a ceiling that
+// grows slowly from 0 to 90% of the commit over POST_COMMIT_WINDOW_MIN minutes.
+// Reason: 27/10 11:01 commit 1.45 U, and 4 min later 1.45 U again through the taper clamp path.
+// The cut fades in with the dose size (no cut below FROM, full cut from TO), so small
+// follow-up doses in a real rise stay untouched. Backtest on 7 days: only that one dose was cut
+// by more than 0.7 U; all other cuts are below 0.4 U and are not applied.
+private const val POST_COMMIT_WINDOW_MIN = 20.0
+private const val POST_COMMIT_CEIL_FRAC = 0.90
+private const val POST_COMMIT_DOSE_FROM = 0.4
+private const val POST_COMMIT_DOSE_TO = 0.8
 private var lastCommitReason: String = ""
 // Aparte tracking t.b.v. de post-big-commit afterload-laag: bewust los van
 // lastCommitAt/lastCommitDose, want die laatste twee worden ook door kleine
@@ -2624,19 +2641,15 @@ private fun accelFirstCommitTrigger(
     if (ctx.consistency < config.minConsistency) {
         return CommitTrigger(false, "COMMIT accel-first: low consistency")
     }
-    if (ctx.deltaToTarget < 0.8) {
+    if (ctx.deltaToTarget < CommitGate.MIN_DELTA_TO_TARGET) {
         return CommitTrigger(false, "COMMIT accel-first: delta too low")
     }
 
-    // Fast-lane rise (must)
-    val fastLane =
-        (ctx.recentDelta5m >= 0.08) ||   // ~0.96 mmol/h equivalent
-            (ctx.recentSlope >= 0.60)
+    // Fast-lane rise (must). The limits are in CommitGate (also used by the Analyser).
+    val fastLane = CommitGate.fastLane(ctx.recentDelta5m, ctx.recentSlope)
 
     // Accel must be meaningful
-    val accelOk =
-        (ctx.acceleration >= 0.14) ||
-            (ctx.acceleration >= 0.10 && ctx.recentDelta5m >= 0.12)
+    val accelOk = CommitGate.accelOk(ctx.acceleration, ctx.recentDelta5m)
 
     // Meal “context” (any of these makes it more legit)
     val mealContext =
@@ -5634,7 +5647,7 @@ class FCLvNext(
     // "vNN-jjjj-mm-dd-uumm" (aanmaaktijdstip, geen omschrijving; die van
     // eerdere versies raakten toch achter). Alleen als het écht relevant
     // is een korte omschrijving toevoegen.
-    private val FCL_CODE_VERSION = "v150-2026-10-26-1300"
+    private val FCL_CODE_VERSION = "v152-2026-10-29-1500"
 
     // ── Restart-detectie (16/07/2026) ─────────────────────────────────
     // true op precies de EERSTE cyclus na het (her)starten van dit class-
@@ -10657,7 +10670,11 @@ class FCLvNext(
                     // Verlengt absorptionWindow alleen bij substantiele commits (>= 0.40U).
                     // Kleine correctie-commits (0.20-0.35U) mogen de suppress-window
                     // niet eindeloos verlengen: dat blokkeerde de borrel-stijging.
-                    if (committedDose >= 0.40) lastCommitAt = now
+                    if (committedDose >= 0.40) {
+                        lastCommitAt = now
+                        postCommitRefU = committedDose
+                        postCommitRefAt = now
+                    }
                     lastCommitDose = committedDose
                     lastCommitReason = "${mealSignal.state} frac=${"%.2f".format(fraction)}"
                     if (committedDose >= 1.5) {
@@ -11804,6 +11821,28 @@ class FCLvNext(
                         "lastKnownCommitDoseFinalU=${"%.2f".format(lastKnownCommitDoseFinalU)} " +
                         "xlateDecayMul=${"%.2f".format(lateDecayMul)})\n"
                 )
+            }
+        }
+
+        // v151: ceiling for a normal dose right after a commit (see POST_COMMIT_*).
+        // The commit cooldown does not stop this path, so a second big dose could follow 4 min later.
+        if (commandedDose > 0.0 && !commandedDoseIsFromCommit && postCommitRefU > 0.0) {
+            val minsSinceRef = minutesSince(postCommitRefAt, now).toDouble()
+            if (minsSinceRef in 0.0..POST_COMMIT_WINDOW_MIN) {
+                val ceiling = postCommitRefU * POST_COMMIT_CEIL_FRAC *
+                    smooth01(minsSinceRef / POST_COMMIT_WINDOW_MIN)
+                val excess = (commandedDose - ceiling).coerceAtLeast(0.0)
+                val weight = smoothRamp(commandedDose, POST_COMMIT_DOSE_FROM, POST_COMMIT_DOSE_TO)
+                val cut = excess * weight
+                if (cut > 0.0) {
+                    val before = commandedDose
+                    commandedDose -= cut
+                    status.append(
+                        "POST-COMMIT CEILING: ${"%.2f".format(before)}->${"%.2f".format(commandedDose)}U " +
+                            "(ref=${"%.2f".format(postCommitRefU)}U ${minsSinceRef.toInt()}min ago, " +
+                            "ceiling=${"%.2f".format(ceiling)}U, weight=${"%.2f".format(weight)})\n"
+                    )
+                }
             }
         }
 

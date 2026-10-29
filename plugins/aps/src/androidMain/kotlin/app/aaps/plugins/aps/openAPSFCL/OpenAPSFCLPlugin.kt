@@ -74,7 +74,7 @@ import app.aaps.plugins.aps.events.EventResetOpenAPSGui
 import kotlinx.serialization.json.JsonObject
 import app.aaps.core.ui.compose.icons.IcPluginOpenAPS
 import app.aaps.core.interfaces.aps.oapsProfileFCL
-import app.aaps.core.interfaces.sharedPreferences.SP
+import app.aaps.core.interfaces.sharedPreferences.KeyValueStore
 
 import app.aaps.plugins.aps.openAPSFCL.compose.FclOverviewScreen
 import app.aaps.plugins.aps.openAPSFCL.compose.PREFS_NAME
@@ -127,7 +127,7 @@ open class OpenAPSFCLPlugin @Inject constructor(
     private val uiInteraction: UiInteraction,
     private val determineBasalFCL: DetermineBasalFCL,
     private val profiler: Profiler,
-    private val sp: SP,
+    private val sp: KeyValueStore,
     // 21/09/2026 — GEEN "private val" meer: PluginBase (dev-merge) declareert nu zelf al een
     // "protected val notificationManager", dus een eigen property met dezelfde naam hier zou die
     // verbergen (Kotlin-compilerfout VIRTUAL_MEMBER_HIDDEN: "hides member of supertype... needs

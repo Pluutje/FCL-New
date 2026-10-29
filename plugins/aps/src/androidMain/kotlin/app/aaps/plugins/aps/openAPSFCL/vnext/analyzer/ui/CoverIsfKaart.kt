@@ -7,8 +7,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -55,15 +53,11 @@ private const val TREND_MIN_SAMPLES = 10
 /** Own card (same look as the TDD card) with the measured IOB cover factor. Shown under the TDD card. */
 @Composable
 fun CoverIsfKaart(context: Context) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.35f)
-        )
+    ExperimentKaart(
+        title = stringResource(R.string.fcl_cover_title),
+        badge = stringResource(R.string.fcl_card_signals)
     ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            CoverIsfSection(context)
-        }
+        CoverIsfSection(context)
     }
 }
 
@@ -91,9 +85,6 @@ private fun CoverIsfSection(context: Context) {
     val usedN = used.sumOf { it.n }
 
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(stringResource(R.string.fcl_cover_title),
-             style = MaterialTheme.typography.bodyMedium,
-             fontWeight = FontWeight.SemiBold)
         if (usedN > 0) {
             val measuredPct = (100.0 * used.sumOf { it.n * it.median } / usedN).roundToInt()
             val curvePct = (100.0 * used.sumOf { it.n * it.curve } / usedN).roundToInt()
@@ -119,9 +110,20 @@ private fun CoverIsfSection(context: Context) {
                      style = MaterialTheme.typography.labelSmall, color = headColor, textAlign = TextAlign.End)
             }
             flat.indices.forEach { CoverRow(flat[it], rising[it]) }
-            CoverShadow(context, today)
             CoverTrend(days, today)
         }
+    }
+}
+
+/** Own card (same look as the other cards) with the check of the commit cover brake with the measured factor. */
+@Composable
+fun CoverShadowKaart(context: Context) {
+    val today = remember { LocalDate.now(GvpCalculator.zone) }
+    ExperimentKaart(
+        title = stringResource(R.string.fcl_cover_shadow_title),
+        badge = stringResource(R.string.fcl_card_signals)
+    ) {
+        CoverShadow(context, today)
     }
 }
 
@@ -134,9 +136,7 @@ private fun CoverShadow(context: Context, today: LocalDate) {
     }
     val s = remember(shadowDays) { CoverIsfHistory.shadowSummary(shadowDays, today, SHADOW_WINDOW_DAYS) }
     val headColor = MaterialTheme.colorScheme.onSurfaceVariant
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(top = 8.dp)) {
-        Text(stringResource(R.string.fcl_cover_shadow_title),
-             style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(stringResource(R.string.fcl_cover_shadow_intro, CoverIsf.SHADOW_FLOOR.toFloat()),
              style = MaterialTheme.typography.labelSmall, color = headColor)
         if (s.commits == 0) {

@@ -62,7 +62,35 @@ interface FCLCycleLogDao {
             "ORDER BY timestampMs ASC"
     )
     suspend fun getCoverRows(fromMs: Long, toMs: Long): List<CycleCoverRow>
+
+    // Slim rows to measure the timing of the insulin against the BG peak (analyzer/InsulinTimingHistory).
+    @Query(
+        "SELECT timestampMs, bg, realDeliveredBolusU, realDeliveredBasalU, profileBasalUH, mealState, " +
+            "doseAccess, consistency, effectiveCommitAllowed, commitDoseRaw, accel, recentSlope, recentDelta5m, " +
+            "target " +
+            "FROM fcl_cycle_log WHERE timestampMs >= :fromMs AND timestampMs < :toMs " +
+            "ORDER BY timestampMs ASC"
+    )
+    suspend fun getTimingRows(fromMs: Long, toMs: Long): List<CycleTimingRow>
 }
+
+/** Columns of [FCLCycleLogEntity] used to measure the insulin timing. Names match the columns. */
+data class CycleTimingRow(
+    val timestampMs: Long,
+    val bg: Double,
+    val realDeliveredBolusU: Double,
+    val realDeliveredBasalU: Double,
+    val profileBasalUH: Double,
+    val mealState: String,
+    val doseAccess: String,
+    val consistency: Double,
+    val effectiveCommitAllowed: Boolean,
+    val commitDoseRaw: Double,
+    val accel: Double,
+    val recentSlope: Double,
+    val recentDelta5m: Double,
+    val target: Double
+)
 
 /** Columns of [FCLCycleLogEntity] used to measure the IOB cover factor. Names match the columns. */
 data class CycleCoverRow(

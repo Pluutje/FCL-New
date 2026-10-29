@@ -206,7 +206,9 @@
     <string name="fcl_tdd_param_night_style">Nachtreactie</string>
     <string name="fcl_tdd_hint_only">Dit is alleen een hint. Er wordt niets automatisch aangepast.</string>
 
-    <string name="fcl_cover_title">Gemeten werking van de IOB</string>
+    <string name="fcl_card_adjusts">Past dosering aan</string>
+    <string name="fcl_card_signals">Signaleert alleen</string>
+    <string name="fcl_cover_title">IOB-werking</string>
     <string name="fcl_cover_summary" comment="%1$d=measured percent, %2$d=curve percent. Example: 14 and 55">In de praktijk dekt de IOB nu ongeveer %1$d%% van wat de ISF van het profiel zegt, bij een BG van 3 mmol of meer boven target. De vaste curve van het algoritme gaat uit van ongeveer %2$d%%.</string>
     <string name="fcl_cover_summary_why">Dat verschil is normaal. De gemeten waarde is netto: hij bevat ook de koolhydraten die nog worden opgenomen en wat het algoritme zelf deed. Daarom kan hij niet zomaar als dekking worden gebruikt. De dosering gebruikt nog steeds de vaste curve.</string>
     <string name="fcl_cover_intro" comment="%1$d=number of days. Example: 28">Gemeten: hoeveel de BG na 3 uur is gedaald, vergeleken met wat de ISF zegt (1,00 = precies zoals de ISF). Alleen als de IOB 1,5 E of meer is en de BG boven target. Tussen haakjes het aantal metingen. Laatste %1$d dagen.</string>
@@ -219,8 +221,8 @@
     <string name="fcl_cover_class_open" comment="%1$.1f=lower edge in mmol/L above target. Example: 7.0+ mmol">%1$.1f+ mmol</string>
     <string name="fcl_cover_factor" comment="%1$.2f=factor. Example: 0.67">%1$.2f</string>
     <string name="fcl_cover_no_data">Nog te weinig metingen. De metingen worden vanaf nu bewaard.</string>
-    <string name="fcl_cover_shadow_title">Wat als de gemeten waarde gebruikt was?</string>
-    <string name="fcl_cover_shadow_intro" comment="%1$.2f=lowest factor used. Example: 0.40">Alleen een berekening, er wordt niets mee gedoseerd. De dekkingsrem op de commit zou dan de gemeten waarde gebruiken, maar niet lager dan %1$.2f en niet hoger dan de curve. Per commit wordt gekeken naar de BG in de 3 uur erna, na de dosis die echt is gegeven.</string>
+    <string name="fcl_cover_shadow_title">Dekkingsrem: controle met de gemeten waarde</string>
+    <string name="fcl_cover_shadow_intro" comment="%1$.2f=lowest factor used. Example: 0.40">Controle: wat zou de dekkingsrem op de commit hebben gedaan als hij de gemeten waarde gebruikte (niet lager dan %1$.2f en niet hoger dan de curve)? Er wordt niets mee gedoseerd. Per commit wordt gekeken naar de BG in de 3 uur erna, na de dosis die echt is gegeven.</string>
     <string name="fcl_cover_shadow_none" comment="%1$d=number of days. Example: 7">Nog geen commits met dekkingsrem in de laatste %1$d dagen.</string>
     <string name="fcl_cover_shadow_total" comment="%1$d=days, %2$d=commits that would be bigger, %3$d=all commits, %4$.1f=extra units, %5$.1f=extra units per day">Laatste %1$d dagen: %2$d van %3$d commits zouden groter zijn geweest, samen %4$.1f E extra (%5$.1f E per dag).</string>
     <string name="fcl_cover_shadow_high" comment="%1$d=number of commits">Bij %1$d daarvan werd de BG daarna 11 of hoger. De extra insuline had dat waarschijnlijk lager gehouden.</string>
@@ -229,7 +231,36 @@
     <string name="fcl_cover_shadow_note">Een schatting. Ze gaat uit van een deel van de werking van de ISF binnen 3 uur. Pas na meer weken data is er een betrouwbaar beeld.</string>
     <string name="fcl_cover_trend_title">Verloop per week</string>
     <string name="fcl_cover_trend_intro" comment="%1$.1f=lowest BG class edge in mmol/L above target. Example: 3.0">Gemiddelde van de metingen per week, alleen voor een BG van %1$.1f mmol of meer boven target. Zo zie je of de waarde stabiel blijft. Tussen haakjes het aantal metingen. Het einde van elke week staat links.</string>
-    <string name="fcl_trial_title">Proef: gemeten dekking bij het begin van een maaltijd</string>
+    <string name="fcl_timing_title">Insuline-timing</string>
+    <string name="fcl_timing_loading">Even rekenen...</string>
+    <string name="fcl_timing_no_data" comment="%1$d=meals needed, %2$d=meals found. Example: 5 and 2">Nog te weinig maaltijden voor een advies (minstens %1$d nodig, nu %2$d). De metingen worden bewaard en komen vanzelf.</string>
+    <string name="fcl_timing_adv_late" comment="%1$d=minutes the insulin peak is after the BG peak. Example: 15">De piek van de insuline valt gemiddeld %1$d min na de piek van de BG. Hoe eerder de insuline komt, hoe lager de piek. Grof gerekend geeft 5 min eerder 0,5 tot 0,9 mmol minder piek.</string>
+    <string name="fcl_timing_adv_early" comment="%1$d=minutes the insulin peak is before the BG peak. Example: 15">De piek van de insuline valt gemiddeld %1$d min voor de piek van de BG. De insuline komt dus vroeg genoeg.</string>
+    <string name="fcl_timing_adv_in_step" comment="%1$+d=minutes, plus means after the BG peak. Example: +5">De piek van de insuline valt vrijwel samen met de piek van de BG (%1$+d min). Dat is goed in de pas.</string>
+    <string name="fcl_timing_gate_top" comment="%1$s=name of the limit, %2$d=percent of the waiting cycles. Example: maaltijd nog niet herkend and 46">Grootste rem voor de eerste commit: %1$s (%2$d%% van de wachtcycli).</string>
+    <string name="fcl_timing_summary" comment="%1$d=days, %2$d=meals, %3$+d=median minutes, %4$+d and %5$+d=middle half in minutes, %6$d=percent of the meals, %7$d=minutes. Example: 28, 18, +20, +11, +29, 44, 20">Laatste %1$d dagen: %2$d maaltijden. Mediaan %3$+d min (de middelste helft tussen %4$+d en %5$+d min). Bij %6$d%% van de maaltijden is de insulinepiek meer dan %7$d min na de BG-piek.</string>
+    <string name="fcl_timing_wait" comment="%1$d=meals, %2$d=median minutes. Example: 34 and 15">Eerste commit: %1$d maaltijden. De BG steeg al, mediaan %2$d min voor de commit er was.</string>
+    <string name="fcl_timing_gates_title">Wat hield de eerste commit tegen</string>
+    <string name="fcl_timing_gates_intro">Per cyclus waarin de BG al steeg maar de commit er nog niet was: de eerste grens die dicht zat.</string>
+    <string name="fcl_timing_gate_cell" comment="%1$d=cycles, %2$d=percent. Example: 49 (46%)">%1$d (%2$d%%)</string>
+    <string name="fcl_timing_gate_meal">maaltijd nog niet herkend</string>
+    <string name="fcl_timing_gate_access">toegangsniveau (stijging te traag voor een grote dosis)</string>
+    <string name="fcl_timing_gate_pause">pauze tussen commits</string>
+    <string name="fcl_timing_gate_delta" comment="%1$.1f=mmol/L above target. Example: 0.8">BG minder dan %1$.1f mmol boven target</string>
+    <string name="fcl_timing_gate_slow">stijging te traag</string>
+    <string name="fcl_timing_gate_accel">versnelling te laag</string>
+    <string name="fcl_timing_gate_other">overig</string>
+    <string name="fcl_timing_hint_meal">De maaltijd wordt later herkend dan de BG begint te stijgen. Dat hangt af van de herkenningsdrempels en van de eerste meetpunten.</string>
+    <string name="fcl_timing_hint_access">Het toegangsniveau staat nog op klein of micro. Een grote dosis mag pas bij een snellere stijging.</string>
+    <string name="fcl_timing_hint_pause">De pauze tussen twee commits houdt de dosis tegen.</string>
+    <string name="fcl_timing_hint_delta" comment="%1$.1f=mmol/L above target. Example: 0.8">De grens van %1$.1f mmol boven target kost tijd bij een stijging vlak boven target. Een zachtere grens kan helpen, maar let op kleine maaltijden.</string>
+    <string name="fcl_timing_hint_slow">De stijging is nog te traag voor een commit.</string>
+    <string name="fcl_timing_hint_accel">De versnelling is nog te laag voor een commit.</string>
+    <string name="fcl_timing_trend_title">Verloop per week</string>
+    <string name="fcl_timing_trend_intro">Mediaan per week. Tussen haakjes het aantal maaltijden. Het einde van elke week staat links.</string>
+    <string name="fcl_timing_week_cell" comment="%1$+d=median minutes, %2$d=meals. Example: +15 (4)">%1$+d min (%2$d)</string>
+    <string name="fcl_timing_note" comment="%1$d=minutes to the insulin peak. Example: 45">Een schatting. De werking van de insuline is berekend uit de insuline die echt is gegeven, met een piek na %1$d minuten. De echte curve kan afwijken. Dit is alleen een meting: de dosering verandert niet.</string>
+    <string name="fcl_trial_title">Dekkingsproef</string>
     <string name="fcl_trial_state_on">Aan</string>
     <string name="fcl_trial_state_off">Uit. De dosering verandert niet.</string>
     <string name="fcl_trial_intro">Aan het begin van een maaltijd (snelle stijging, BG niet ver boven target) geeft de dekkingsrem een deel van de commit terug, volgens de gemeten dekking. De sterkte begint klein en gaat omhoog als er geen lage BG volgt. Na een lage BG halveert de sterkte direct.</string>

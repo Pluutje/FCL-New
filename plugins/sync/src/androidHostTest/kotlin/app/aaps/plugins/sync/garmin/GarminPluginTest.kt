@@ -6,7 +6,7 @@ import app.aaps.core.data.model.SourceSensor
 import app.aaps.core.data.model.TrendArrow
 import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.core.interfaces.notifications.NotificationId
-import app.aaps.core.interfaces.sharedPreferences.SP
+import app.aaps.core.interfaces.sharedPreferences.KeyValueStore
 import app.aaps.core.keys.BooleanNonKey
 import app.aaps.core.keys.IntNonKey
 import app.aaps.core.keys.StringNonKey
@@ -60,7 +60,7 @@ class GarminPluginTest : TestBaseWithProfile() {
     // (ingestHttpTotalSteps gebruikt sp om de laatst bekende totaalstand te onthouden).
     // -1 als default zodat de "eerste keer" (baseline)-tak hetzelfde gedrag krijgt als
     // een echte, nog-nooit-gebruikte SharedPreferences-key.
-    @Mock private lateinit var sp: SP
+    @Mock private lateinit var sp: KeyValueStore
     private val clock = Clock.fixed(Instant.ofEpochMilli(10_000), ZoneId.of("UTC"))
 
     @BeforeEach

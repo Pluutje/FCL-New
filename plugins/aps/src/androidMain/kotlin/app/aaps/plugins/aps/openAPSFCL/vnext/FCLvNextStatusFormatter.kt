@@ -103,7 +103,7 @@ data class FclUiSnapshot(
  * FCLvNext.kt, zoals voorheen. Versions.versionCode in buildSrc NIET meer
  * aanraken.
  */
-const val FCL_STATUS_VERSION = 150
+const val FCL_STATUS_VERSION = 152
 
 class FCLvNextStatusFormatter(
     private val prefs: Preferences,

@@ -23,7 +23,7 @@ import app.aaps.core.ui.compose.ComposablePluginContent
 import app.aaps.core.ui.compose.ToolbarConfig
 import app.aaps.plugins.aps.compose.OpenAPSScreen
 import app.aaps.plugins.aps.compose.OpenAPSViewModel
-import app.aaps.core.interfaces.sharedPreferences.SP
+import app.aaps.core.interfaces.sharedPreferences.KeyValueStore
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.ui.FclAnalyzerScreen
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.ui.FclStatisticsScreen
 
@@ -33,7 +33,7 @@ class FCLComposeContent(
     private val rh: ResourceHelper,
     private val dateUtil: DateUtil,
     private val preferences: Preferences,
-    private val sp: SP
+    private val sp: KeyValueStore
 ) : ComposablePluginContent {
 
     @Composable
