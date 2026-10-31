@@ -2625,7 +2625,9 @@ private fun canCommitNow(
 
 private data class CommitTrigger(
     val ok: Boolean,
-    val reason: String
+    val reason: String,
+    /** Size factor (0..1) of the commit from the distance to target. See [CommitGate.deltaWeight]. */
+    val deltaWeight: Double = 1.0
 )
 
 private fun accelFirstCommitTrigger(
@@ -2641,7 +2643,10 @@ private fun accelFirstCommitTrigger(
     if (ctx.consistency < config.minConsistency) {
         return CommitTrigger(false, "COMMIT accel-first: low consistency")
     }
-    if (ctx.deltaToTarget < CommitGate.MIN_DELTA_TO_TARGET) {
+    // v152: no hard step at 0.8 mmol/L any more. The commit grows smoothly from 0.5 to 0.8 mmol/L
+    // above target (CommitGate.deltaWeight). Below 0.5 there is still no commit.
+    val deltaWeight = CommitGate.deltaWeight(ctx.deltaToTarget)
+    if (deltaWeight <= 0.0) {
         return CommitTrigger(false, "COMMIT accel-first: delta too low")
     }
 
@@ -2662,7 +2667,9 @@ private fun accelFirstCommitTrigger(
 
     return CommitTrigger(
         ok = ok,
-        reason = "COMMIT accel-first: mealCtx=$mealContext fast=$fastLane accelOk=$accelOk"
+        reason = "COMMIT accel-first: mealCtx=$mealContext fast=$fastLane accelOk=$accelOk" +
+            (if (deltaWeight < 1.0 - 1e-9) " deltaWeight=${"%.2f".format(deltaWeight)}" else ""),
+        deltaWeight = deltaWeight
     )
 }
 
@@ -10283,9 +10290,17 @@ class FCLvNext(
                     brake
                 }
 
+                // v152: smooth start of the commit between 0.5 and 0.8 mmol/L above target (1.0 above 0.8).
+                val commitDeltaWeight = accelFirst.deltaWeight
+                if (allowCommitBoost && commitDeltaWeight < 1.0 - 1e-9) {
+                    status.append(
+                        "COMMIT deltaWeight=${"%.2f".format(commitDeltaWeight)} " +
+                            "(deltaToTarget=${"%.2f".format(ctx.deltaToTarget)}, smooth start 0.5 to 0.8)\n"
+                    )
+                }
                 val commitDose =
                     if (allowCommitBoost && commitAccessOk)
-                        (config.maxSMB * fraction * commitIobFactor * prePeakMul * postPeak.commitFactor * rawPlateauPenalty * decelTrendFactor * commitAggressionMul * lateDecayMul * explosiveRiseMul * decelIobBrake * stepDecelBrake)
+                        (config.maxSMB * fraction * commitIobFactor * prePeakMul * postPeak.commitFactor * rawPlateauPenalty * decelTrendFactor * commitAggressionMul * lateDecayMul * explosiveRiseMul * decelIobBrake * stepDecelBrake * commitDeltaWeight)
                             .coerceAtMost(config.maxSMB)
                     else 0.0
                 logRow.commitDoseRaw = commitDose
@@ -11221,6 +11236,36 @@ class FCLvNext(
             commandedDose = minOf(commandedDose, config.maxSMB * topGuard.capFactor)
             status.append("${topGuard.reason}: ${"%.2f".format(before)}→${"%.2f".format(commandedDose)}U\n")
             logRow.guardPeakLimited = true
+        }
+
+        // ── Begrenzing insuline per stijging (29/10/2026) ───────────────────────────────
+        // Zie kdoc bij InsulinBudget. Tijdens een stijging mag de insuline sinds het begin van de
+        // stijging niet harder groeien dan de eigen insuline-per-mmol-stijging toelaat. Glijdend
+        // (geen harde stop), alleen omlaag, en vóór de post-hypo-rem, zodat een afgeknepen commit ook
+        // meetelt voor de afbouw-teller verderop. Op niveau "Alleen meten" wordt alleen gelogd.
+        run {
+            val budgetHistory = ctx.input.bgHistory.map { it.first.millis to it.second }
+            val budgetBase = InsulinBudget.riseBase(budgetHistory, now.millis, ctx.input.bgNow)
+            if (budgetBase != null) {
+                // De insuline sinds het begin van de stijging komt uit recentEpisodeCommits: een lijst van 90 minuten
+                // die op schijf wordt bewaard (overleeft een herstart of update). deliveryHistory is te kort (7 doses).
+                val budgetSinceMs = budgetBase.second - 2 * 60_000L
+                val budgetGivenU = recentEpisodeCommits.filter { it.first.millis >= budgetSinceMs }.sumOf { it.second }
+                val budgetBefore = commandedDose
+                val budget = InsulinBudget.apply(
+                    context, now.millis, budgetBefore, ctx.input.bgNow, ctx.recentSlope,
+                    budgetBase.first, budgetGivenU,
+                    postPeak.lockout || postPeak.suppress
+                )
+                if (budget.limitedU < budgetBefore - 1e-9) {
+                    status.append(
+                        "INSULINE-BEGRENZING${if (budget.doseU < budgetBefore - 1e-9) "" else " (alleen meten)"}: " +
+                            "×${"%.2f".format(budget.factor)} (ruimte ${"%.2f".format(budget.roomU)}U) " +
+                            "${"%.2f".format(budgetBefore)}→${"%.2f".format(budget.limitedU)}U\n"
+                    )
+                }
+                if (budget.doseU < budgetBefore - 1e-9) commandedDose = budget.doseU
+            }
         }
 
         // ── Post-hypo-rebound rem: activeren + toepassen (24/07/2026, de gebruiker;

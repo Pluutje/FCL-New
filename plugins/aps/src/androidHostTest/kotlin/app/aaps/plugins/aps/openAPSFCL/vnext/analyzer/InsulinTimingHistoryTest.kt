@@ -71,25 +71,71 @@ class InsulinTimingHistoryTest {
         assertThat(InsulinTimingHistory.analyze(rows).episodes).isEmpty()
     }
 
+    /** A row that opens every limit unless the test closes one: a recognized meal, a fast and accelerating rise, 1.6 mmol/L above target. */
+    private fun openRow(
+        step: Int = 0,
+        bg: Double = 7.0,
+        mealState: String = "CONFIRMED",
+        doseAccess: String = "NORMAL",
+        commitAllowed: Boolean = true,
+        accel: Double = 0.2,
+        slope: Double = 2.0,
+        delta5m: Double = 0.3
+    ) = row(step, bg = bg, mealState = mealState, doseAccess = doseAccess, commitAllowed = commitAllowed,
+            accel = accel, slope = slope, delta5m = delta5m)
+
     @Test
-    fun `the first limit that is closed is reported in the order of the algorithm`() {
-        assertThat(InsulinTimingHistory.gateOf(row(0, mealState = "NONE"))).isEqualTo(Gate.MEAL_NOT_RECOGNIZED)
-        assertThat(InsulinTimingHistory.gateOf(row(0, mealState = "CONFIRMED", doseAccess = "SMALL")))
-            .isEqualTo(Gate.ACCESS_LEVEL)
-        assertThat(InsulinTimingHistory.gateOf(row(0, mealState = "CONFIRMED", commitAllowed = false)))
-            .isEqualTo(Gate.COMMIT_PAUSE)
-        assertThat(InsulinTimingHistory.gateOf(row(0, bg = 6.1, mealState = "CONFIRMED", slope = 2.0, delta5m = 0.3, accel = 0.2)))
-            .isEqualTo(Gate.DELTA_TO_TARGET)
-        assertThat(InsulinTimingHistory.gateOf(row(0, bg = 7.0, mealState = "CONFIRMED", slope = 0.2, delta5m = 0.02, accel = 0.2)))
-            .isEqualTo(Gate.SLOW_RISE)
-        assertThat(InsulinTimingHistory.gateOf(row(0, bg = 7.0, mealState = "CONFIRMED", slope = 2.0, delta5m = 0.3, accel = 0.05)))
-            .isEqualTo(Gate.ACCELERATION)
-        assertThat(InsulinTimingHistory.gateOf(row(0, bg = 7.0, mealState = "CONFIRMED", slope = 2.0, delta5m = 0.3, accel = 0.2)))
-            .isEqualTo(Gate.OTHER)
+    fun `an open row has no closed limit`() {
+        assertThat(InsulinTimingHistory.closedGates(openRow())).isEmpty()
     }
 
     @Test
-    fun `waiting cycles before the first commit are counted with their limit`() {
+    fun `each limit is reported on its own`() {
+        assertThat(InsulinTimingHistory.closedGates(openRow(mealState = "NONE")))
+            .containsExactly(Gate.MEAL_NOT_RECOGNIZED)
+        assertThat(InsulinTimingHistory.closedGates(openRow(doseAccess = "SMALL")))
+            .containsExactly(Gate.ACCESS_LEVEL)
+        assertThat(InsulinTimingHistory.closedGates(openRow(commitAllowed = false)))
+            .containsExactly(Gate.COMMIT_PAUSE)
+        assertThat(InsulinTimingHistory.closedGates(openRow(bg = 5.8)))
+            .containsExactly(Gate.DELTA_TO_TARGET)
+        assertThat(InsulinTimingHistory.closedGates(openRow(slope = 0.2, delta5m = 0.02)))
+            .containsExactly(Gate.SLOW_RISE)
+        assertThat(InsulinTimingHistory.closedGates(openRow(accel = 0.05)))
+            .containsExactly(Gate.ACCELERATION)
+    }
+
+    @Test
+    fun `several closed limits are all reported`() {
+        val closed = InsulinTimingHistory.closedGates(openRow(mealState = "NONE", bg = 5.5, slope = 0.1, delta5m = 0.01, accel = 0.0))
+        assertThat(closed).containsExactly(
+            Gate.MEAL_NOT_RECOGNIZED, Gate.DELTA_TO_TARGET, Gate.SLOW_RISE, Gate.ACCELERATION
+        )
+    }
+
+    @Test
+    fun `the commit pause is not reported when the meal is not recognized`() {
+        // The algorithm only writes the commit pause when it runs the commit path, which needs a recognized meal.
+        assertThat(InsulinTimingHistory.closedGates(openRow(mealState = "NONE", commitAllowed = false)))
+            .containsExactly(Gate.MEAL_NOT_RECOGNIZED)
+    }
+
+    @Test
+    fun `the smooth start of the commit is open and is marked`() {
+        // Target 5.4: 0.7 mmol/L above target is inside the smooth start, 0.4 is below it, 0.9 is above it.
+        val inRamp = InsulinTimingHistory.waitCycleOf(openRow(bg = 6.1))
+        assertThat(inRamp.closed).isEmpty()
+        assertThat(inRamp.inRamp).isTrue()
+        val below = InsulinTimingHistory.waitCycleOf(openRow(bg = 5.8))
+        assertThat(below.closed).containsExactly(Gate.DELTA_TO_TARGET)
+        assertThat(below.inRamp).isFalse()
+        val above = InsulinTimingHistory.waitCycleOf(openRow(bg = 6.3))
+        assertThat(above.closed).isEmpty()
+        assertThat(above.inRamp).isFalse()
+    }
+
+    @Test
+    fun `waiting cycles before the first commit are counted with their limits`() {
         val rows = listOf(
             row(0),
             row(1, delta5m = 0.2, mealState = "NONE"),
@@ -101,9 +147,40 @@ class InsulinTimingHistoryTest {
         assertThat(waits).hasSize(1)
         assertThat(waits.first().waitCycles).isEqualTo(3)
         assertThat(waits.first().waitMin).isEqualTo(15)
-        assertThat(waits.first().gates)
+        // The first two cycles had no meal. In the third the meal was recognized but the access level was small.
+        assertThat(waits.first().cycles.map { it.closed.first() })
             .containsExactly(Gate.MEAL_NOT_RECOGNIZED, Gate.MEAL_NOT_RECOGNIZED, Gate.ACCESS_LEVEL)
             .inOrder()
+        assertThat(waits.first().cycles[2].closed).doesNotContain(Gate.MEAL_NOT_RECOGNIZED)
+    }
+
+    @Test
+    fun `the summary counts a limit only when it was the only closed one`() {
+        val day = 24 * 60 * 60_000L
+        val wait = InsulinTimingHistory.FirstCommitWait(
+            timeMs = baseMs + day,
+            waitCycles = 5,
+            waitMin = 25,
+            cycles = listOf(
+                InsulinTimingHistory.WaitCycle(setOf(Gate.DELTA_TO_TARGET), inRamp = false),
+                InsulinTimingHistory.WaitCycle(setOf(Gate.DELTA_TO_TARGET), inRamp = false),
+                InsulinTimingHistory.WaitCycle(setOf(Gate.MEAL_NOT_RECOGNIZED, Gate.DELTA_TO_TARGET, Gate.SLOW_RISE), inRamp = false),
+                InsulinTimingHistory.WaitCycle(emptySet(), inRamp = true),
+                InsulinTimingHistory.WaitCycle(setOf(Gate.ACCELERATION), inRamp = false)
+            )
+        )
+        val result = InsulinTimingHistory.Result(emptyList(), listOf(wait))
+        val zone = java.time.ZoneOffset.UTC
+        val today = java.time.Instant.ofEpochMilli(baseMs + day).atZone(zone).toLocalDate()
+        val s = InsulinTimingHistory.summary(result, today, 28, zone)
+        assertThat(s.waitCycles).isEqualTo(5)
+        assertThat(s.soleGateCounts[Gate.DELTA_TO_TARGET]).isEqualTo(2)
+        assertThat(s.soleGateCounts[Gate.ACCELERATION]).isEqualTo(1)
+        assertThat(s.soleGateCounts[Gate.MEAL_NOT_RECOGNIZED]).isNull()
+        assertThat(s.severalGatesCycles).isEqualTo(1)
+        assertThat(s.openCycles).isEqualTo(1)
+        assertThat(s.rampCycles).isEqualTo(1)
+        assertThat(InsulinTimingHistory.topGate(s)).isEqualTo(Gate.DELTA_TO_TARGET to 40)
     }
 
     @Test

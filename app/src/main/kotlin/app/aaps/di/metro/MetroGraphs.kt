@@ -38,7 +38,9 @@ import app.aaps.core.interfaces.sharedPreferences.KeyValueStore
 import app.aaps.core.interfaces.source.DexcomBoyda
 import app.aaps.core.interfaces.source.XDripSource
 import app.aaps.core.interfaces.storage.Storage
+import app.aaps.core.interfaces.ui.IconsProvider
 import app.aaps.core.interfaces.ui.UiInteraction
+import app.aaps.core.interfaces.ui.UiRestart
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.interfaces.utils.DecimalFormatter
 import app.aaps.core.interfaces.utils.HardLimits
@@ -271,6 +273,7 @@ class MetroGraphs(
     val dateUtil: DateUtil get() = root.dateUtil
     val l: L get() = root.l
     val keyValueStore: KeyValueStore get() = root.keyValueStore
+    val iconsProvider: IconsProvider get() = root.iconsProvider
     val widgetUpdater: WidgetUpdater get() = root.widgetUpdater
     val commandQueue: CommandQueue get() = root.commandQueue
     val localAlertUtils: LocalAlertUtils get() = root.localAlertUtils
@@ -281,6 +284,7 @@ class MetroGraphs(
     val profileSwitchScheduler: ProfileSwitchScheduler get() = root.profileSwitchScheduler
     val snackbarNotificationFallback: SnackbarNotificationFallback get() = root.snackbarNotificationFallback
     val eatReminder: EatReminder get() = root.eatReminder
+    val uiRestart: UiRestart get() = root.uiRestart
     val activePlugin: ActivePlugin get() = root.activePlugin
     val pluginStore: PluginStore get() = root.pluginStore
     val maintenance: Maintenance get() = root.maintenance

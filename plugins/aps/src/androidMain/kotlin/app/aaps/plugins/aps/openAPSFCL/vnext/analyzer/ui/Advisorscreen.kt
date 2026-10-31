@@ -145,6 +145,7 @@ fun AdvisorScreen(
             add(InfoTabPage("Experimenteel") {
                 val coverContext = androidx.compose.ui.platform.LocalContext.current
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    InsulinBudgetKaart(coverContext)
                     CoverTrialKaart(coverContext)
                     CoverIsfKaart(coverContext)
                     CoverShadowKaart(coverContext)

@@ -43,6 +43,9 @@ private const val TIMING_TREND_WEEKS = 4
 /** Fewer meals than this: no advice, only the numbers. */
 private const val TIMING_MIN_EPISODES = 5
 
+/** A limit is only named in the advice when it was the only closed limit in at least this percent of the waiting cycles. */
+private const val TIMING_MIN_TOP_SHARE_PCT = 10
+
 /** Card on the Experimental tab with the timing of the insulin against the BG peak. */
 @Composable
 fun InsulinTimingKaart(context: Context) {
@@ -102,7 +105,7 @@ private fun TimingAdvice(s: InsulinTimingHistory.Summary) {
     }
     Text(lagText, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
     val top = InsulinTimingHistory.topGate(s)
-    if (top != null && lag > InsulinTimingHistory.IN_STEP_LAG_MIN) {
+    if (top != null && top.second >= TIMING_MIN_TOP_SHARE_PCT && lag > InsulinTimingHistory.IN_STEP_LAG_MIN) {
         Text(stringResource(R.string.fcl_timing_gate_top, gateLabel(top.first), top.second),
              style = MaterialTheme.typography.bodySmall)
         Text(gateHint(top.first),
@@ -123,28 +126,43 @@ private fun TimingNumbers(s: InsulinTimingHistory.Summary) {
     }
 }
 
-/** Which limit was closed first in the cycles before the first commit. */
+/**
+ * What held back the first commit, in the cycles where the BG was already rising. Per limit: how often it was the
+ * only closed limit. Then the cycles with several closed limits, the cycles with all limits open, and the cycles
+ * in the smooth start of the commit.
+ */
 @Composable
 private fun TimingGates(s: InsulinTimingHistory.Summary) {
-    val total = s.gateCounts.values.sum()
+    val total = s.waitCycles
     if (total <= 0) return
     val headColor = MaterialTheme.colorScheme.onSurfaceVariant
     Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(top = 8.dp)) {
         Text(stringResource(R.string.fcl_timing_gates_title),
              style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-        Text(stringResource(R.string.fcl_timing_gates_intro),
+        Text(stringResource(R.string.fcl_timing_gates_intro, total),
              style = MaterialTheme.typography.labelSmall, color = headColor)
         Gate.entries.forEach { g ->
-            val count = s.gateCounts[g] ?: 0
-            if (count > 0) {
-                Row(Modifier.fillMaxWidth()) {
-                    Text(gateLabel(g), Modifier.weight(2.2f), style = MaterialTheme.typography.bodySmall)
-                    Text(stringResource(R.string.fcl_timing_gate_cell, count, (100.0 * count / total).roundToInt()),
-                         Modifier.weight(1f), style = MaterialTheme.typography.bodySmall,
-                         fontWeight = FontWeight.SemiBold, textAlign = TextAlign.End)
-                }
-            }
+            TimingCountRow(gateLabel(g), s.soleGateCounts[g] ?: 0, total)
         }
+        TimingCountRow(stringResource(R.string.fcl_timing_gate_several), s.severalGatesCycles, total)
+        TimingCountRow(stringResource(R.string.fcl_timing_gate_open), s.openCycles, total)
+        if (s.rampCycles > 0) {
+            Text(stringResource(R.string.fcl_timing_gate_ramp, s.rampCycles,
+                                CommitGate.DELTA_RAMP_START.toFloat(), CommitGate.DELTA_RAMP_END.toFloat()),
+                 style = MaterialTheme.typography.labelSmall, color = headColor)
+        }
+    }
+}
+
+/** One row of the table: the name and the number of cycles with the share. Nothing when the count is 0. */
+@Composable
+private fun TimingCountRow(label: String, count: Int, total: Int) {
+    if (count <= 0) return
+    Row(Modifier.fillMaxWidth()) {
+        Text(label, Modifier.weight(2.2f), style = MaterialTheme.typography.bodySmall)
+        Text(stringResource(R.string.fcl_timing_gate_cell, count, (100.0 * count / total).roundToInt()),
+             Modifier.weight(1f), style = MaterialTheme.typography.bodySmall,
+             fontWeight = FontWeight.SemiBold, textAlign = TextAlign.End)
     }
 }
 
@@ -179,10 +197,9 @@ private fun gateLabel(g: Gate): String = when (g) {
     Gate.MEAL_NOT_RECOGNIZED -> stringResource(R.string.fcl_timing_gate_meal)
     Gate.ACCESS_LEVEL        -> stringResource(R.string.fcl_timing_gate_access)
     Gate.COMMIT_PAUSE        -> stringResource(R.string.fcl_timing_gate_pause)
-    Gate.DELTA_TO_TARGET     -> stringResource(R.string.fcl_timing_gate_delta, CommitGate.MIN_DELTA_TO_TARGET.toFloat())
+    Gate.DELTA_TO_TARGET     -> stringResource(R.string.fcl_timing_gate_delta, CommitGate.DELTA_RAMP_START.toFloat())
     Gate.SLOW_RISE           -> stringResource(R.string.fcl_timing_gate_slow)
     Gate.ACCELERATION        -> stringResource(R.string.fcl_timing_gate_accel)
-    Gate.OTHER               -> stringResource(R.string.fcl_timing_gate_other)
 }
 
 @Composable
@@ -190,8 +207,8 @@ private fun gateHint(g: Gate): String = when (g) {
     Gate.MEAL_NOT_RECOGNIZED -> stringResource(R.string.fcl_timing_hint_meal)
     Gate.ACCESS_LEVEL        -> stringResource(R.string.fcl_timing_hint_access)
     Gate.COMMIT_PAUSE        -> stringResource(R.string.fcl_timing_hint_pause)
-    Gate.DELTA_TO_TARGET     -> stringResource(R.string.fcl_timing_hint_delta, CommitGate.MIN_DELTA_TO_TARGET.toFloat())
+    Gate.DELTA_TO_TARGET     -> stringResource(R.string.fcl_timing_hint_delta,
+                                               CommitGate.DELTA_RAMP_START.toFloat(), CommitGate.DELTA_RAMP_END.toFloat())
     Gate.SLOW_RISE           -> stringResource(R.string.fcl_timing_hint_slow)
     Gate.ACCELERATION        -> stringResource(R.string.fcl_timing_hint_accel)
-    Gate.OTHER               -> stringResource(R.string.fcl_timing_gate_other)
 }

@@ -3,6 +3,7 @@ package app.aaps.plugins.aps.openAPSFCL.vnext.analyzer
 import android.content.Context
 import app.aaps.plugins.aps.openAPSFCL.vnext.CoverIsf
 import app.aaps.plugins.aps.openAPSFCL.vnext.CoverTrial
+import app.aaps.plugins.aps.openAPSFCL.vnext.InsulinBudget
 import app.aaps.plugins.aps.openAPSFCL.vnext.database.CycleCoverRow
 import app.aaps.plugins.aps.openAPSFCL.vnext.database.FCLCycleLogRepository
 import kotlinx.coroutines.CoroutineScope
@@ -465,6 +466,8 @@ object CoverIsfHistory {
                 // The trial (CoverTrial) reads the measured medians from here and is judged once per hour.
                 CoverTrial.measuredTable = shadowTable(load(context), LocalDate.now(zone))
                 CoverTrial.judge(context, repository)
+                // The personal insulin per rise for the limit per rise (InsulinBudget), also once per hour.
+                InsulinBudget.refreshReference(context)
             } catch (_: Exception) {
                 // try again next hour
             } finally {

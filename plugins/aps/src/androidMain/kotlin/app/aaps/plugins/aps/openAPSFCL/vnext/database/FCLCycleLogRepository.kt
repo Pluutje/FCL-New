@@ -4,6 +4,7 @@ import android.content.Context
 import app.aaps.plugins.aps.openAPSFCL.vnext.CoverIsf
 import app.aaps.plugins.aps.openAPSFCL.vnext.CoverTrial
 import app.aaps.plugins.aps.openAPSFCL.vnext.FclActiveConfigBridge
+import app.aaps.plugins.aps.openAPSFCL.vnext.InsulinBudget
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.CoverIsfHistory
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.DFLearner
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.EpisodeDetector
@@ -794,6 +795,7 @@ class FCLCycleLogRepository @Inject constructor(
         }
 
         val trialEvents = try { CoverTrial.loadEvents(context) } catch (_: Exception) { emptyList() }
+        val budgetEvents = try { InsulinBudget.loadEvents(context) } catch (_: Exception) { emptyList() }
 
         file.bufferedWriter().use { writer ->
             writer.write(csvHeader(sep))
@@ -822,7 +824,7 @@ class FCLCycleLogRepository @Inject constructor(
                         persist?.active ?: false, persist?.fired ?: false,
                         persist?.persistentCounter ?: 0, persist?.doseU ?: 0.0,
                         persist?.escalationFactor ?: 1.0, persist?.reason ?: "",
-                        shadowTable, trialEvents
+                        shadowTable, trialEvents, budgetEvents
                     )
                 )
                 writer.newLine()
@@ -933,7 +935,9 @@ private fun csvHeader(sep: String): String = listOf(
     // ── SCHADUW (23/10/2026) — "wat als de gemeten dekkingswaarde was gebruikt", alleen bij een commit ──
     "shadow_cover_factor", "shadow_commit_brake_now", "shadow_commit_brake", "shadow_extra_u",
     // ── PROEF (23/10/2026) — extra insuline van de dekkingsproef (CoverTrial) in deze cyclus ──
-    "cover_trial_s", "cover_trial_extra_u"
+    "cover_trial_s", "cover_trial_extra_u",
+    // ── BEGRENZING PER STIJGING (29/10/2026) — alleen gevuld in cycli waarin de begrenzing ingreep (of op "Alleen meten" zou ingrijpen) ──
+    "budget_wanted_u", "budget_limited_u", "budget_room_u", "budget_applied", "budget_brake"
 ).joinToString(sep)
 
 // ── CSV regel — delta_target afgeleid als bg - target ────────────────────
@@ -969,9 +973,11 @@ private fun FCLCycleLogEntity.toCsvLine(
     persistEscalation: Double,
     persistReason: String,
     shadowTable: Array<DoubleArray>,
-    trialEvents: List<CoverTrial.Event>
+    trialEvents: List<CoverTrial.Event>,
+    budgetEvents: List<InsulinBudget.Event>
 ): String {
     val trialEvent = CoverTrial.nearest(trialEvents, timestampMs, 150_000L)
+    val budgetEvent = InsulinBudget.nearest(budgetEvents, timestampMs, 150_000L)
     val ts = fmt.format(Instant.ofEpochMilli(timestampMs))
     val tsLocal = fmtLocal.format(Instant.ofEpochMilli(timestampMs))
     val deltaTarget = glucoseIob.bg - glucoseIob.target
@@ -1092,6 +1098,10 @@ private fun FCLCycleLogEntity.toCsvLine(
         d3(shadow?.factor ?: 0.0), d3(shadow?.brakeNow ?: 1.0), d3(shadow?.brakeShadow ?: 1.0), d2(shadow?.extraU ?: 0.0),
         // ── PROEF (23/10/2026) ── 0 / 0,00 als de proef deze cyclus niets toevoegde. Bij een proef-cyclus is
         // commit_dose_final al inclusief de extra dosis, dus de shadow-kolommen daarvan niet meetellen.
-        d2(trialEvent?.strength ?: 0.0), d2(trialEvent?.extraU ?: 0.0)
+        d2(trialEvent?.strength ?: 0.0), d2(trialEvent?.extraU ?: 0.0),
+        // ── BEGRENZING PER STIJGING (29/10/2026) ── 0,00 / false als de begrenzing deze cyclus niets deed.
+        // room kan negatief zijn (budget al op). Zie InsulinBudget.
+        d2(budgetEvent?.wantedU ?: 0.0), d2(budgetEvent?.limitedU ?: 0.0), d2(budgetEvent?.roomU ?: 0.0),
+        bool(budgetEvent?.applied ?: false), bool(budgetEvent?.brake ?: false)
     ).joinToString(sep)
 }

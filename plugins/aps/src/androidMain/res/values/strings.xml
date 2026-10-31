@@ -237,23 +237,25 @@
     <string name="fcl_timing_adv_late" comment="%1$d=minutes the insulin peak is after the BG peak. Example: 15">De piek van de insuline valt gemiddeld %1$d min na de piek van de BG. Hoe eerder de insuline komt, hoe lager de piek. Grof gerekend geeft 5 min eerder 0,5 tot 0,9 mmol minder piek.</string>
     <string name="fcl_timing_adv_early" comment="%1$d=minutes the insulin peak is before the BG peak. Example: 15">De piek van de insuline valt gemiddeld %1$d min voor de piek van de BG. De insuline komt dus vroeg genoeg.</string>
     <string name="fcl_timing_adv_in_step" comment="%1$+d=minutes, plus means after the BG peak. Example: +5">De piek van de insuline valt vrijwel samen met de piek van de BG (%1$+d min). Dat is goed in de pas.</string>
-    <string name="fcl_timing_gate_top" comment="%1$s=name of the limit, %2$d=percent of the waiting cycles. Example: maaltijd nog niet herkend and 46">Grootste rem voor de eerste commit: %1$s (%2$d%% van de wachtcycli).</string>
+    <string name="fcl_timing_gate_top" comment="%1$s=name of the limit, %2$d=percent of the waiting cycles. Example: stijging te traag and 12">Vaakst de enige rem voor de eerste commit: %1$s (%2$d%% van de wachtcycli).</string>
     <string name="fcl_timing_summary" comment="%1$d=days, %2$d=meals, %3$+d=median minutes, %4$+d and %5$+d=middle half in minutes, %6$d=percent of the meals, %7$d=minutes. Example: 28, 18, +20, +11, +29, 44, 20">Laatste %1$d dagen: %2$d maaltijden. Mediaan %3$+d min (de middelste helft tussen %4$+d en %5$+d min). Bij %6$d%% van de maaltijden is de insulinepiek meer dan %7$d min na de BG-piek.</string>
     <string name="fcl_timing_wait" comment="%1$d=meals, %2$d=median minutes. Example: 34 and 15">Eerste commit: %1$d maaltijden. De BG steeg al, mediaan %2$d min voor de commit er was.</string>
     <string name="fcl_timing_gates_title">Wat hield de eerste commit tegen</string>
-    <string name="fcl_timing_gates_intro">Per cyclus waarin de BG al steeg maar de commit er nog niet was: de eerste grens die dicht zat.</string>
+    <string name="fcl_timing_gates_intro" comment="%1$d=number of waiting cycles. Example: 120">Er waren %1$d cycli waarin de BG al steeg maar de commit er nog niet was. Per grens: hoe vaak was dit de enige grens die dicht zat? Dan had alleen het openen van die grens de commit gegeven. Zaten er meer grenzen dicht, dan steeg de BG nog niet genoeg.</string>
     <string name="fcl_timing_gate_cell" comment="%1$d=cycles, %2$d=percent. Example: 49 (46%)">%1$d (%2$d%%)</string>
     <string name="fcl_timing_gate_meal">maaltijd nog niet herkend</string>
     <string name="fcl_timing_gate_access">toegangsniveau (stijging te traag voor een grote dosis)</string>
     <string name="fcl_timing_gate_pause">pauze tussen commits</string>
-    <string name="fcl_timing_gate_delta" comment="%1$.1f=mmol/L above target. Example: 0.8">BG minder dan %1$.1f mmol boven target</string>
+    <string name="fcl_timing_gate_delta" comment="%1$.1f=mmol/L above target where the commit starts. Example: 0.5">BG minder dan %1$.1f mmol boven target</string>
     <string name="fcl_timing_gate_slow">stijging te traag</string>
     <string name="fcl_timing_gate_accel">versnelling te laag</string>
-    <string name="fcl_timing_gate_other">overig</string>
+    <string name="fcl_timing_gate_several">meer dan één grens tegelijk dicht (de BG steeg nog niet genoeg)</string>
+    <string name="fcl_timing_gate_open">alle grenzen open, commit nog klein of afgeremd</string>
+    <string name="fcl_timing_gate_ramp" comment="%1$d=cycles, %2$.1f and %3$.1f=mmol/L above target. Example: 12, 0.5 and 0.8">Waarvan %1$d cycli in de zachte start van de commit (%2$.1f tot %3$.1f mmol boven target). De commit was toen open, maar kleiner dan volledig.</string>
     <string name="fcl_timing_hint_meal">De maaltijd wordt later herkend dan de BG begint te stijgen. Dat hangt af van de herkenningsdrempels en van de eerste meetpunten.</string>
     <string name="fcl_timing_hint_access">Het toegangsniveau staat nog op klein of micro. Een grote dosis mag pas bij een snellere stijging.</string>
     <string name="fcl_timing_hint_pause">De pauze tussen twee commits houdt de dosis tegen.</string>
-    <string name="fcl_timing_hint_delta" comment="%1$.1f=mmol/L above target. Example: 0.8">De grens van %1$.1f mmol boven target kost tijd bij een stijging vlak boven target. Een zachtere grens kan helpen, maar let op kleine maaltijden.</string>
+    <string name="fcl_timing_hint_delta" comment="%1$.1f=mmol/L above target where the commit starts, %2$.1f=where it is full. Example: 0.5 and 0.8">Onder %1$.1f mmol boven target is er geen commit. De commit groeit zacht tot hij op %2$.1f mmol vol is. Een stijging vlak boven target kost daardoor nog wat tijd.</string>
     <string name="fcl_timing_hint_slow">De stijging is nog te traag voor een commit.</string>
     <string name="fcl_timing_hint_accel">De versnelling is nog te laag voor een commit.</string>
     <string name="fcl_timing_trend_title">Verloop per week</string>
@@ -290,5 +292,28 @@
     <string name="fcl_trial_mmol" comment="%1$.1f=mmol/L. Example: 3.9 mmol">%1$.1f mmol</string>
     <string name="fcl_trial_units" comment="%1$.1f=units. Example: 0.5 E">%1$.1f E</string>
     <string name="fcl_trial_slope" comment="%1$.1f=mmol/L per hour. Example: 4.0 mmol/u">%1$.1f mmol/u</string>
+
+    <!-- Begrenzing per stijging (InsulinBudget) -->
+    <string name="fcl_budget_title">Begrenzing per stijging</string>
+    <string name="fcl_budget_state" comment="%1$s=name of the level. Example: Normaal">Niveau: %1$s</string>
+    <string name="fcl_budget_intro">Tijdens een stijging geeft het algoritme de insuline in stappen. Deze begrenzing let erop dat de insuline niet harder oploopt dan de stijging zelf rechtvaardigt, gemeten aan jouw eigen laatste 4 weken. Zo wordt een te grote dosis bij een kleine maaltijd teruggebracht en kom je na de piek minder vaak te laag uit. De begrenzing verlaagt alleen en werkt niet bij een vlakke BG.</string>
+    <string name="fcl_budget_choose">Kies hoe streng</string>
+    <string name="fcl_budget_level_measure">Alleen meten</string>
+    <string name="fcl_budget_level_wide">Ruim</string>
+    <string name="fcl_budget_level_normal">Normaal</string>
+    <string name="fcl_budget_level_strict">Strak</string>
+    <string name="fcl_budget_desc_measure">De dosering verandert niet. Hieronder zie je hoe vaak Normaal zou ingrijpen.</string>
+    <string name="fcl_budget_desc_wide">Grijpt alleen in bij een duidelijk te grote dosis. Een veilige eerste stap als je na een maaltijd soms te laag komt.</string>
+    <string name="fcl_budget_desc_normal">Grijpt eerder in. Past als je na de piek regelmatig te laag uitkomt.</string>
+    <string name="fcl_budget_desc_strict">Grijpt het vroegst in. Alleen als Normaal nog te veel lage waarden geeft. De BG kan na een maaltijd hoger worden.</string>
+    <string name="fcl_budget_ref_title">Jouw eigen maat</string>
+    <string name="fcl_budget_ref" comment="%1$.2f=units per mmol/L rise, %2$d=number of meals. Example: 0.85 E per mmol/L, 40 maaltijden">Jouw gemiddelde dosis is %1$.2f E per mmol/L stijging (laatste 28 dagen, %2$d maaltijden).</string>
+    <string name="fcl_budget_ref_none" comment="%1$d=meals found, %2$d=meals needed. Example: 8 of 15">Nog te weinig maaltijden om je eigen maat te bepalen (%1$d van %2$d). Tot dan doet de begrenzing niets.</string>
+    <string name="fcl_budget_results_title" comment="%1$d=days. Example: 7">Laatste %1$d dagen</string>
+    <string name="fcl_budget_results_none">Nog geen dosis die de begrenzing had afgeknepen.</string>
+    <string name="fcl_budget_results_applied" comment="%1$d=times, %2$.1f=units, %3$d=days">De begrenzing greep %1$d keer in en hield samen %2$.1f E tegen, op %3$d dagen.</string>
+    <string name="fcl_budget_results_measure" comment="%1$d=times, %2$.1f=units, %3$d=days">Normaal zou %1$d keer hebben ingegrepen en samen %2$.1f E hebben tegengehouden, op %3$d dagen.</string>
+    <string name="fcl_budget_brake" comment="%1$d=cycles">De piekrem hield %1$d keer een stijgende BG tegen terwijl er nog ruimte was. Dit wordt alleen geteld, de piekrem verandert niet.</string>
+    <string name="fcl_budget_note">Alle bescherming tegen een lage BG blijft gelden. De begrenzing kan een dosis alleen kleiner maken, nooit groter.</string>
 
 </resources>

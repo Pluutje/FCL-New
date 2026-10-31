@@ -16,7 +16,10 @@ import kotlin.math.roundToInt
  *     assumed insulin model ([ASSUMED_PEAK_MIN] minutes to the peak, [ASSUMED_DIA_MIN] minutes in total).
  *     A positive lag means the insulin peak comes after the BG peak (the insulin is late).
  *  2. The wait before the first commit: the cycles where the BG was already rising but the commit was
- *     not there yet, and which limit was closed first in each of these cycles ([Gate]).
+ *     not there yet, and which limits ([Gate]) were closed in each of these cycles. All closed limits are
+ *     listed, not only the first one. The useful number is how often ONE limit was the only one closed:
+ *     opening that limit alone would have given the commit. When several limits are closed together,
+ *     the BG simply was not rising enough yet.
  *
  * Pure calculation on rows of the cycle log, so it can be tested without Android.
  */
@@ -72,8 +75,14 @@ object InsulinTimingHistory {
     private const val MAX_WAIT_CYCLES = 8
     private const val MAX_WAIT_MIN = 40L
 
-    /** The limit that was closed first in a cycle. */
-    enum class Gate { MEAL_NOT_RECOGNIZED, ACCESS_LEVEL, COMMIT_PAUSE, DELTA_TO_TARGET, SLOW_RISE, ACCELERATION, OTHER }
+    /** A limit of the commit that can be closed in a cycle. */
+    enum class Gate { MEAL_NOT_RECOGNIZED, ACCESS_LEVEL, COMMIT_PAUSE, DELTA_TO_TARGET, SLOW_RISE, ACCELERATION }
+
+    /**
+     * One waiting cycle: the limits that were closed, and if the BG was in the smooth start of the
+     * commit (between [CommitGate.DELTA_RAMP_START] and [CommitGate.DELTA_RAMP_END] mmol/L above target).
+     */
+    data class WaitCycle(val closed: Set<Gate>, val inRamp: Boolean)
 
     data class Episode(
         val peakMs: Long,
@@ -90,7 +99,7 @@ object InsulinTimingHistory {
         val timeMs: Long,
         val waitCycles: Int,
         val waitMin: Int,
-        val gates: List<Gate>
+        val cycles: List<WaitCycle>
     )
 
     data class Result(val episodes: List<Episode>, val waits: List<FirstCommitWait>)
@@ -105,7 +114,14 @@ object InsulinTimingHistory {
         val firstCommits: Int,
         val medianWaitMin: Double,
         val waitCycles: Int,
-        val gateCounts: Map<Gate, Int>
+        /** Per limit: waiting cycles in which this was the ONLY closed limit. */
+        val soleGateCounts: Map<Gate, Int>,
+        /** Waiting cycles with two or more closed limits (the BG was not rising enough yet). */
+        val severalGatesCycles: Int,
+        /** Waiting cycles with no closed limit (the commit was open but small or held back by a brake). */
+        val openCycles: Int,
+        /** Waiting cycles in the smooth start of the commit (0.5 to 0.8 mmol/L above target). */
+        val rampCycles: Int
     )
 
     data class WeekPoint(val lastDay: LocalDate, val episodes: Int, val medianLagMin: Double)
@@ -281,20 +297,37 @@ object InsulinTimingHistory {
             ) j--
             val waiting = rows.subList(j, i)
             val waitMin = if (waiting.isEmpty()) 0 else ((r.timestampMs - waiting.first().timestampMs) / 60_000L).toInt()
-            result.add(FirstCommitWait(r.timestampMs, waiting.size, waitMin, waiting.map { gateOf(it) }))
+            result.add(FirstCommitWait(r.timestampMs, waiting.size, waitMin, waiting.map { waitCycleOf(it) }))
         }
         return result
     }
 
-    /** The limit that was closed first in this cycle, in the order the algorithm checks them. */
-    internal fun gateOf(r: CycleTimingRow): Gate = when {
-        r.mealState == "NONE"                                  -> Gate.MEAL_NOT_RECOGNIZED
-        r.doseAccess != "NORMAL"                               -> Gate.ACCESS_LEVEL
-        !r.effectiveCommitAllowed                              -> Gate.COMMIT_PAUSE
-        r.bg - r.target < CommitGate.MIN_DELTA_TO_TARGET       -> Gate.DELTA_TO_TARGET
-        !CommitGate.fastLane(r.recentDelta5m, r.recentSlope)   -> Gate.SLOW_RISE
-        !CommitGate.accelOk(r.accel, r.recentDelta5m)          -> Gate.ACCELERATION
-        else                                                   -> Gate.OTHER
+    /**
+     * All limits that are closed in this cycle. Every limit is checked on its own.
+     *
+     * The commit pause is only known when the meal was recognized: the algorithm writes it to the log only
+     * when it runs the commit path, which needs a recognized meal.
+     *
+     * The delta limit counts as closed only below [CommitGate.DELTA_RAMP_START]. Between the start and the
+     * end of the smooth start the commit is open, with a smaller size. The limits are those of the
+     * current algorithm, also for cycles from before they were changed.
+     */
+    internal fun closedGates(r: CycleTimingRow): Set<Gate> {
+        val closed = LinkedHashSet<Gate>()
+        val recognized = r.mealState != "NONE"
+        if (!recognized)                                                    closed.add(Gate.MEAL_NOT_RECOGNIZED)
+        if (r.doseAccess != "NORMAL")                                       closed.add(Gate.ACCESS_LEVEL)
+        if (recognized && !r.effectiveCommitAllowed)                        closed.add(Gate.COMMIT_PAUSE)
+        if (CommitGate.deltaWeight(r.bg - r.target) <= 0.0)                 closed.add(Gate.DELTA_TO_TARGET)
+        if (!CommitGate.fastLane(r.recentDelta5m, r.recentSlope))           closed.add(Gate.SLOW_RISE)
+        if (!CommitGate.accelOk(r.accel, r.recentDelta5m))                  closed.add(Gate.ACCELERATION)
+        return closed
+    }
+
+    /** The waiting cycle for a row: the closed limits and if the BG is in the smooth start of the commit. */
+    internal fun waitCycleOf(r: CycleTimingRow): WaitCycle {
+        val weight = CommitGate.deltaWeight(r.bg - r.target)
+        return WaitCycle(closedGates(r), inRamp = weight > 0.0 && weight < 1.0)
     }
 
     // ── Summary ──────────────────────────────────────────────────────────────────
@@ -306,7 +339,19 @@ object InsulinTimingHistory {
         val waits = result.waits.filter { it.timeMs >= from }
         val lags = episodes.map { it.lagMin.toDouble() }
         val counts = HashMap<Gate, Int>()
-        waits.forEach { w -> w.gates.forEach { g -> counts[g] = (counts[g] ?: 0) + 1 } }
+        var several = 0
+        var open = 0
+        var ramp = 0
+        waits.forEach { w ->
+            w.cycles.forEach { c ->
+                when (c.closed.size) {
+                    0    -> open++
+                    1    -> c.closed.first().let { g -> counts[g] = (counts[g] ?: 0) + 1 }
+                    else -> several++
+                }
+                if (c.inRamp) ramp++
+            }
+        }
         return Summary(
             episodes = episodes.size,
             medianLagMin = median(lags),
@@ -316,7 +361,10 @@ object InsulinTimingHistory {
             firstCommits = waits.size,
             medianWaitMin = median(waits.map { it.waitMin.toDouble() }),
             waitCycles = waits.sumOf { it.waitCycles },
-            gateCounts = counts
+            soleGateCounts = counts,
+            severalGatesCycles = several,
+            openCycles = open,
+            rampCycles = ramp
         )
     }
 
@@ -331,11 +379,10 @@ object InsulinTimingHistory {
             WeekPoint(last, lags.size, median(lags))
         }
 
-    /** The gate that held back the most cycles (without [Gate.OTHER]), and its share of all waiting cycles. */
+    /** The limit that was most often the only closed one, and its share (percent) of all waiting cycles. */
     fun topGate(s: Summary): Pair<Gate, Int>? {
-        val total = s.gateCounts.values.sum()
-        if (total <= 0) return null
-        val top = s.gateCounts.filterKeys { it != Gate.OTHER }.maxByOrNull { it.value } ?: return null
-        return top.key to (100.0 * top.value / total).roundToInt()
+        if (s.waitCycles <= 0) return null
+        val top = s.soleGateCounts.maxByOrNull { it.value } ?: return null
+        return top.key to (100.0 * top.value / s.waitCycles).roundToInt()
     }
 }
