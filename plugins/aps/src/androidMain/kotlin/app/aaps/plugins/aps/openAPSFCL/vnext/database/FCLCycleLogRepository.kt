@@ -11,6 +11,7 @@ import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.EpisodeDetector
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.EpisodeMetricsBuilder
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.FrontloadLearner
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.FclLearnerBackup
+import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.FclSettingsExport
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.GvpCalculator
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.toLogRow
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.PostHypoBrakeLogEntity
@@ -71,6 +72,7 @@ class FCLCycleLogRepository @Inject constructor(
             pruneOldData()
             maybeExportCsv()
             maybeWriteBackup()
+            FclSettingsExport.recordChanges(context, preferences)
             maybeRunLearners()
             maybeCgpCalc()
         }
@@ -937,7 +939,7 @@ private fun csvHeader(sep: String): String = listOf(
     // ── PROEF (23/10/2026) — extra insuline van de dekkingsproef (CoverTrial) in deze cyclus ──
     "cover_trial_s", "cover_trial_extra_u",
     // ── BEGRENZING PER STIJGING (29/10/2026) — alleen gevuld in cycli waarin de begrenzing ingreep (of op "Alleen meten" zou ingrijpen) ──
-    "budget_wanted_u", "budget_limited_u", "budget_room_u", "budget_applied", "budget_brake"
+    "budget_wanted_u", "budget_limited_u", "budget_room_u", "budget_applied", "budget_brake", "budget_level"
 ).joinToString(sep)
 
 // ── CSV regel — delta_target afgeleid als bg - target ────────────────────
@@ -1102,6 +1104,7 @@ private fun FCLCycleLogEntity.toCsvLine(
         // ── BEGRENZING PER STIJGING (29/10/2026) ── 0,00 / false als de begrenzing deze cyclus niets deed.
         // room kan negatief zijn (budget al op). Zie InsulinBudget.
         d2(budgetEvent?.wantedU ?: 0.0), d2(budgetEvent?.limitedU ?: 0.0), d2(budgetEvent?.roomU ?: 0.0),
-        bool(budgetEvent?.applied ?: false), bool(budgetEvent?.brake ?: false)
+        bool(budgetEvent?.applied ?: false), bool(budgetEvent?.brake ?: false),
+        (budgetEvent?.levelCode ?: -1).toString()
     ).joinToString(sep)
 }

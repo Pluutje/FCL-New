@@ -57,6 +57,7 @@
     <string name="carbs_suggestion">Carbs Suggestion</string>
     <string name="open_loop_new_suggestion">New suggestion available</string>
     <string name="loop_notification_channel_name">Loop suggestions</string>
+    <string name="loop_notification_channel_silent_name">Loop suggestions during Do Not Disturb</string>
     <string name="open_loop_suggestion_too_old">This suggestion is too old. Nothing was sent to the pump. Wait for the next one.</string>
     <string name="basal_set_correctly">Basal set correctly</string>
     <string name="last_run_label">Last run</string>
@@ -295,24 +296,24 @@
 
     <!-- Begrenzing per stijging (InsulinBudget) -->
     <string name="fcl_budget_title">Begrenzing per stijging</string>
-    <string name="fcl_budget_state" comment="%1$s=name of the level. Example: Normaal">Niveau: %1$s</string>
+    <string name="fcl_budget_state" comment="%1$s=name of the level. Example: Matig">Niveau: %1$s</string>
     <string name="fcl_budget_intro">Tijdens een stijging geeft het algoritme de insuline in stappen. Deze begrenzing let erop dat de insuline niet harder oploopt dan de stijging zelf rechtvaardigt, gemeten aan jouw eigen laatste 4 weken. Zo wordt een te grote dosis bij een kleine maaltijd teruggebracht en kom je na de piek minder vaak te laag uit. De begrenzing verlaagt alleen en werkt niet bij een vlakke BG.</string>
     <string name="fcl_budget_choose">Kies hoe streng</string>
     <string name="fcl_budget_level_measure">Alleen meten</string>
-    <string name="fcl_budget_level_wide">Ruim</string>
-    <string name="fcl_budget_level_normal">Normaal</string>
-    <string name="fcl_budget_level_strict">Strak</string>
-    <string name="fcl_budget_desc_measure">De dosering verandert niet. Hieronder zie je hoe vaak Normaal zou ingrijpen.</string>
-    <string name="fcl_budget_desc_wide">Grijpt alleen in bij een duidelijk te grote dosis. Een veilige eerste stap als je na een maaltijd soms te laag komt.</string>
-    <string name="fcl_budget_desc_normal">Grijpt eerder in. Past als je na de piek regelmatig te laag uitkomt.</string>
-    <string name="fcl_budget_desc_strict">Grijpt het vroegst in. Alleen als Normaal nog te veel lage waarden geeft. De BG kan na een maaltijd hoger worden.</string>
+    <string name="fcl_budget_level_light">Licht</string>
+    <string name="fcl_budget_level_moderate">Matig</string>
+    <string name="fcl_budget_level_strong">Sterk</string>
+    <string name="fcl_budget_desc_measure">De dosering verandert niet. Hieronder zie je hoe vaak Matig zou ingrijpen.</string>
+    <string name="fcl_budget_desc_light">Grijpt alleen in bij een duidelijk te grote dosis. Een veilige eerste stap als je na een maaltijd soms te laag komt.</string>
+    <string name="fcl_budget_desc_moderate">Grijpt eerder in. Past als je na de piek regelmatig te laag uitkomt.</string>
+    <string name="fcl_budget_desc_strong">Grijpt het vroegst in. Alleen als Matig nog te veel lage waarden geeft. De BG kan na een maaltijd hoger worden.</string>
     <string name="fcl_budget_ref_title">Jouw eigen maat</string>
     <string name="fcl_budget_ref" comment="%1$.2f=units per mmol/L rise, %2$d=number of meals. Example: 0.85 E per mmol/L, 40 maaltijden">Jouw gemiddelde dosis is %1$.2f E per mmol/L stijging (laatste 28 dagen, %2$d maaltijden).</string>
     <string name="fcl_budget_ref_none" comment="%1$d=meals found, %2$d=meals needed. Example: 8 of 15">Nog te weinig maaltijden om je eigen maat te bepalen (%1$d van %2$d). Tot dan doet de begrenzing niets.</string>
     <string name="fcl_budget_results_title" comment="%1$d=days. Example: 7">Laatste %1$d dagen</string>
     <string name="fcl_budget_results_none">Nog geen dosis die de begrenzing had afgeknepen.</string>
     <string name="fcl_budget_results_applied" comment="%1$d=times, %2$.1f=units, %3$d=days">De begrenzing greep %1$d keer in en hield samen %2$.1f E tegen, op %3$d dagen.</string>
-    <string name="fcl_budget_results_measure" comment="%1$d=times, %2$.1f=units, %3$d=days">Normaal zou %1$d keer hebben ingegrepen en samen %2$.1f E hebben tegengehouden, op %3$d dagen.</string>
+    <string name="fcl_budget_results_measure" comment="%1$d=times, %2$.1f=units, %3$d=days">Matig zou %1$d keer hebben ingegrepen en samen %2$.1f E hebben tegengehouden, op %3$d dagen.</string>
     <string name="fcl_budget_brake" comment="%1$d=cycles">De piekrem hield %1$d keer een stijgende BG tegen terwijl er nog ruimte was. Dit wordt alleen geteld, de piekrem verandert niet.</string>
     <string name="fcl_budget_note">Alle bescherming tegen een lage BG blijft gelden. De begrenzing kan een dosis alleen kleiner maken, nooit groter.</string>
 

@@ -70,7 +70,7 @@ object FclCsvUploader {
     }
 
     /** BLOCKING via withContext(Dispatchers.IO) — veilig aan te roepen vanuit de UI-thread. */
-    suspend fun upload(context: Context): Result = withContext(Dispatchers.IO) {
+    suspend fun upload(context: Context, settingsJson: String? = null): Result = withContext(Dispatchers.IO) {
         try {
             val url = GeneratedFclSecrets.FCL_CSV_UPLOAD_URL
             val secret = GeneratedFclSecrets.FCL_CSV_UPLOAD_SECRET
@@ -85,6 +85,8 @@ object FclCsvUploader {
                 put("secret", secret)
                 put("deviceId", deviceId)
                 put("csvContent", csvContent)
+                // Settings file for the analysis. An old script ignores this field.
+                if (settingsJson != null) put("settingsContent", settingsJson)
             }
 
             val responseBody = httpPostJson(url, payload.toString())

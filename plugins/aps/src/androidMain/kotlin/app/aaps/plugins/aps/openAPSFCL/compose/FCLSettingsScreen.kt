@@ -38,6 +38,7 @@ import app.aaps.plugins.aps.openAPSFCL.vnext.database.FCLCycleLogRepository
 import app.aaps.plugins.aps.openAPSFCL.vnext.healthconnect.FclHealthConnectPermissions
 import app.aaps.plugins.aps.openAPSFCL.vnext.lang.FclStrings
 import app.aaps.plugins.aps.openAPSFCL.update.FclCsvUploader
+import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.FclSettingsExport
 import app.aaps.plugins.aps.openAPSFCL.update.FclTrustedBuild
 import app.aaps.plugins.aps.openAPSFCL.update.FclUpdateChecker
 import app.aaps.plugins.aps.openAPSFCL.update.FclUpdateInstaller
@@ -1289,7 +1290,8 @@ fun FCLSettingsScreen(
                             }
                             refreshingCsv = false
 
-                            when (val result = FclCsvUploader.upload(ctx)) {
+                            val settingsJson = FclSettingsExport.buildAndSave(ctx, preferences)
+                            when (val result = FclCsvUploader.upload(ctx, settingsJson)) {
                                 is FclCsvUploader.Result.Success -> {
                                     uploadIsError = false
                                     uploadResultText = "Geüpload als ${result.fileName}"

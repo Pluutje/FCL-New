@@ -22,7 +22,7 @@ import kotlin.math.abs
  *  - The limit fades in with the rise speed ([risingWeight]): it does not act when the BG is flat, so a correction of a
  *    high BG is never held back by it.
  *  - It can only lower a dose, never raise it. All hypo protection stays as it is.
- *  - Levels: [Level.MEASURE] only calculates and logs what [Level.NORMAL] would do. The other levels also act.
+ *  - Levels: [Level.MEASURE] only calculates and logs what [Level.MODERATE] would do. The other levels also act.
  *  - Without a reference (fewer than [MIN_EPISODES] meals in the last [REF_DAYS] days) there is no limit.
  *
  * The peak IOB brake is not changed here. Cycles in which that brake held a dose back while there was still room are
@@ -32,11 +32,11 @@ object InsulinBudget {
 
     /** The user setting. [capFactor] is how many times the personal insulin per rise is allowed. */
     enum class Level(val code: Int, val capFactor: Double, val marginU: Double, val acts: Boolean) {
-        /** Only calculates and logs what [NORMAL] would do. Doses stay as they are. */
+        /** Only calculates and logs what [MODERATE] would do. Doses stay as they are. */
         MEASURE(0, 1.5, 0.5, false),
-        WIDE(1, 3.0, 1.0, true),
-        NORMAL(2, 1.5, 0.5, true),
-        STRICT(3, 1.3, 0.5, true);
+        LIGHT(1, 3.0, 1.0, true),
+        MODERATE(2, 1.5, 0.5, true),
+        STRONG(3, 1.3, 0.5, true);
 
         companion object {
             fun fromCode(code: Int): Level = entries.firstOrNull { it.code == code } ?: MEASURE
@@ -68,7 +68,8 @@ object InsulinBudget {
     private const val KEEP_DAYS = 60L
     private const val MAX_EVENTS = 3000
 
-    private const val PREFS = "fcl_insulin_budget"
+    const val PREFS_NAME = "fcl_insulin_budget"
+    private const val PREFS = PREFS_NAME
     private const val KEY_LEVEL = "level"
     private const val KEY_REF = "ref_u_per_mmol"
     private const val KEY_REF_N = "ref_episodes"

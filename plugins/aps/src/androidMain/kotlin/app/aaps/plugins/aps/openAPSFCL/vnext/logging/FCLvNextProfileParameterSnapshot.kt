@@ -48,8 +48,11 @@ object FCLvNextProfileParameterSnapshot {
      */
     fun collectForHistory(preferences: Preferences): Map<String, Any> =
         collect(preferences) + mapOf(
-            "max_smb_day_learned"  to preferences.get(DoubleKey.fcl_vnext_max_smb_day_learned),
-            "iob_brake_learned"    to preferences.get(DoubleKey.fcl_vnext_iob_brake_learned),
+            // The real max SMB is max_bolus_dag x S%, see FCLvNextConfig. The old "learned" max SMB key
+            // was never written any more, and iob_brake_learned is only a fallback: the value in use is
+            // peak_iob_brake_suppress in the export "tuning" section.
+            "max_smb_day_effective" to (preferences.get(DoubleKey.max_bolus_day) * preferences.get(IntKey.fcl_vnext_sterkte) / 100.0)
+                .coerceIn(preferences.get(DoubleKey.max_bolus_day) * 0.5, preferences.get(DoubleKey.max_bolus_day) * 1.5),
             "resistance_behavior"  to preferences.get(StringKey.fcl_vnext_resistance_behavior),
             "resistance_stability" to preferences.get(StringKey.fcl_vnext_resistance_stability),
             "activity_behavior"    to preferences.get(StringKey.fcl_vnext_activity_behavior),

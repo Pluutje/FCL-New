@@ -107,14 +107,14 @@ fun InsulinBudgetKaart(context: Context) {
 
 private fun levelName(level: Level): Int = when (level) {
     Level.MEASURE -> R.string.fcl_budget_level_measure
-    Level.WIDE    -> R.string.fcl_budget_level_wide
-    Level.NORMAL  -> R.string.fcl_budget_level_normal
-    Level.STRICT  -> R.string.fcl_budget_level_strict
+    Level.LIGHT    -> R.string.fcl_budget_level_light
+    Level.MODERATE -> R.string.fcl_budget_level_moderate
+    Level.STRONG   -> R.string.fcl_budget_level_strong
 }
 
 private fun levelDescription(level: Level): Int = when (level) {
     Level.MEASURE -> R.string.fcl_budget_desc_measure
-    Level.WIDE    -> R.string.fcl_budget_desc_wide
-    Level.NORMAL  -> R.string.fcl_budget_desc_normal
-    Level.STRICT  -> R.string.fcl_budget_desc_strict
+    Level.LIGHT    -> R.string.fcl_budget_desc_light
+    Level.MODERATE -> R.string.fcl_budget_desc_moderate
+    Level.STRONG   -> R.string.fcl_budget_desc_strong
 }

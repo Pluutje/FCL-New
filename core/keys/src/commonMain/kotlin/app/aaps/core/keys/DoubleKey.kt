@@ -358,9 +358,8 @@ enum class DoubleKey(
     max_bolus_day(key = "max_bolus_day", defaultValue = 1.25, min = 0.1, max = 8.0, title = KeysStrings.max_bolus_day_title, unitType = UnitType.INSULIN),
     max_bolus_night(key = "max_bolus_night", defaultValue = 0.5, min = 0.1, max = 8.0, title = KeysStrings.max_bolus_night_title, unitType = UnitType.INSULIN),
     fcl_vnext_MaxIOB(key = "fcl_vnext_MaxIOB", defaultValue = 4.0, min = 1.0, max = 25.0, title = KeysStrings.fcl_vnext_MaxIOB_title, unitType = UnitType.INSULIN),
-    // ── FCL vNext — Groep 2: MaxSmbLearner ───────────────────────────────
-    // Default 0.0 = geen geleerde waarde, gebruik handmatige max_bolus_day.
-    fcl_vnext_max_smb_day_learned(key = "fcl_vnext_max_smb_day_learned", defaultValue = 0.0, min = 0.0, max = 2.00, title = KeysStrings.fcl_vnext_internal, unitType = UnitType.INSULIN),
+    // ── FCL vNext — Groep 2: IOB-rem fallback ────────────────────────────
+    // Default 0.0 = geen geleerde waarde. (MaxSmbLearner is weg: max SMB = max_bolus_day x S%.)
     fcl_vnext_iob_brake_learned(key = "fcl_vnext_iob_brake_learned", defaultValue = 0.0, min = 0.0, max = 0.55, title = KeysStrings.fcl_vnext_internal),
 
     // ── FCL vNext — Groep 3: Analyzer-gestuurde fijnafstelling ────────────
