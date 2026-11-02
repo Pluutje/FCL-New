@@ -2,8 +2,8 @@ package app.aaps.plugins.aps.openAPSFCL.compose
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -13,6 +13,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.aaps.core.interfaces.aps.APS
 import app.aaps.core.interfaces.resources.ResourceHelper
@@ -25,6 +26,7 @@ import app.aaps.plugins.aps.compose.OpenAPSScreen
 import app.aaps.plugins.aps.compose.OpenAPSViewModel
 import app.aaps.core.interfaces.sharedPreferences.KeyValueStore
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.ui.FclAnalyzerScreen
+import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.ui.FclExperimentScreen
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.ui.FclStatisticsScreen
 
 class FCLComposeContent(
@@ -73,7 +75,7 @@ class FCLComposeContent(
             mutableIntStateOf(
                 when {
                     navigateToAiAdvisor || navigateToLearner -> 1
-                    navigateToUpdate || navigateToTempOverride -> 3
+                    navigateToUpdate || navigateToTempOverride -> 4
                     else                                       -> 0
                 }
             )
@@ -102,26 +104,33 @@ class FCLComposeContent(
         val state = viewModel.uiState.collectAsStateWithLifecycle()
 
         Column(modifier = androidx.compose.ui.Modifier.fillMaxSize()) {
-            TabRow(selectedTabIndex = selectedTab) {
+            // 2/11/2026: scrollbare balk met vijf tabbladen, elke naam op één regel (maxLines = 1). Met een vaste
+            // TabRow brak "Statistics" af op twee regels. edgePadding = 0 houdt de tabs zo smal mogelijk.
+            ScrollableTabRow(selectedTabIndex = selectedTab, edgePadding = 0.dp) {
                 Tab(
                     selected = selectedTab == 0,
                     onClick = { selectedTab = 0 },
-                    text = { Text("Status") }
+                    text = { Text("Status", maxLines = 1, softWrap = false) }
                 )
                 Tab(
                     selected = selectedTab == 1,
                     onClick = { selectedTab = 1 },
-                    text = { Text("Analyzer") }
+                    text = { Text("Analyzer", maxLines = 1, softWrap = false) }
                 )
                 Tab(
                     selected = selectedTab == 2,
                     onClick = { selectedTab = 2 },
-                    text = { Text("Statistics") }
+                    text = { Text("Statistics", maxLines = 1, softWrap = false) }
                 )
                 Tab(
                     selected = selectedTab == 3,
                     onClick = { selectedTab = 3 },
-                    text = { Text("Settings") }
+                    text = { Text("Experimenteel", maxLines = 1, softWrap = false) }
+                )
+                Tab(
+                    selected = selectedTab == 4,
+                    onClick = { selectedTab = 4 },
+                    text = { Text("Settings", maxLines = 1, softWrap = false) }
                 )
                 // 15/09/2026 (de gebruiker) — het 5e tabblad ("Overzicht") is verwijderd: het
                 // alternatieve overzichtsscherm is nu het ECHTE AAPS-hoofdscherm zelf (zie
@@ -141,7 +150,8 @@ class FCLComposeContent(
                     startOnLearner = navigateToLearner
                 )
                 2 -> FclStatisticsScreen()
-                3 -> FCLSettingsScreen(
+                3 -> FclExperimentScreen()
+                4 -> FCLSettingsScreen(
                     preferences = preferences,
                     sp = sp,
                     startExpandedOnUpdates = navigateToUpdate,

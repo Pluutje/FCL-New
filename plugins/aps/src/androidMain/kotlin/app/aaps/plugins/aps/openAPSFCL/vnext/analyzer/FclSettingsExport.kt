@@ -9,6 +9,7 @@ import app.aaps.core.keys.StringKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.plugins.aps.openAPSFCL.vnext.FclProfileBridge
 import app.aaps.plugins.aps.openAPSFCL.vnext.InsulinBudget
+import app.aaps.plugins.aps.openAPSFCL.vnext.PostHypoEarlyRelease
 import app.aaps.plugins.aps.openAPSFCL.vnext.logging.FCLvNextProfileParameterSnapshot
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -41,7 +42,8 @@ object FclSettingsExport {
         "fcl_expert_prefs",        // expert mode
         "fcl_ai_param_store",      // approved parameter overrides
         "fcl_cover_trial",         // cover brake trial
-        InsulinBudget.PREFS_NAME   // limit per rise: level and personal reference
+        InsulinBudget.PREFS_NAME,  // limit per rise: level and personal reference
+        PostHypoEarlyRelease.PREFS_NAME // brake lets go earlier: level (events are too long and skipped)
     )
 
     /** Internal tuning values (Double). Add a key here and it is exported. */
@@ -85,6 +87,7 @@ object FclSettingsExport {
                 .mapValues { (_, v) -> if (v is Double) "%.3f".format(java.util.Locale.US, v) else v.toString() }
                 .toMutableMap()
             current["insulin_budget_level"] = InsulinBudget.level(context).name
+            current["brake_early_level"] = PostHypoEarlyRelease.level(context).name
             val prefs = context.getSharedPreferences(LOG_PREFS, Context.MODE_PRIVATE)
             val last = (prefs.getString(KEY_LAST, "") ?: "").split("\n").filter { it.contains("=") }
                 .associate { it.substringBefore("=") to it.substringAfter("=") }
@@ -139,7 +142,7 @@ object FclSettingsExport {
         }
     }
 
-    fun build(context: Context, preferences: Preferences): JSONObject {
+    suspend fun build(context: Context, preferences: Preferences): JSONObject {
         val root = JSONObject()
         root.put("schema_version", SCHEMA_VERSION)
         root.put("written_at", LocalDateTime.now().toString())
@@ -147,7 +150,7 @@ object FclSettingsExport {
         return root
     }
 
-    private fun buildSections(context: Context, preferences: Preferences): List<Pair<String, JSONObject>> {
+    private suspend fun buildSections(context: Context, preferences: Preferences): List<Pair<String, JSONObject>> {
         val sections = mutableListOf<Pair<String, JSONObject>>()
 
         sections += "app" to runCatching {

@@ -5654,7 +5654,7 @@ class FCLvNext(
     // "vNN-jjjj-mm-dd-uumm" (aanmaaktijdstip, geen omschrijving; die van
     // eerdere versies raakten toch achter). Alleen als het écht relevant
     // is een korte omschrijving toevoegen.
-    private val FCL_CODE_VERSION = "v152-2026-10-29-1500"
+    private val FCL_CODE_VERSION = "v153-2026-11-01-2200"
 
     // ── Restart-detectie (16/07/2026) ─────────────────────────────────
     // true op precies de EERSTE cyclus na het (her)starten van dit class-
@@ -7032,6 +7032,19 @@ class FCLvNext(
             hEff = hEff,
             iobScaleUsed = iobScale,
             vUsed = v
+        )
+    }
+
+    /** Experiment "brake lets go earlier": stores what it let through this cycle and adds a line to the status. */
+    /** The extra dose of the experiment in this cycle. It becomes an event when the delivered dose is known (see below). */
+    private var earlyReleasePending: PostHypoEarlyRelease.Pending? = null
+
+    private fun recordEarlyRelease(timestampMs: Long, weight: Double, extraU: Double, status: StringBuilder) {
+        if (extraU < PostHypoEarlyRelease.MIN_EXTRA_U) return
+        earlyReleasePending = PostHypoEarlyRelease.Pending(timestampMs, weight, extraU)
+        status.append(
+            "REM EERDER LOS (experiment): ${"%.0f".format(weight * 100)}% van wat de rem tegenhoudt doorgelaten, " +
+                "+${"%.2f".format(extraU)} U extra\n"
         )
     }
 
@@ -11511,15 +11524,30 @@ class FCLvNext(
                         "(slope=${"%.1f".format(ctx.recentSlope)}, ${"%.1f".format(riseFromLowestLastHour)} mmol boven laagste van het uur)\n"
                 )
             }
+            // Experiment (PIN protected, off by default): the brake lets go earlier. Only for a brake armed by hypo debt
+            // (not by a real low BG), with a confirmed meal, and never in a cycle where the hypo guard cuts the dose.
+            // See PostHypoEarlyRelease. The result is the extra dose it let through, for the CSV.
+            val earlyLevel = PostHypoEarlyRelease.level(context)
+            val earlyWeight =
+                if (earlyLevel.acts && !postHypoBrakeArmedByRecentLow && !recentlyLow &&
+                    mealSignal.state == MealState.CONFIRMED && !logRow.hypoActive
+                ) PostHypoEarlyRelease.weight(earlyLevel, ctx.input.bgNow, ctx.recentSlope, ctx.iobRatio)
+                else 0.0
+            val smallU = config.smallCorrectionMaxU
+            val aboveSmallU = (commandedDose - smallU).coerceAtLeast(0.0)
             if (slopeOk && bgFloorOk && riseSinceBrake > 0.001) {
                 val rampX = (riseSinceBrake / catchupRise).coerceIn(0.0, 1.0)
                 // v141: lineair i.p.v. kwadratisch (was rampX * rampX). 9/10: de rem liet pas los
                 // op de top (0,32 / 1,08 / 2,00 U van 3,5-4,4 U gewenst). Bewust NIET gemeten vanaf de
                 // laagste waarde: bij een rebound van 3,8 zou de rem dan al bij het aanslaan bijna vrij zijn.
                 // v147: wel een tweede weg, via releaseEvidence hierboven (alleen bij snelle stijging).
-                val rampFrac = maxOf(rampX * postHypoBrakeRampDamp, releaseEvidence)
-                val cap = config.smallCorrectionMaxU +
-                    (commandedDose - config.smallCorrectionMaxU).coerceAtLeast(0.0) * rampFrac
+                val baseRampFrac = maxOf(rampX * postHypoBrakeRampDamp, releaseEvidence)
+                val rampFrac = maxOf(baseRampFrac, earlyWeight)
+                val cap = smallU + aboveSmallU * rampFrac
+                val capWithoutExperiment = smallU + aboveSmallU * baseRampFrac
+                if (earlyWeight > baseRampFrac) {
+                    recordEarlyRelease(now.millis, earlyWeight, minOf(commandedDose, cap) - minOf(commandedDose, capWithoutExperiment), status)
+                }
                 commandedDose = commandedDose.coerceAtMost(cap)
                 if (before > commandedDose) {
                     status.append(
@@ -11538,8 +11566,11 @@ class FCLvNext(
                 }
             } else {
                 // v147: ook als de gewone vrijgave dicht is, geeft maaltijd-bewijs een deel vrij.
-                val closedCap = config.smallCorrectionMaxU +
-                    (commandedDose - config.smallCorrectionMaxU).coerceAtLeast(0.0) * releaseEvidence
+                val closedCap = smallU + aboveSmallU * maxOf(releaseEvidence, earlyWeight)
+                if (earlyWeight > releaseEvidence) {
+                    val withoutU = minOf(commandedDose, smallU + aboveSmallU * releaseEvidence)
+                    recordEarlyRelease(now.millis, earlyWeight, minOf(commandedDose, closedCap) - withoutU, status)
+                }
                 commandedDose = commandedDose.coerceAtMost(closedCap)
                 if (before > commandedDose) {
                     status.append(
@@ -12673,6 +12704,13 @@ class FCLvNext(
         // ✅ NEW: als het onder de zichtbare/werkelijke delivery drempel is, behandel als 0
         val effectiveDeliveredNow =
             if (deliveredNow >= minDeliveryU) deliveredNow else 0.0
+
+        // Experiment "brake lets go earlier": store the event with the dose that was really delivered, so that
+        // standard dose + extra dose = delivered dose. Only if this cycle added an extra dose (same timestamp).
+        PostHypoEarlyRelease.finish(earlyReleasePending, now.millis, effectiveDeliveredNow)?.let {
+            PostHypoEarlyRelease.addEvent(context, it)
+        }
+        earlyReleasePending = null
 
         // ── RECENT FRONTLOAD TRACKING (28/07/2026, herzien) ────────────
         // Zie kdoc bij recentFrontloadDoseU/recentFrontloadAt hierboven. Los van

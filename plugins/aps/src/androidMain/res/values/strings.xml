@@ -317,4 +317,37 @@
     <string name="fcl_budget_brake" comment="%1$d=cycles">De piekrem hield %1$d keer een stijgende BG tegen terwijl er nog ruimte was. Dit wordt alleen geteld, de piekrem verandert niet.</string>
     <string name="fcl_budget_note">Alle bescherming tegen een lage BG blijft gelden. De begrenzing kan een dosis alleen kleiner maken, nooit groter.</string>
 
+    <!-- Rem eerder los (experiment, pincode) -->
+    <string name="fcl_early_title">Rem eerder los</string>
+    <string name="fcl_early_state" comment="%1$s=name of the level. Example: Laag">Niveau: %1$s</string>
+    <string name="fcl_early_intro">Na een afgekapte dosis kan de post-hypo-rem de volgende doses van een maaltijd lang klein houden. Daarna komt vaak een grote dosis, vlak bij de piek. Dit experiment laat de rem eerder los, in stappen, als de maaltijd bevestigd is, de BG boven 6,5 is en snel stijgt, en de IOB niet hoog is. Dit kan meer insuline geven dan nu. Het werkt niet na een echte lage BG.</string>
+    <string name="fcl_early_choose">Kies hoeveel de rem loslaat</string>
+    <string name="fcl_early_level_off">Uit</string>
+    <string name="fcl_early_level_low">Laag</string>
+    <string name="fcl_early_level_medium">Medium</string>
+    <string name="fcl_early_level_high">Hoog</string>
+    <string name="fcl_early_desc_off">De rem werkt zoals altijd.</string>
+    <string name="fcl_early_desc_low">Laat hooguit een vijfde van wat de rem tegenhoudt eerder door. Begin hier.</string>
+    <string name="fcl_early_desc_medium">Laat hooguit ruim een derde van wat de rem tegenhoudt eerder door.</string>
+    <string name="fcl_early_desc_high">Laat hooguit ruim de helft van wat de rem tegenhoudt eerder door. Meer kans op een lage BG na de maaltijd.</string>
+    <string name="fcl_early_pin_title">Pincode nodig</string>
+    <string name="fcl_early_pin_text">Dit experiment kan meer insuline geven dan nu. Zet het alleen aan als je de risico\'s kent. Vul de pincode in om verder te gaan.</string>
+    <string name="fcl_early_pin_label">Pincode</string>
+    <string name="fcl_early_pin_wrong">Pincode onjuist</string>
+    <string name="fcl_early_pin_ok">Doorgaan</string>
+    <string name="fcl_early_pin_cancel">Annuleren</string>
+    <string name="fcl_early_results_title" comment="%1$d=days. Example: 7">Laatste %1$d dagen</string>
+    <string name="fcl_early_results_none">Nog geen dosis die door het experiment eerder is doorgelaten.</string>
+    <string name="fcl_early_results" comment="%1$d=meals, %2$d=moments (cycles), %3$d=days">Het experiment liet in %1$d maaltijd(en) extra door (%2$d keer), op %3$d dag(en).</string>
+    <string name="fcl_early_meal" comment="%1$s=date and time of the first moment of the meal, %2$d=number of moments, %3$.2f=extra units of this meal. Example: Maaltijd 2/11 12:55 · 3 keer · extra 0.42 E">Maaltijd %1$s · %2$d keer · extra %3$.2f E</string>
+    <string name="fcl_early_range" comment="%1$.1f=highest BG, %2$s=time of the highest BG, %3$.1f=lowest BG, %4$s=time of the lowest BG. Example: Piek 11.3 (13:20) · laagste 4.8 (15:10)">Piek %1$.1f (%2$s) · laagste %3$.1f (%4$s)</string>
+    <string name="fcl_early_range_running" comment="Same as above, but the meal is not over yet. %1$.1f=highest BG, %2$s=time, %3$.1f=lowest BG, %4$s=time">Tot nu: piek %1$.1f (%2$s) · laagste %3$.1f (%4$s)</string>
+    <string name="fcl_early_range_nolow" comment="%1$.1f=highest BG, %2$s=time of the highest BG. There is no BG after the last dose yet, so the lowest is shown as a dash.">Piek %1$.1f (%2$s) · laagste –</string>
+    <string name="fcl_early_range_running_nolow" comment="Same as above, but the meal is not over yet. %1$.1f=highest BG, %2$s=time">Tot nu: piek %1$.1f (%2$s) · laagste –</string>
+    <string name="fcl_early_range_rising" comment="The meal is not over and the BG is still rising, so there is no lowest value yet. %1$.1f=highest BG so far, %2$s=time of the highest BG">Tot nu: piek %1$.1f (%2$s) · laagste: nog stijgend</string>
+    <string name="fcl_early_line" comment="%1$s=date and time, %2$.2f=standard dose of the cycle, %3$.2f=extra dose from the experiment, %4$.2f=delivered dose (standard plus extra), %5$d=percent of what the brake held back that was let through. Example: 2/11 12:55 · 0.34 + 0.28 extra = 0.62 E (18%)">%1$s · %2$.2f + %3$.2f extra = %4$.2f E (%5$d%%)</string>
+    <string name="fcl_early_line_old" comment="Older moments without details. %1$s=date and time, %2$d=percent, %3$.2f=extra units">%1$s · %2$d%% · +%3$.2f E</string>
+    <string name="fcl_early_more" comment="%1$d=number of older meals not shown">En %1$d eerdere maaltijden.</string>
+    <string name="fcl_early_note">De hypo-bescherming blijft altijd gelden. In elke cyclus waarin zij een dosis afkapt, doet dit experiment niets. In de CSV staan de kolommen brake_early_weight en brake_early_extra_u.</string>
+
 </resources>

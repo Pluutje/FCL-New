@@ -140,18 +140,8 @@ fun AdvisorScreen(
                 TddKaart(tddContext)
             })
 
-            // ── 4. Experimenteel: proeven en metingen, elke kaart met een eigen titel (29/10/2026) ───
-            // Elke kaart zegt zelf of hij de dosering aanpast of alleen signaleert.
-            add(InfoTabPage("Experimenteel") {
-                val coverContext = androidx.compose.ui.platform.LocalContext.current
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    InsulinBudgetKaart(coverContext)
-                    CoverTrialKaart(coverContext)
-                    CoverIsfKaart(coverContext)
-                    CoverShadowKaart(coverContext)
-                    InsulinTimingKaart(coverContext)
-                }
-            })
+            // Experimenteel: verhuisd (2/11/2026) naar een eigen buitenste tabblad tussen Statistics en
+            // Settings, zie FclExperimentScreen.kt en FCLComposeContent.kt.
 
             // ── Expert: Parameters, Backup en Analyse tabs ───────────────
             if (expertMode) {
