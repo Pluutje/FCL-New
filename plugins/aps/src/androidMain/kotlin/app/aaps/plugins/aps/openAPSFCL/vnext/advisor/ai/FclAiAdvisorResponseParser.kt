@@ -24,16 +24,13 @@ object FclAiAdvisorResponseParser {
             // Geef de gebruiker een leesbare melding, niet een technische Java-stacktrace.
             val userMsg = when {
                 cleaned.contains("\"suggestions\"") && cleaned.length < 200 ->
-                    "Het model gaf een te kort antwoord terug — mogelijk token-limiet bereikt. " +
-                        "Probeer 'Nu vernieuwen' opnieuw."
+                    "Antwoord te kort\nHet model gaf een te kort antwoord. Probeer 'Nu vernieuwen' opnieuw."
                 cleaned.startsWith("{") ->
-                    "Het antwoord van de AI was onvolledig (afgeknipte JSON). " +
-                        "Technisch: ${t.message?.take(80)}"
+                    "Antwoord onvolledig\nHet antwoord van de AI was halverwege afgekapt. Probeer 'Nu vernieuwen' opnieuw."
                 cleaned.isBlank() ->
-                    "Het model gaf een leeg antwoord — controleer de API-sleutel en het model-veld."
+                    "Leeg antwoord\nControleer de API-sleutel en het model-veld."
                 else ->
-                    "Kon het antwoord niet verwerken. Probeer opnieuw of controleer het model-veld. " +
-                        "Technisch: ${t.message?.take(80)}"
+                    "Antwoord niet leesbaar\nProbeer opnieuw of controleer het model-veld."
             }
             return AiAdvisorRunResult(
                 generatedAtUtc = payload.dateUtc,

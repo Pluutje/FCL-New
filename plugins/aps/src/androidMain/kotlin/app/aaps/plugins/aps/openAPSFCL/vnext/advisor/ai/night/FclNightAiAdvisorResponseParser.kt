@@ -24,9 +24,11 @@ object FclNightAiAdvisorResponseParser {
         } catch (t: Throwable) {
             val userMsg = when {
                 cleaned.isBlank() ->
-                    "Het model gaf een leeg antwoord — controleer de API-sleutel en het model-veld."
+                    "Leeg antwoord\nControleer de API-sleutel en het model-veld."
+                cleaned.startsWith("{") ->
+                    "Antwoord onvolledig\nHet antwoord van de AI was halverwege afgekapt. Er wordt later opnieuw geprobeerd."
                 else ->
-                    "Kon het antwoord niet verwerken. Technisch: ${t.message?.take(80)}"
+                    "Antwoord niet leesbaar\nProbeer later opnieuw of controleer het model-veld."
             }
             return NightAiAdvisorRunResult(
                 generatedAtUtc = payload.generatedAtUtc,
@@ -89,7 +91,15 @@ object FclNightAiAdvisorResponseParser {
                 // op een volgende ochtend, omdat currentBasalUph dan het inmiddels
                 // aangepaste profiel weerspiegelt.
                 val magnitude = kotlin.math.abs(obj.optDouble("suggestedShiftPct", 0.0)).coerceIn(3.0, 8.0)
-                val signedShift = if (direction == "LOWER") -magnitude else magnitude
+                // Vangnet (4/11/2026): een LOWER-advies terwijl de BG boven target blijft en de IOB niet
+                // negatief is, past niet bij een te hoog basaal. De stap wordt glijdend kleiner naarmate
+                // de BG verder boven target ligt (geen harde grens) en vervalt bij een (bijna) volledige demping.
+                val hourly = hourInt?.let { hourlyByHour[it] }
+                val lowerDamp = if (direction == "LOWER" && hourly != null) {
+                    lowerDampFactor(hourly.avgBg - hourly.avgTarget, hourly.avgIob)
+                } else 1.0
+                if (lowerDamp < 0.05) continue
+                val signedShift = if (direction == "LOWER") -(magnitude * lowerDamp) else magnitude
 
                 suggestions += NightBasalSuggestion(
                     hourLabel = hourLabel,
@@ -110,6 +120,19 @@ object FclNightAiAdvisorResponseParser {
             summaryNl = summary,
             parseError = null
         )
+    }
+
+    /**
+     * 1 = LOWER-stap blijft zoals het model hem gaf, 0 = vervalt. Glijdend: de dempingsfactor loopt van 1 bij
+     * een BG op target (of lager) naar 0 bij 1,0 mmol/L boven target. Een echt negatieve IOB (onder -0,3)
+     * is een eigen signaal voor een te hoog basaal en haalt de demping weer weg.
+     */
+    internal fun lowerDampFactor(bgAboveTarget: Double, avgIob: Double): Double {
+        val aboveW = ((bgAboveTarget - 0.2) / 0.8).coerceIn(0.0, 1.0)
+        val above = aboveW * aboveW * (3.0 - 2.0 * aboveW)
+        val negW = ((-0.3 - avgIob) / 0.4).coerceIn(0.0, 1.0)
+        val negIob = negW * negW * (3.0 - 2.0 * negW)
+        return (1.0 - above) + above * negIob
     }
 
     // ── Geleidelijke opbouw/afbouw rondom het probleempunt (23/07/2026) ──

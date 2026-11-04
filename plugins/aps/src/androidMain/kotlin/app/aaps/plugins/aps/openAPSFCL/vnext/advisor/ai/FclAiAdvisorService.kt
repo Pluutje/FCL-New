@@ -34,7 +34,8 @@ object FclAiAdvisorService {
     private const val MAX_TOKENS_CLAUDE = 1500
     // Gemini knipt bij 1500 tokens een JSON-response af halverwege ("End of input at character 18").
     // Groter budget voorkomt dat; gratis tier ondersteunt 8192 output-tokens.
-    private const val MAX_TOKENS_GEMINI = 4096
+    // 4/11/2026: 4096 gaf af en toe een afgekapt antwoord ("Unterminated string"); daarom 8192.
+    private const val MAX_TOKENS_GEMINI = 8192
     private const val TIMEOUT_MS = 30_000
 
     sealed class Result {
@@ -118,7 +119,7 @@ object FclAiAdvisorService {
         val code = connection.responseCode
         if (code != HttpURLConnection.HTTP_OK) {
             val err = readStream(connection.errorStream)
-            return Result.Failure("Claude HTTP $code: $err", httpCode = code)
+            return Result.Failure(friendlyHttpError("Claude", code, err), httpCode = code)
         }
         val resp = JSONObject(readStream(connection.inputStream))
         val content = resp.optJSONArray("content") ?: return Result.Failure("Geen 'content' in Claude-antwoord")
@@ -161,10 +162,14 @@ object FclAiAdvisorService {
         val code = connection.responseCode
         if (code != HttpURLConnection.HTTP_OK) {
             val err = readStream(connection.errorStream)
-            return Result.Failure("Gemini HTTP $code: $err", httpCode = code)
+            return Result.Failure(friendlyHttpError("Gemini", code, err), httpCode = code)
         }
         val resp = JSONObject(readStream(connection.inputStream))
         // Gemini: candidates[0].content.parts[0].text
+        val finishReason = resp.optJSONArray("candidates")?.optJSONObject(0)?.optString("finishReason", "") ?: ""
+        if (finishReason == "MAX_TOKENS") {
+            return Result.Failure("Antwoord afgekapt\nGemini stopte halverwege het antwoord. Er wordt later opnieuw geprobeerd.")
+        }
         val text = resp.optJSONArray("candidates")
             ?.optJSONObject(0)
             ?.optJSONObject("content")
@@ -176,6 +181,46 @@ object FclAiAdvisorService {
     }
 
     // ── Hulp ─────────────────────────────────────────────────────────────────
+
+    /**
+     * Korte, leesbare foutmelding: een titel op de eerste regel en één zin uitleg op de tweede.
+     * De ruwe JSON van de provider wordt niet getoond.
+     */
+    internal fun friendlyHttpError(provider: String, code: Int, body: String): String {
+        val title: String
+        val hint: String
+        when (code) {
+            503 -> {
+                title = "$provider is tijdelijk overbelast (503)"
+                hint = "Dit is een tijdelijk probleem bij de aanbieder. Er wordt later vanzelf opnieuw geprobeerd."
+            }
+            429 -> {
+                title = "$provider-limiet bereikt (429)"
+                hint = "Het gratis quotum of de limiet per minuut is op. Probeer het later opnieuw."
+            }
+            400 -> {
+                title = "$provider kon het verzoek niet verwerken (400)"
+                hint = "Controleer het model en de API-sleutel."
+            }
+            401, 403 -> {
+                title = "$provider weigert de API-sleutel ($code)"
+                hint = "Controleer of de sleutel klopt en geldig is."
+            }
+            404 -> {
+                title = "$provider kent dit model niet (404)"
+                hint = "Controleer de modelnaam in de instellingen."
+            }
+            in 500..599 -> {
+                title = "$provider heeft een serverfout ($code)"
+                hint = "Dit is een probleem bij de aanbieder. Er wordt later opnieuw geprobeerd."
+            }
+            else -> {
+                title = "$provider gaf een fout ($code)"
+                hint = "Probeer het later opnieuw."
+            }
+        }
+        return "$title\n$hint"
+    }
 
     private fun readStream(stream: java.io.InputStream?): String {
         if (stream == null) return ""

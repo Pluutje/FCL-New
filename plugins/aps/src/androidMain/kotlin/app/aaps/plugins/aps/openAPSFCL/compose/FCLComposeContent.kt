@@ -12,7 +12,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.aaps.core.interfaces.aps.APS
@@ -80,17 +79,6 @@ class FCLComposeContent(
                 }
             )
         }
-        // 14/09/2026 (de gebruiker) — leest de preview-toggle voor het alternatieve
-        // overzichtsscherm (zelfde eigen, niet-expert SharedPreferences-patroon als
-        // aigfActive/expertModeActive in FCLSettingsScreen.kt). Alleen als dit aan staat, is
-        // het 5e tabblad zichtbaar.
-        val ctx = LocalContext.current
-        var overviewScreenEnabled by remember {
-            mutableStateOf(
-                ctx.getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
-                    .getBoolean(PREF_OVERVIEW_SCREEN_ENABLED, false)
-            )
-        }
         val scope = rememberCoroutineScope()
         val viewModel = remember {
             OpenAPSViewModel(
@@ -132,11 +120,6 @@ class FCLComposeContent(
                     onClick = { selectedTab = 4 },
                     text = { Text("Settings", maxLines = 1, softWrap = false) }
                 )
-                // 15/09/2026 (de gebruiker) — het 5e tabblad ("Overzicht") is verwijderd: het
-                // alternatieve overzichtsscherm is nu het ECHTE AAPS-hoofdscherm zelf (zie
-                // OpenAPSFCLPlugin.overviewOverride), niet meer apart bereikbaar als tabblad hier.
-                // overviewScreenEnabled hieronder bestaat verder alleen nog om de toggle-status in
-                // FCLSettingsScreen.kt weer te geven/bij te werken.
             }
 
             when (selectedTab) {
@@ -155,10 +138,7 @@ class FCLComposeContent(
                     preferences = preferences,
                     sp = sp,
                     startExpandedOnUpdates = navigateToUpdate,
-                    startExpandedOnTempOverride = navigateToTempOverride,
-                    overviewScreenEnabled = overviewScreenEnabled,
-                    onOverviewScreenEnabledChange = { overviewScreenEnabled = it },
-                    rxBus = rxBus
+                    startExpandedOnTempOverride = navigateToTempOverride
                 )
             }
         }

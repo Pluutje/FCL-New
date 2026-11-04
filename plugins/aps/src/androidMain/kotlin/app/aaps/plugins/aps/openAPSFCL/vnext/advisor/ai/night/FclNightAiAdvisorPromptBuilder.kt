@@ -46,14 +46,19 @@ board (IOB) in dat uur, gemiddeld over meerdere nachten.
   van maaltijden en actuele afwijkingen. Het basaalprofiel (de vaste U/h per uur) wordt
   volledig los daarvan door de gebruiker zelf ingesteld in AndroidAPS en NOOIT door
   FCLvNext aangepast.
-- "IOB" hier is het REKENKUNDIGE insulin-on-board-model van AAPS — een dalende of
-  negatieve IOB in een venster betekent dat er, rekenkundig, minder insuline actief is
-  dan het model verwacht op basis van de laatst toegediende doses en de basale afgifte.
-  Een aanhoudend negatieve of dalende IOB bij een verder stabiele BG duidt vaak (niet
-  altijd — zie hieronder) op een te hoog ingesteld basaal in de uren ervoor: er wordt
-  basaal "verondersteld" aanwezig te zijn dat feitelijk al is opgebruikt/overschat.
-- Andersom: een structureel STIJGENDE BG bij een vlakke of oplopende IOB in een uur
-  zonder maaltijdactiviteit kan duiden op een te LAAG ingesteld basaal in dat uur.
+- "IOB" hier is het REKENKUNDIGE insulin-on-board-model van AAPS.
+- BELANGRIJK — een DALENDE IOB alleen is GEEN teken van een te hoog basaal. Het is
+  normaal dat de IOB 's nachts daalt als er eerder op de avond insuline is gegeven (maaltijd
+  of correctie) en die uitwerkt. Zeker als de BG boven target blijft, past dat juist bij
+  te weinig insuline, niet bij te veel.
+- Signalen voor een te HOOG basaal (richting LOWER): een echt NEGATIEVE gemiddelde IOB,
+  en/of een BG die onder target zakt of laag blijft (avgBg onder avgTarget), vooral samen
+  met een dalende BG. Zonder zo'n signaal: NIET verlagen.
+- Signalen voor een te LAAG basaal (richting HIGHER): de BG blijft structureel BOVEN
+  target (avgBg duidelijk hoger dan avgTarget, bijvoorbeeld meer dan 0,7 mmol/L) bij een
+  vlakke of stijgende BG en een IOB die niet negatief is. Een dalende IOB bij zo'n hoge BG
+  versterkt dit signaal alleen maar. Het doel is dat de BG rond target uitkomt.
+- Gebruik avgTarget uit de databijlage als referentie: vergelijk avgBg altijd met avgTarget.
 
 ## Wat je NIET moet doen
 - Geen uitspraken over losse, individuele nachten — alleen patronen die zich over

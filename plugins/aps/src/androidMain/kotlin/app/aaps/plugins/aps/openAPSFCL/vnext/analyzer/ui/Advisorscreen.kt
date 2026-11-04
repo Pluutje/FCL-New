@@ -1040,11 +1040,24 @@ fun NightAiAdvisorCard(context: android.content.Context) {
                         "of druk op \"Nu vernieuwen\".",
                     style = MaterialTheme.typography.bodyMedium
                 )
-                r.parseError != null -> Text(
-                    "\u26A0\uFE0F ${r.parseError}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error
-                )
+                r.parseError != null -> Column {
+                    // Eerste regel = korte titel, de rest = leesbare uitleg (zie FclAiAdvisorService.friendlyHttpError).
+                    val errorTitle = r.parseError.substringBefore("\n")
+                    val errorHint = r.parseError.substringAfter("\n", "")
+                    Text(
+                        "\u26A0\uFE0F $errorTitle",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                    if (errorHint.isNotBlank()) {
+                        Text(
+                            errorHint,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
                 else -> {
                     Text(
                         "Rapport van ${localFmt(r.generatedAtUtc)}",

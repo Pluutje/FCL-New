@@ -5,6 +5,8 @@ import app.aaps.plugins.aps.openAPSFCL.vnext.CoverIsf
 import app.aaps.plugins.aps.openAPSFCL.vnext.CoverTrial
 import app.aaps.plugins.aps.openAPSFCL.vnext.FclActiveConfigBridge
 import app.aaps.plugins.aps.openAPSFCL.vnext.InsulinBudget
+import app.aaps.plugins.aps.openAPSFCL.vnext.EarlyBoostCap
+import app.aaps.plugins.aps.openAPSFCL.vnext.FlatHighCorrection
 import app.aaps.plugins.aps.openAPSFCL.vnext.PostHypoEarlyRelease
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.CoverIsfHistory
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.DFLearner
@@ -800,6 +802,8 @@ class FCLCycleLogRepository @Inject constructor(
         val trialEvents = try { CoverTrial.loadEvents(context) } catch (_: Exception) { emptyList() }
         val budgetEvents = try { InsulinBudget.loadEvents(context) } catch (_: Exception) { emptyList() }
         val earlyEvents = try { PostHypoEarlyRelease.loadEvents(context) } catch (_: Exception) { emptyList() }
+        val capEvents = try { EarlyBoostCap.loadEvents(context) } catch (_: Exception) { emptyList() }
+        val flatEvents = try { FlatHighCorrection.loadEvents(context) } catch (_: Exception) { emptyList() }
 
         file.bufferedWriter().use { writer ->
             writer.write(csvHeader(sep))
@@ -828,7 +832,7 @@ class FCLCycleLogRepository @Inject constructor(
                         persist?.active ?: false, persist?.fired ?: false,
                         persist?.persistentCounter ?: 0, persist?.doseU ?: 0.0,
                         persist?.escalationFactor ?: 1.0, persist?.reason ?: "",
-                        shadowTable, trialEvents, budgetEvents, earlyEvents
+                        shadowTable, trialEvents, budgetEvents, earlyEvents, capEvents, flatEvents
                     )
                 )
                 writer.newLine()
@@ -942,7 +946,10 @@ private fun csvHeader(sep: String): String = listOf(
     "cover_trial_s", "cover_trial_extra_u",
     // ── BEGRENZING PER STIJGING (29/10/2026) — alleen gevuld in cycli waarin de begrenzing ingreep (of op "Alleen meten" zou ingrijpen) ──
     "budget_wanted_u", "budget_limited_u", "budget_room_u", "budget_applied", "budget_brake", "budget_level",
-    "brake_early_weight", "brake_early_extra_u"
+    "brake_early_weight", "brake_early_extra_u",
+    // ── PLAFOND VROEGE BOOST (2/11/2026) — alleen gevuld in cycli waarin het plafond of de dekking-demping ingreep ──
+    "early_uncapped_u", "early_cap_u", "early_cover_weight",
+    "flat_high_u", "flat_high_excess", "flat_high_weight"
 ).joinToString(sep)
 
 // ── CSV regel — delta_target afgeleid als bg - target ────────────────────
@@ -980,8 +987,12 @@ private fun FCLCycleLogEntity.toCsvLine(
     shadowTable: Array<DoubleArray>,
     trialEvents: List<CoverTrial.Event>,
     budgetEvents: List<InsulinBudget.Event>,
-    earlyEvents: List<PostHypoEarlyRelease.Event>
+    earlyEvents: List<PostHypoEarlyRelease.Event>,
+    capEvents: List<EarlyBoostCap.Event>,
+    flatEvents: List<FlatHighCorrection.Event>
 ): String {
+    val capEvent = EarlyBoostCap.nearest(capEvents, timestampMs, EarlyBoostCap.CSV_TOLERANCE_MS)
+    val flatEvent = FlatHighCorrection.nearest(flatEvents, timestampMs, FlatHighCorrection.CSV_TOLERANCE_MS)
     val trialEvent = CoverTrial.nearest(trialEvents, timestampMs, 150_000L)
     val budgetEvent = InsulinBudget.nearest(budgetEvents, timestampMs, 150_000L)
     val earlyEvent = PostHypoEarlyRelease.nearest(earlyEvents, timestampMs, PostHypoEarlyRelease.CSV_TOLERANCE_MS)
@@ -1112,6 +1123,10 @@ private fun FCLCycleLogEntity.toCsvLine(
         bool(budgetEvent?.applied ?: false), bool(budgetEvent?.brake ?: false),
         (budgetEvent?.levelCode ?: -1).toString(),
         // ── REM EERDER LOS (1/11/2026) ── 0,00 / 0,00 als het experiment deze cyclus niets doorliet. Zie PostHypoEarlyRelease.
-        d2(earlyEvent?.weight ?: 0.0), d2(earlyEvent?.extraU ?: 0.0)
+        d2(earlyEvent?.weight ?: 0.0), d2(earlyEvent?.extraU ?: 0.0),
+        // ── PLAFOND VROEGE BOOST (2/11/2026) ── 0,00 / 0,00 / 0,00 als het plafond deze cyclus niets deed. Zie EarlyBoostCap.
+        d2(capEvent?.uncappedU ?: 0.0), d2(capEvent?.capU ?: 0.0), d2(capEvent?.coverWeight ?: 0.0),
+        // ── VLAKKE-HOOG CORRECTIE (4/11/2026) ── 0,00 als er deze cyclus niets extra is gegeven. Zie FlatHighCorrection.
+        d3(flatEvent?.doseU ?: 0.0), d2(flatEvent?.excess ?: 0.0), d2(flatEvent?.weight ?: 0.0)
     ).joinToString(sep)
 }

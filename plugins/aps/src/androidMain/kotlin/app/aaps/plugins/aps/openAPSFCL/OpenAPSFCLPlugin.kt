@@ -181,6 +181,21 @@ open class OpenAPSFCLPlugin @Inject constructor(
 ), APS, PluginConstraints {
 
     init {
+        // One time move of the old FCLvNext switch "alternative home screen" to the general key
+        // BooleanKey.OverviewAlternativeScreen. The old value is removed after the move, so the
+        // user can switch it off later without it coming back at the next start.
+        try {
+            val oldPrefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            if (oldPrefs.contains(PREF_OVERVIEW_SCREEN_ENABLED)) {
+                if (oldPrefs.getBoolean(PREF_OVERVIEW_SCREEN_ENABLED, false)) {
+                    preferences.put(BooleanKey.OverviewAlternativeScreen, true)
+                }
+                oldPrefs.edit().remove(PREF_OVERVIEW_SCREEN_ENABLED).apply()
+            }
+        } catch (e: Exception) {
+            aapsLogger.error(LTag.APS, "FCLvNext: could not move the alternative home screen switch: ${e.message}")
+        }
+
         // Eén keer bij plugin-constructie: maakt de DI-geïnjecteerde
         // NotificationManager beschikbaar voor FclAiNotificationHelper
         // (dat zelf geen constructor-injectie heeft, zie FclNotificationManagerBridge.kt).
@@ -221,10 +236,10 @@ open class OpenAPSFCLPlugin @Inject constructor(
         glucoseStatusCalculatorFCL.getGlucoseStatusData(allowOldData)
 
     // 15/09/2026 (de gebruiker) — "alternatief hoofdscherm": laat FclOverviewScreen het echte
-    // AAPS-hoofdscherm vervangen, direct bij het openen van de app, als de toggle in
-    // FCLSettingsScreen aan staat (zelfde SharedPreferences-bestand/sleutel als
-    // FCLComposeContent.kt's fase-1 tabblad hierboven — zie PREFS_NAME/PREF_OVERVIEW_SCREEN_ENABLED
-    // in FclOverviewScreen.kt). Geretourneerd als `Any?` — zie de kdoc bij
+    // AAPS-hoofdscherm vervangen, direct bij het openen van de app. Sinds 2/11/2026 staat de
+    // schakelaar niet meer in de FCLvNext-instellingen maar in Settings, Appearance
+    // (BooleanKey.OverviewAlternativeScreen), voor alle APS-plugins. Andere plugins krijgen dan
+    // AlternativeOverviewScreen uit de ui-module. Geretourneerd als `Any?` — zie de kdoc bij
     // [app.aaps.core.interfaces.aps.APS.overviewOverride] voor waarom.
     //
     // De "FCLvNext"-knop navigeert hier via een echte NavigationRequest (ElementType.FCL_OPEN_SCREEN)
@@ -235,10 +250,8 @@ open class OpenAPSFCLPlugin @Inject constructor(
     // `showOverrideSheet` in FclOverviewScreen.kt.
     override val overviewOverride: Any?
         get() {
-            val enabled = context
-                .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                .getBoolean(PREF_OVERVIEW_SCREEN_ENABLED, false)
-            if (!enabled) return null
+            // One switch for all APS plugins: Settings, Appearance. FCLvNext keeps its own screen.
+            if (!preferences.get(BooleanKey.OverviewAlternativeScreen)) return null
             val content: OverviewOverrideContent = {
                 val navigationRequest = LocalPluginNavigationRequest.current
                 FclOverviewScreen(

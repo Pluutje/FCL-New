@@ -23,8 +23,6 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.PermissionController
-import app.aaps.core.interfaces.rx.bus.RxBus
-import app.aaps.core.interfaces.rx.events.EventRefreshOverview
 import app.aaps.core.interfaces.sharedPreferences.KeyValueStore
 import app.aaps.core.keys.DoubleKey
 import app.aaps.core.keys.StringKey
@@ -62,19 +60,7 @@ fun FCLSettingsScreen(
     // 13/09/2026 (de gebruiker) — true als dit scherm net geopend is via de Treatments-sheet
     // "Tijdelijke aanpassing"-snelkoppeling (zie FclTempOverrideStatusProviderImpl.kt); klapt
     // de sectie hieronder direct open, zelfde patroon als startExpandedOnUpdates hierboven.
-    startExpandedOnTempOverride: Boolean = false,
-    // 14/09/2026 (de gebruiker) — huidige stand van de preview-toggle voor het alternatieve
-    // overzichtsscherm hieronder, en een callback om de buitenste FCLComposeContent (die het
-    // 5e tabblad toont/verbergt) meteen te laten weten wanneer de toggle omgezet wordt, zonder
-    // het scherm opnieuw te hoeven openen. De SharedPreferences-waarde zelf blijft de bron van
-    // waarheid bij een nieuwe schermopening (zie hierboven, mutableStateOf leest 'm opnieuw).
-    overviewScreenEnabled: Boolean = false,
-    onOverviewScreenEnabledChange: (Boolean) -> Unit = {},
-    // 17/09/2026 (de gebruiker) — nodig om na het omzetten van de toggle hierboven meteen een
-    // EventRefreshOverview te sturen (zie onCheckedChange hieronder): zonder dit duurt het tot de
-    // volgende 30s-tick van MainViewModel's eigen ticker voordat het echte hoofdscherm de nieuwe
-    // stand van APS.overviewOverride oppikt.
-    rxBus: RxBus
+    startExpandedOnTempOverride: Boolean = false
 ) {
 
     // Link naar het externe FCLvNext-handboek (Google Doc) — los bestand,
@@ -230,56 +216,8 @@ fun FCLSettingsScreen(
             }
         }
 
-        // ── Alternatief overzicht (preview) (14/09/2026, de gebruiker) ──
-        // Vervangt, als deze toggle aan staat, het ECHTE AAPS-hoofdscherm (direct bij het
-        // openen van de app) door een overzicht met een moderner, ronder uiterlijk — geen
-        // apart tabblad meer (zie APS.overviewOverride/OpenAPSFCLPlugin.kt; het 5e tabblad
-        // hier is per 15/09/2026 verwijderd). Eigen, niet-expert SharedPreferences-bestand
-        // (zelfde aanpak als aigfActive/expertModeActive hierboven/hieronder) — deze
-        // plugin heeft geen toegang om nieuwe entries aan de AAPS-core keys-lijst toe
-        // te voegen.
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant
-            )
-        ) {
-            Column(
-                modifier = Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        "🖼️ Alternatief overzicht (preview)",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Switch(
-                        checked = overviewScreenEnabled,
-                        onCheckedChange = { active ->
-                            ctx.getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
-                                .edit().putBoolean(PREF_OVERVIEW_SCREEN_ENABLED, active).apply()
-                            onOverviewScreenEnabledChange(active)
-                            // 17/09/2026 (de gebruiker) — dwingt een directe refresh af i.p.v. te
-                            // wachten op MainViewModel's eigen 30s-ticker.
-                            rxBus.send(EventRefreshOverview("FCLvNext: alternatief hoofdscherm toggle", now = true))
-                        }
-                    )
-                }
-                Text(
-                    "Vervangt het standaard AAPS-hoofdscherm direct bij het openen van de app " +
-                        "door een alternatief overzichtsscherm met een moderner uiterlijk. Dit is " +
-                        "een eerste, nog groeiende opzet.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
+        // The switch for the alternative home screen is no longer here. It is one switch for all
+        // APS plugins now: Settings, Appearance (BooleanKey.OverviewAlternativeScreen).
 
         // ── Temp Override — "Tijdelijke aanpassing" (11/09/2026, de gebruiker) ──
         // Zie kdoc bij FclTempOverrideSettings.kt voor de volledige aanleiding en

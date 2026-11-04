@@ -33,10 +33,13 @@ object InsulinBudget {
     /** The user setting. [capFactor] is how many times the personal insulin per rise is allowed. */
     enum class Level(val code: Int, val capFactor: Double, val marginU: Double, val acts: Boolean) {
         /** Only calculates and logs what [MODERATE] would do. Doses stay as they are. */
-        MEASURE(0, 1.5, 0.5, false),
-        LIGHT(1, 3.0, 1.0, true),
-        MODERATE(2, 1.5, 0.5, true),
-        STRONG(3, 1.3, 0.5, true);
+        // 2/11/2026: factors set from a replay of 7 days (own reference 1.46 U per mmol/L): about 10%, 19% and 24% of
+        // all insulin is held back (with the cut counted as not given). Below 1.0 the limit would be lower than the
+        // user's own median, so Strong stays at 1.0. MEASURE logs what MODERATE does.
+        MEASURE(0, 1.2, 0.5, false),
+        LIGHT(1, 1.6, 0.5, true),
+        MODERATE(2, 1.2, 0.5, true),
+        STRONG(3, 1.0, 0.5, true);
 
         companion object {
             fun fromCode(code: Int): Level = entries.firstOrNull { it.code == code } ?: MEASURE

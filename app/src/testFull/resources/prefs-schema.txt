@@ -386,6 +386,9 @@ openhumans_expires_at|OhLongKey|true
 openhumans_project_member_id|OhStringKey|true
 openhumans_refresh_token|OhStringKey|true
 openhumans_upload_offset|OhLongKey|false
+overview_alt_bg_height|IntNonKey|true
+overview_alt_iob_height|IntNonKey|true
+overview_alternative_screen|BooleanKey|true
 patch_expiration|MedtrumBooleanKey|true
 patch_id|MedtrumLongNonKey|true
 patch_primed_flag|MedtrumBooleanNonKey|true

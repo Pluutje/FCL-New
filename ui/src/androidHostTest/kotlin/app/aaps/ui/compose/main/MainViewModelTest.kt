@@ -153,6 +153,8 @@ internal class MainViewModelTest {
         // Preference observers created (launchIn deferred) in init.
         whenever(preferences.observe(BooleanKey.GeneralSimpleMode)).thenReturn(MutableStateFlow(true))
         whenever(preferences.observe(BooleanKey.ApsUseSmb)).thenReturn(MutableStateFlow(false))
+        whenever(preferences.observe(BooleanKey.OverviewAlternativeScreen)).thenReturn(MutableStateFlow(false))
+        whenever(preferences.get(BooleanKey.OverviewAlternativeScreen)).thenReturn(false)
         whenever(preferences.observe(StringNonKey.QuickLaunchActions)).thenReturn(MutableStateFlow(""))
         // Toolbar actions are valid unless a test says otherwise. The view model built here refreshes its
         // toolbar when the first runTest runs the deferred collectors, and an unstubbed isValid (false)

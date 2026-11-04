@@ -72,6 +72,7 @@ import app.aaps.core.ui.CoreUiStrings
 import app.aaps.core.ui.clientcontrol.failText
 import app.aaps.core.interfaces.rx.events.EventRefreshOverview
 import app.aaps.core.ui.compose.OverviewOverrideContent
+import app.aaps.ui.compose.overview.alternative.AlternativeOverviewScreen
 import app.aaps.core.ui.compose.icons.IcAutomation
 import app.aaps.core.ui.compose.icons.IcBolus
 import app.aaps.core.ui.compose.icons.IcCarbs
@@ -155,6 +156,10 @@ class MainViewModel(
     private val eatReminder: EatReminder,
     private val clientControlDispatcher: ClientControlActionDispatcher
 ) : ViewModel() {
+
+    // The alternative home screen for every APS plugin that has no screen of its own (see
+    // BooleanKey.OverviewAlternativeScreen). One stable instance, so the UI is not rebuilt at each tick.
+    private val alternativeOverviewContent: OverviewOverrideContent = { AlternativeOverviewScreen() }
 
     // Event-driven state (drawer, dialogs, simple-mode preference). Imperative .update{} calls
     // from user actions and preference observers land here.
@@ -276,7 +281,8 @@ class MainViewModel(
             // "alternatief hoofdscherm" toggle takes effect without an app restart (up to ~30s
             // delay). Any? -> OverviewOverrideContent? cast is safe: overviewOverride's kdoc on
             // APS documents this as its one intended real type on this platform.
-            overviewOverride = activePlugin.activeAPS?.overviewOverride as? OverviewOverrideContent
+            overviewOverride = (activePlugin.activeAPS?.overviewOverride as? OverviewOverrideContent)
+                ?: alternativeOverviewContent.takeIf { preferences.get(BooleanKey.OverviewAlternativeScreen) }
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), MainUiState())
 
@@ -286,6 +292,10 @@ class MainViewModel(
             .launchIn(viewModelScope)
         preferences.observe(BooleanKey.ApsUseSmb)
             .onEach { smb -> _eventState.update { it.copy(smbEnabled = smb) } }
+            .launchIn(viewModelScope)
+        // The switch "Alternative home screen" (Settings, Appearance) works at once, without waiting for the 30 s ticker.
+        preferences.observe(BooleanKey.OverviewAlternativeScreen)
+            .onEach { _eventState.update { it.copy(refreshTick = it.refreshTick + 1) } }
             .launchIn(viewModelScope)
         // 17/09/2026 (de gebruiker) — laat FCLSettingsScreen's "alternatief hoofdscherm"-toggle
         // meteen doorwerken i.p.v. tot 30s te wachten op de eerstvolgende progressTicker-tick (zie

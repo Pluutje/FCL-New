@@ -120,15 +120,13 @@ import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.debounce
 
-/**
- * SharedPreferences file for this screen's own settings (toggle + graph heights). Not `private`:
- * [PREFS_NAME] and [PREF_OVERVIEW_SCREEN_ENABLED] are also read from `FCLComposeContent.kt` (the
- * phase-1 tab) and `OpenAPSFCLPlugin.overviewOverride` (the full-home-screen replacement) — one
- * shared name/key pair instead of three separate copies of the same string literals.
- */
+/** SharedPreferences file for this screen's own settings (graph heights). Not `private`: `OpenAPSFCLPlugin` reads the old switch from it. */
 const val PREFS_NAME = "fcl_overview_screen_settings"
 
-/** Boolean toggle: "alternatief hoofdscherm" — read by FCLComposeContent.kt and OpenAPSFCLPlugin.kt. */
+/**
+ * OLD switch "alternatief hoofdscherm". It was replaced by `BooleanKey.OverviewAlternativeScreen`
+ * (2/11/2026). Only `OpenAPSFCLPlugin` still reads it, once, to move the value to the new key.
+ */
 const val PREF_OVERVIEW_SCREEN_ENABLED = "overview_screen_enabled"
 private const val PREF_BG_HEIGHT = "bg_graph_height_dp"
 private const val PREF_IOB_HEIGHT = "iob_graph_height_dp"

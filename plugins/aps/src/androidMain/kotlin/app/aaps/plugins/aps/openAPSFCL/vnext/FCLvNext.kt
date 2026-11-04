@@ -3906,7 +3906,11 @@ private data class EarlyDoseDecision(
     val remainingDebtU: Double = 0.0,
     val boostActive: Boolean = false,
     val effectiveBoostFactor: Double = 1.0,
-    val boostCommitNr: Int = 0
+    val boostCommitNr: Int = 0,
+    // EarlyBoostCap (2/11/2026): the target before the cap, the cap itself and the cover weight. NaN / 0 when not used.
+    val uncappedTargetU: Double = 0.0,
+    val capU: Double = Double.NaN,
+    val coverWeight: Double = 0.0
 )
 
 private fun computeEarlyDoseDecision(
@@ -4350,6 +4354,10 @@ private fun computeEarlyDoseDecision(
             //     het 3,98 → 1,06 → 0,09U (geleidelijk aflopend zoals gewenst).
             ctx.iobRatio < (config.peakIobBrakeSuppressThreshold + 0.08).coerceAtMost(0.55)
 
+    // EarlyBoostCap part 2 (2/11/2026): when the insulin on board already covers the predicted peak, the boost
+    // fades to 1, gradually. See EarlyBoostCap. 0 = no cover (boost as before).
+    val coverWeight = EarlyBoostCap.coverWeight(peak.predictedPeak, peak.futureDrop60, ctx.input.targetBG)
+
     val effectiveBoostFactor = if (!boostActive) {
         1.0
     } else {
@@ -4427,8 +4435,9 @@ private fun computeEarlyDoseDecision(
             peakPressure * momentumScore * 0.35
         } else 0.0
 
-        (1.0 + extraBoost * boostDecay + peakPressureBonus)
+        val boostBeforeCover = (1.0 + extraBoost * boostDecay + peakPressureBonus)
             .coerceIn(1.0, config.earlyBoostFactor + 0.40)
+        EarlyBoostCap.fadedBoostFactor(boostBeforeCover, coverWeight)
     }
 
     // ── Hypo-debt compensatie ─────────────────────────────────────────────
@@ -4486,11 +4495,22 @@ private fun computeEarlyDoseDecision(
     val sustainT1Active = sustainT1BoostActive && sustainT1Confirmed && stageToFire >= 2
     val sustainT1Bonus = if (sustainT1Active) 0.15 else 0.0
 
-    val targetU =
+    val uncappedTargetU =
         maxOf(
             config.maxSMB * factor * config.doseStrengthMul * effectiveBoostFactor * (1.0 + sustainT1Bonus) + debtCompensationU,
             minEarlyU
         ).coerceAtMost(config.maxSMB * 1.5)   // absolute cap: nooit meer dan 1.5× maxSMB
+
+    // EarlyBoostCap part 1 (2/11/2026): only for a boost dose. The target may not be more than
+    // CAP_FACTOR times what the predicted peak needs. Fades out for a predicted peak of 8.5 to 10.5 mmol/L,
+    // so a real big meal is not limited. The smallest early dose (minEarlyU) is kept.
+    val peakCapU = EarlyBoostCap.capU(peak.predictedPeak, ctx.input.targetBG, ctx.input.effectiveISF)
+    val peakCapWeight = EarlyBoostCap.capWeight(peak.predictedPeak)
+    val targetU = if (boostActive) {
+        EarlyBoostCap.cappedTarget(uncappedTargetU, peakCapU, peakCapWeight, minEarlyU)
+    } else {
+        uncappedTargetU
+    }
 
     // Bereken resterende schuld na compensatie — de klasse schrijft dit terug
     // naar episodeHypoDebtU na de aanroep (functie kan klasselid niet muteren).
@@ -4500,8 +4520,11 @@ private fun computeEarlyDoseDecision(
         " DEBT+${"%.2f".format(debtCompensationU)}U(rest=${"%.2f".format(remainingDebtU)}U)"
     else ""
 
+    val capReason = if (boostActive && (targetU < uncappedTargetU - 0.005 || coverWeight > 0.05))
+        " CAP ${"%.2f".format(uncappedTargetU)}→${"%.2f".format(targetU)}U(cap=${"%.2f".format(peakCapU)} cover=${"%.2f".format(coverWeight)})"
+    else ""
     val boostReason = if (boostActive)
-        " BOOST×${"%.2f".format(effectiveBoostFactor)}(${earlyDose.boostCommitCount+1}/${effectiveMaxCommits}${if (extraCommitsFromDebt > 0) "+${extraCommitsFromDebt}debt" else ""})"
+        " BOOST×${"%.2f".format(effectiveBoostFactor)}(${earlyDose.boostCommitCount+1}/${effectiveMaxCommits}${if (extraCommitsFromDebt > 0) "+${extraCommitsFromDebt}debt" else ""})$capReason"
     else ""
 
     val sustainReason = if (effectiveSustainScore > 0.05)
@@ -4518,7 +4541,10 @@ private fun computeEarlyDoseDecision(
         remainingDebtU = remainingDebtU,
         boostActive = boostActive,
         effectiveBoostFactor = effectiveBoostFactor,
-        boostCommitNr = earlyDose.boostCommitCount + 1
+        boostCommitNr = earlyDose.boostCommitCount + 1,
+        uncappedTargetU = uncappedTargetU,
+        capU = peakCapU,
+        coverWeight = coverWeight
     )
 }
 
@@ -8084,6 +8110,10 @@ class FCLvNext(
             episodeHypoDebtU = episodeHypoDebtU,
             sustainT1BoostActive = isSustainT1BoostActive()
         )
+        // EarlyBoostCap (2/11/2026): store the cycles in which the cap or the cover fade acted, for the CSV.
+        if (early.boostActive && (early.targetU < early.uncappedTargetU - 0.005 || early.coverWeight > 0.05)) {
+            EarlyBoostCap.addEvent(context, EarlyBoostCap.Event(now.millis, early.uncappedTargetU, early.capU, early.coverWeight))
+        }
         // Schrijf resterende schuld terug — de functie mag klasselid niet muteren
         episodeHypoDebtU = early.remainingDebtU
         status.append(early.reason + "\n")
@@ -11278,6 +11308,38 @@ class FCLvNext(
                     )
                 }
                 if (budget.doseU < budgetBefore - 1e-9) commandedDose = budget.doseU
+            }
+        }
+
+        // ── Vlakke-hoog correctie (4/11/2026) ───────────────────────────────────────────
+        // Zie kdoc bij FlatHighCorrection. Kleine extra dosis als de BG vlak ruim boven target blijft
+        // en de IOB laag is. Alle gewichten zijn glijdend. Bewust vóór de post-hypo-rem, zodat die
+        // de extra dosis ook meeneemt, en niet bij hypo-activiteit of een dicht gaande rem.
+        run {
+            val flatBlocked = logRow.hypoActive || postPeak.lockout || postPeak.suppress ||
+                postPeak.peakBrake.reason != "NONE" || postHypoBrakeActive ||
+                accessLevel == DoseAccessLevel.BLOCKED
+            val flat = FlatHighCorrection.calculate(
+                bg = ctx.input.bgNow,
+                target = ctx.input.targetBG,
+                slope = ctx.slope,
+                iob = ctx.input.currentIOB,
+                isf = ctx.input.effectiveISF,
+                hypoDebtU = episodeHypoDebtU,
+                hypoProjectedMin = logRow.hypoProjectedBg,
+                iobRatio = ctx.iobRatio,
+                blocked = flatBlocked
+            )
+            if (flat.doseU > 0.005) {
+                commandedDose += flat.doseU
+                status.append(
+                    "VLAKKE-HOOG +${"%.3f".format(flat.doseU)}U (BG ${"%.1f".format(ctx.input.bgNow)} vs target " +
+                        "${"%.1f".format(ctx.input.targetBG)}, gewicht ${"%.2f".format(flat.weight)})\n"
+                )
+                FlatHighCorrection.addEvent(
+                    context,
+                    FlatHighCorrection.Event(now.millis, flat.doseU, ctx.input.bgNow - ctx.input.targetBG, flat.weight)
+                )
             }
         }
 
