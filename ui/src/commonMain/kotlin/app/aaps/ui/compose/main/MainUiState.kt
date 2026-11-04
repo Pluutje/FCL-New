@@ -52,8 +52,6 @@ data class MainUiState(
     val smbEnabled: Boolean = false,
     // QuickWizard entries for treatment bottom sheet
     val quickWizardItems: List<QuickWizardItem> = emptyList(),
-    // Navigation-triggered dialogs
-    val showAuthFailedDialog: Boolean = false,
     // 15/09/2026 (de gebruiker) — optional home-screen replacement contributed by the active APS
     // plugin (APS.overviewOverride, "alternatief hoofdscherm" toggle for FCLvNext). Read here (in
     // the `ui` module, which can depend on `core:ui`) and cast back from APS's `Any?` escape
