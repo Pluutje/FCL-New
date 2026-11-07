@@ -6,7 +6,10 @@ import app.aaps.plugins.aps.openAPSFCL.vnext.CoverTrial
 import app.aaps.plugins.aps.openAPSFCL.vnext.FclActiveConfigBridge
 import app.aaps.plugins.aps.openAPSFCL.vnext.InsulinBudget
 import app.aaps.plugins.aps.openAPSFCL.vnext.EarlyBoostCap
+import app.aaps.plugins.aps.openAPSFCL.vnext.FastMealCap
 import app.aaps.plugins.aps.openAPSFCL.vnext.FlatHighCorrection
+import app.aaps.plugins.aps.openAPSFCL.vnext.OverrideBrakeScale
+import app.aaps.plugins.aps.openAPSFCL.vnext.SlowRiseSupport
 import app.aaps.plugins.aps.openAPSFCL.vnext.PostHypoEarlyRelease
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.CoverIsfHistory
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.DFLearner
@@ -804,6 +807,9 @@ class FCLCycleLogRepository @Inject constructor(
         val earlyEvents = try { PostHypoEarlyRelease.loadEvents(context) } catch (_: Exception) { emptyList() }
         val capEvents = try { EarlyBoostCap.loadEvents(context) } catch (_: Exception) { emptyList() }
         val flatEvents = try { FlatHighCorrection.loadEvents(context) } catch (_: Exception) { emptyList() }
+        val ovrBrakeEvents = try { OverrideBrakeScale.loadEvents(context) } catch (_: Exception) { emptyList() }
+        val slowRiseEvents = try { SlowRiseSupport.loadEvents(context) } catch (_: Exception) { emptyList() }
+        val fastCapEvents = try { FastMealCap.loadEvents(context) } catch (_: Exception) { emptyList() }
 
         file.bufferedWriter().use { writer ->
             writer.write(csvHeader(sep))
@@ -832,7 +838,8 @@ class FCLCycleLogRepository @Inject constructor(
                         persist?.active ?: false, persist?.fired ?: false,
                         persist?.persistentCounter ?: 0, persist?.doseU ?: 0.0,
                         persist?.escalationFactor ?: 1.0, persist?.reason ?: "",
-                        shadowTable, trialEvents, budgetEvents, earlyEvents, capEvents, flatEvents
+                        shadowTable, trialEvents, budgetEvents, earlyEvents, capEvents, flatEvents, ovrBrakeEvents,
+                        slowRiseEvents, fastCapEvents
                     )
                 )
                 writer.newLine()
@@ -949,7 +956,9 @@ private fun csvHeader(sep: String): String = listOf(
     "brake_early_weight", "brake_early_extra_u",
     // ── PLAFOND VROEGE BOOST (2/11/2026) — alleen gevuld in cycli waarin het plafond of de dekking-demping ingreep ──
     "early_uncapped_u", "early_cap_u", "early_cover_weight",
-    "flat_high_u", "flat_high_excess", "flat_high_weight"
+    "flat_high_u", "flat_high_excess", "flat_high_weight",
+    "ovr_brake_severity", "ovr_brake_portion_cut_u",
+    "slow_rise_u", "slow_rise_weight", "fast_cap_cut_u"
 ).joinToString(sep)
 
 // ── CSV regel — delta_target afgeleid als bg - target ────────────────────
@@ -989,8 +998,14 @@ private fun FCLCycleLogEntity.toCsvLine(
     budgetEvents: List<InsulinBudget.Event>,
     earlyEvents: List<PostHypoEarlyRelease.Event>,
     capEvents: List<EarlyBoostCap.Event>,
-    flatEvents: List<FlatHighCorrection.Event>
+    flatEvents: List<FlatHighCorrection.Event>,
+    ovrBrakeEvents: List<OverrideBrakeScale.Event>,
+    slowRiseEvents: List<SlowRiseSupport.Event>,
+    fastCapEvents: List<FastMealCap.Event>
 ): String {
+    val slowRiseEvent = SlowRiseSupport.nearest(slowRiseEvents, timestampMs, SlowRiseSupport.CSV_TOLERANCE_MS)
+    val fastCapEvent = FastMealCap.nearest(fastCapEvents, timestampMs, FastMealCap.CSV_TOLERANCE_MS)
+    val ovrBrakeEvent = OverrideBrakeScale.nearest(ovrBrakeEvents, timestampMs, OverrideBrakeScale.CSV_TOLERANCE_MS)
     val capEvent = EarlyBoostCap.nearest(capEvents, timestampMs, EarlyBoostCap.CSV_TOLERANCE_MS)
     val flatEvent = FlatHighCorrection.nearest(flatEvents, timestampMs, FlatHighCorrection.CSV_TOLERANCE_MS)
     val trialEvent = CoverTrial.nearest(trialEvents, timestampMs, 150_000L)
@@ -1127,6 +1142,10 @@ private fun FCLCycleLogEntity.toCsvLine(
         // ── PLAFOND VROEGE BOOST (2/11/2026) ── 0,00 / 0,00 / 0,00 als het plafond deze cyclus niets deed. Zie EarlyBoostCap.
         d2(capEvent?.uncappedU ?: 0.0), d2(capEvent?.capU ?: 0.0), d2(capEvent?.coverWeight ?: 0.0),
         // ── VLAKKE-HOOG CORRECTIE (4/11/2026) ── 0,00 als er deze cyclus niets extra is gegeven. Zie FlatHighCorrection.
-        d3(flatEvent?.doseU ?: 0.0), d2(flatEvent?.excess ?: 0.0), d2(flatEvent?.weight ?: 0.0)
+        d3(flatEvent?.doseU ?: 0.0), d2(flatEvent?.excess ?: 0.0), d2(flatEvent?.weight ?: 0.0),
+        // ── OVERRIDE-REM (5/11/2026) ── 0,00 / 0,00 zonder positieve override of zonder recente lage BG. Zie OverrideBrakeScale.
+        d2(ovrBrakeEvent?.severity ?: 0.0), d2(ovrBrakeEvent?.portionCutU ?: 0.0),
+        // ── EXPERIMENTEN TRAGE/SNELLE MAALTIJD (6/11/2026) ── 0,00 als er deze cyclus niets is gedaan. Zie SlowRiseSupport en FastMealCap.
+        d3(slowRiseEvent?.doseU ?: 0.0), d2(slowRiseEvent?.weight ?: 0.0), d3(fastCapEvent?.cutU ?: 0.0)
     ).joinToString(sep)
 }

@@ -28,6 +28,7 @@ fun FclExperimentScreen() {
     ) {
         InsulinBudgetKaart(context)
         PostHypoEarlyReleaseKaart(context)
+        MaaltijdExperimentenKaart(context)
         CoverTrialKaart(context)
         CoverIsfKaart(context)
         CoverShadowKaart(context)

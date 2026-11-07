@@ -350,4 +350,30 @@
     <string name="fcl_early_more" comment="%1$d=number of older meals not shown">En %1$d eerdere maaltijden.</string>
     <string name="fcl_early_note">De hypo-bescherming blijft altijd gelden. In elke cyclus waarin zij een dosis afkapt, doet dit experiment niets. In de CSV staan de kolommen brake_early_weight en brake_early_extra_u.</string>
 
+    <!-- Experimenten met een sterkte-schuif (standaard 0% = uit) -->
+    <string name="fcl_meals_title">Experimenten trage en snelle maaltijden</string>
+    <string name="fcl_meals_state" comment="%1$d=strength slow rise, %2$d=strength fast rise, both in percent. Example: 50, 0">Sterkte: trage stijging %1$d%%, snelle stijging %2$d%%</string>
+    <string name="fcl_meals_intro">Twee proeven met elk een eigen schuif. Zet ze één voor één aan en kijk een paar dagen wat er gebeurt.</string>
+    <string name="fcl_strength_choose" comment="%1$d=strength in percent. Example: 50">Kies de sterkte: %1$d%%</string>
+    <string name="fcl_strength_scale">0% = uit. Hoe hoger, hoe sterker het ingrijpt. Begin met 50%.</string>
+    <string name="fcl_strength_results_title" comment="%1$d=number of days. Example: 7">Laatste %1$d dagen</string>
+    <string name="fcl_strength_results_none">Nog niets gedaan.</string>
+    <string name="fcl_strength_pin_title">Pincode nodig</string>
+    <string name="fcl_strength_pin_text">Vul de pincode in om de sterkte te verhogen. Verlagen of uitzetten kan zonder pincode.</string>
+    <string name="fcl_strength_pin_label">Pincode</string>
+    <string name="fcl_strength_pin_wrong">De pincode klopt niet.</string>
+    <string name="fcl_strength_pin_ok">Bevestigen</string>
+    <string name="fcl_strength_pin_cancel">Annuleren</string>
+
+    <string name="fcl_slow_title">Trage stijging: steeds een beetje bijsturen</string>
+    <string name="fcl_slow_intro">Geeft tijdens een langzame stijging steeds een klein beetje extra insuline. Zo hoeft er later minder in één keer.</string>
+    <string name="fcl_slow_results" comment="%1$d=number of days, %2$d=number of times, %3$.1f=total insulin in U. Example: 7, 12, 1.4">In de laatste %1$d dagen is %2$d keer extra insuline gegeven, samen %3$.1f E.</string>
+    <string name="fcl_slow_note">Bijvoorbeeld na een maaltijd met veel vet. Het doet niets bij een snelle stijging, als er al veel insuline is gegeven of als je BG laag is of daalt.</string>
+
+    <string name="fcl_fast_title">Snelle stijging: minder insuline per stijging</string>
+    <string name="fcl_fast_intro">Geeft bij een snelle stijging minder insuline dan normaal. Zo kom je na de piek minder vaak te laag uit.</string>
+    <string name="fcl_fast_results" comment="%1$d=number of days, %2$d=number of times, %3$.1f=insulin held back in U. Example: 7, 9, 2.3">In de laatste %1$d dagen is %2$d keer een dosis verlaagd, samen %3$.1f E minder.</string>
+    <string name="fcl_fast_note">Het gebruikt jouw eigen gemiddelde van de laatste weken en werkt pas als er genoeg maaltijden bekend zijn. Het verlaagt alleen en doet niets bij een langzame stijging.</string>
+
+
 </resources>

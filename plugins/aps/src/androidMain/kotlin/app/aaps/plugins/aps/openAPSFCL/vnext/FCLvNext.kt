@@ -5680,7 +5680,7 @@ class FCLvNext(
     // "vNN-jjjj-mm-dd-uumm" (aanmaaktijdstip, geen omschrijving; die van
     // eerdere versies raakten toch achter). Alleen als het écht relevant
     // is een korte omschrijving toevoegen.
-    private val FCL_CODE_VERSION = "v153-2026-11-01-2200"
+    private val FCL_CODE_VERSION = "v154-2026-11-06-1630"
 
     // ── Restart-detectie (16/07/2026) ─────────────────────────────────
     // true op precies de EERSTE cyclus na het (her)starten van dit class-
@@ -11308,6 +11308,24 @@ class FCLvNext(
                     )
                 }
                 if (budget.doseU < budgetBefore - 1e-9) commandedDose = budget.doseU
+
+                // Extra limit for fast meals (experiment, off by default). See kdoc of FastMealCap.
+                val fastStrength = ExperimentStrengths.factor(context, ExperimentStrengths.Experiment.FAST_MEAL)
+                if (fastStrength > 0.0 && commandedDose > 0.0) {
+                    val fastBefore = commandedDose
+                    val fast = FastMealCap.calculate(
+                        fastStrength, InsulinBudget.reference(context), fastBefore,
+                        ctx.input.bgNow - budgetBase.first, budgetGivenU, ctx.recentSlope
+                    )
+                    if (fast.limitedU < fastBefore - 1e-9) {
+                        commandedDose = fast.limitedU
+                        FastMealCap.record(context, now.millis, fastBefore, fast)
+                        status.append(
+                            "SNELLE-MAALTIJD-BEGRENZING: ${"%.2f".format(fastBefore)}→${"%.2f".format(fast.limitedU)}U " +
+                                "(ruimte ${"%.2f".format(fast.roomU)}U)\n"
+                        )
+                    }
+                }
             }
         }
 
@@ -11340,6 +11358,33 @@ class FCLvNext(
                     context,
                     FlatHighCorrection.Event(now.millis, flat.doseU, ctx.input.bgNow - ctx.input.targetBG, flat.weight)
                 )
+            }
+
+            // ── Steady help during a slow rise (experiment, off by default). See kdoc of SlowRiseSupport. ──
+            val slowStrength = ExperimentStrengths.factor(context, ExperimentStrengths.Experiment.SLOW_RISE)
+            if (slowStrength > 0.0) {
+                val slow = SlowRiseSupport.calculate(
+                    strength = slowStrength,
+                    bg = ctx.input.bgNow,
+                    target = ctx.input.targetBG,
+                    slope = ctx.recentSlope,
+                    acceleration = ctx.acceleration,
+                    iob = ctx.input.currentIOB,
+                    isf = ctx.input.effectiveISF,
+                    givenLast90U = recentEpisodeCommits.sumOf { it.second },
+                    hypoDebtU = episodeHypoDebtU,
+                    hypoProjectedMin = logRow.hypoProjectedBg,
+                    iobRatio = ctx.iobRatio,
+                    blocked = flatBlocked
+                )
+                if (slow.doseU > 0.005) {
+                    commandedDose += slow.doseU
+                    status.append(
+                        "TRAGE-STIJGING +${"%.3f".format(slow.doseU)}U (BG ${"%.1f".format(ctx.input.bgNow)}, " +
+                            "gewicht ${"%.2f".format(slow.weight)})\n"
+                    )
+                    SlowRiseSupport.addEvent(context, SlowRiseSupport.Event(now.millis, slow.doseU, slow.weight))
+                }
             }
         }
 
@@ -11402,9 +11447,21 @@ class FCLvNext(
         // 06/10/2026 (de gebruiker): bij een POSITIEVE override (hogere sterkte of extra porties) weet
         // de gebruiker dat het een grote maaltijd is. Dan slaat de rem niet aan en een lopende rem
         // gaat vroeg los (zie auto-disarm hieronder). hypo-projectie (hypoActive) blijft altijd gelden.
-        val overrideRelaxesBrake =
+        val overridePositive =
             tempOverrideStatus.active &&
                 (tempOverrideStatus.targetPct > 100 || FclTempOverrideSettings.isActiveExtraPositive(context))
+        // 5/11/2026 (de gebruiker): de override zet de rem niet meer helemaal uit. Na een diepe, recente lage BG
+        // blijft de rem deels gelden: sterkte = ernst van de lage BG (diepte x hoe lang geleden), glijdend.
+        // Zonder recente lage BG is de ernst 0 en geldt het oude gedrag (override = geen rem). Zie OverrideBrakeScale.
+        val lowestPointInHour = bgSorted.takeLast(POST_HYPO_LOW_WINDOW_POINTS).minWithOrNull(
+            compareBy<Pair<DateTime, Double>>({ it.second }, { -it.first.millis })
+        )
+        val minutesSinceLowest = lowestPointInHour?.let { (now.millis - it.first.millis) / 60_000.0 } ?: Double.MAX_VALUE
+        val overrideBrakeSeverity =
+            if (overridePositive) OverrideBrakeScale.severity(lowestBgLastHour, minutesSinceLowest) else 0.0
+        val overrideBrakeStrength = OverrideBrakeScale.brakeStrength(overridePositive, overrideBrakeSeverity)
+        // Volledig losgelaten (oud gedrag) alleen als de override de rem helemaal uit heeft staan.
+        val overrideRelaxesBrake = overridePositive && overrideBrakeStrength < 0.001
         if (mealSignal.state == MealState.CONFIRMED && (hypoDebtArm || recentLowArm) &&
             !postHypoBrakeActive && !bgFarAboveTarget && !overrideRelaxesBrake
         ) {
@@ -11642,6 +11699,17 @@ class FCLvNext(
                     )
                     logRow.guardPeakLimited = true
                 }
+            }
+            // 5/11/2026: bij een positieve override telt de rem maar voor een deel (sterkte = ernst van de lage BG).
+            // Zonder override is de sterkte 1 en verandert er niets.
+            if (overrideBrakeStrength < 0.999 && commandedDose < before) {
+                val blended = OverrideBrakeScale.blend(before, commandedDose, overrideBrakeStrength)
+                status.append(
+                    "OVERRIDE-REM: rem-sterkte ${"%.2f".format(overrideBrakeStrength)} " +
+                        "(laagste uur ${"%.1f".format(lowestBgLastHour)} mmol, ${"%.0f".format(minutesSinceLowest)} min geleden) " +
+                        "→ ${"%.2f".format(commandedDose)}→${"%.2f".format(blended)}U\n"
+                )
+                commandedDose = blended
             }
         }
 
@@ -12544,9 +12612,16 @@ class FCLvNext(
         // 04/10/2026 (de gebruiker): een "altijd geven"-portie wordt NIET hier opgeteld maar pas
         // NA de down-trend-gate hieronder, zodat die gate hem niet op 0 zet. De absolute cap en de
         // herstart-blokkade gelden nog wel (veiligheid); een restant blijft dan open voor de volgende cyclus.
+        // 5/11/2026 (de gebruiker): na een diepe, recente lage BG gaat een deel van de override-portie niet door.
+        // Het restant blijft openstaan en komt in een volgende cyclus opnieuw, als de lage BG ouder is.
+        // Alleen een positieve portie; zie OverrideBrakeScale.
+        val portionScale = OverrideBrakeScale.portionScale(overridePositive, overrideBrakeSeverity)
+        var ovrBrakePortionCutU = 0.0
+        fun scaledPortion(requestU: Double): Double = if (requestU > 0.0) requestU * portionScale else requestU
         if (portionRequest != null && !portionRequest.alwaysGive) {
             portionRequestBeforeDose = commandedDose
-            portionRequestAmount = portionRequest.requestU
+            portionRequestAmount = scaledPortion(portionRequest.requestU)
+            ovrBrakePortionCutU = portionRequest.requestU - portionRequestAmount
             portionRequestId = portionRequest.portionId
             commandedDose = (commandedDose + portionRequestAmount).coerceAtLeast(0.0)
             status.append(
@@ -12599,7 +12674,8 @@ class FCLvNext(
         if (portionRequest != null && portionRequest.alwaysGive) {
             if (ctx.input.bgNow >= FclTempOverrideSettings.ALWAYS_GIVE_MIN_BG_MMOL && !alwaysGiveFalling) {
                 portionRequestBeforeDose = commandedDose
-                portionRequestAmount = portionRequest.requestU
+                portionRequestAmount = scaledPortion(portionRequest.requestU)
+                ovrBrakePortionCutU = portionRequest.requestU - portionRequestAmount
                 portionRequestId = portionRequest.portionId
                 commandedDose = (commandedDose + portionRequestAmount).coerceAtLeast(0.0)
                 status.append(
@@ -12711,6 +12787,14 @@ class FCLvNext(
         // remainingU staan en wordt een volgende cyclus opnieuw (en, richting
         // het einde van de override, getaperd) aangevraagd — zie kdoc bij
         // FclTempOverrideSettings.nextDuePortionRequest()/erodeOutstandingPortions().
+        // 5/11/2026: de override-rem (ernst, achtergehouden portie) voor de CSV. Alleen bij een positieve override
+        // met een recente lage BG.
+        if (overridePositive && overrideBrakeSeverity > 0.01) {
+            OverrideBrakeScale.addEvent(
+                context,
+                OverrideBrakeScale.Event(now.millis, overrideBrakeSeverity, ovrBrakePortionCutU)
+            )
+        }
         var portionDeliveredThisCycle = 0.0
         val settlePortionId = portionRequestId
         if (settlePortionId != null) {

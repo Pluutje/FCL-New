@@ -53,8 +53,9 @@ private const val GVP_GOOD = 30.0
 private const val GVP_MEDIUM = 40.0
 
 private const val HBA1C_GOOD = 7.0
-private const val TIR_GOOD = 70.0
-private const val TIR_MEDIUM = 50.0
+// TIR zones (percent): under 80 orange, 80 to 90 light green, 90 and up dark green.
+private const val TIR_GOOD = 90.0
+private const val TIR_OK = 80.0
 
 private fun gvpColor(gvp: Double): Color = when {
     gvp <= GVP_GOOD   -> GvpGreen
@@ -75,9 +76,9 @@ private fun magColor(mag: Double): Color = when {
 }
 
 private fun tirColor(tir: Double): Color = when {
-    tir >= TIR_GOOD   -> GvpGreen
-    tir >= TIR_MEDIUM -> GvpAmber
-    else              -> GvpRed
+    tir >= TIR_GOOD -> GvpGreen
+    tir >= TIR_OK   -> PeriodGreen2
+    else            -> GvpAmber
 }
 
 private val WINDOWS = listOf(7, 14, 30)
@@ -251,14 +252,15 @@ fun GvpPeriodLijn(buckets: List<PeriodBucket?>, period: OverviewPeriod, modifier
 @Composable
 fun TirPeriodLijn(buckets: List<PeriodBucket?>, period: OverviewPeriod, modifier: Modifier = Modifier) {
     val waarden = buckets.map { it?.tirPct }
-    // The axis starts at 50%. Only when the lowest value is under 60% it goes lower:
-    // at least 10 points under the lowest value, rounded down to tens.
+    // The axis starts at 80%. Only when the lowest value is near or under 80% it goes lower:
+    // a little room under the lowest value, rounded down to steps of 5.
     val laagste = waarden.filterNotNull().minOrNull()
-    val yMin = if (laagste != null && laagste < 60.0) {
-        (floor((laagste - 10.0) / 10.0) * 10.0).coerceAtLeast(0.0)
+    val yMin = if (laagste != null) {
+        minOf(TIR_OK, floor((laagste - 2.0) / 5.0) * 5.0).coerceAtLeast(0.0)
     } else {
-        50.0
+        TIR_OK
     }
+    val gridStep = if (100.0 - yMin <= 30.0) 10.0 else 25.0
     PeriodTrendCanvas(
         waarden = waarden,
         lineWindow = period.lineWindow,
@@ -266,10 +268,10 @@ fun TirPeriodLijn(buckets: List<PeriodBucket?>, period: OverviewPeriod, modifier
         xLabels = yearLabels(period),
         yMin = yMin,
         yMax = 100.0,
-        gridStep = 25.0,
+        gridStep = gridStep,
         bands = listOf(
-            Band(0.0, TIR_MEDIUM, GvpRed),
-            Band(TIR_MEDIUM, TIR_GOOD, GvpAmber),
+            Band(0.0, TIR_OK, GvpAmber),
+            Band(TIR_OK, TIR_GOOD, PeriodGreen2),
             Band(TIR_GOOD, 100.0, GvpGreen)
         ),
         dotColor = ::tirColor,

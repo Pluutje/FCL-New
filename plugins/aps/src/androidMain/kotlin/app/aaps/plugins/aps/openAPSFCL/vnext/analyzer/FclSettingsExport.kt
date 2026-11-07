@@ -7,6 +7,7 @@ import app.aaps.core.keys.DoubleKey
 import app.aaps.core.keys.IntKey
 import app.aaps.core.keys.StringKey
 import app.aaps.core.keys.interfaces.Preferences
+import app.aaps.plugins.aps.openAPSFCL.vnext.ExperimentStrengths
 import app.aaps.plugins.aps.openAPSFCL.vnext.FclProfileBridge
 import app.aaps.plugins.aps.openAPSFCL.vnext.InsulinBudget
 import app.aaps.plugins.aps.openAPSFCL.vnext.PostHypoEarlyRelease
@@ -43,7 +44,8 @@ object FclSettingsExport {
         "fcl_ai_param_store",      // approved parameter overrides
         "fcl_cover_trial",         // cover brake trial
         InsulinBudget.PREFS_NAME,  // limit per rise: level and personal reference
-        PostHypoEarlyRelease.PREFS_NAME // brake lets go earlier: level (events are too long and skipped)
+        PostHypoEarlyRelease.PREFS_NAME, // brake lets go earlier: level (events are too long and skipped)
+        ExperimentStrengths.PREFS_NAME   // strength (percent) of the slow rise, fast meal and learn-from-lows experiments
     )
 
     /** Internal tuning values (Double). Add a key here and it is exported. */
@@ -88,6 +90,9 @@ object FclSettingsExport {
                 .toMutableMap()
             current["insulin_budget_level"] = InsulinBudget.level(context).name
             current["brake_early_level"] = PostHypoEarlyRelease.level(context).name
+            for (experiment in ExperimentStrengths.Experiment.entries) {
+                current["strength_${experiment.key}_percent"] = ExperimentStrengths.percent(context, experiment).toString()
+            }
             val prefs = context.getSharedPreferences(LOG_PREFS, Context.MODE_PRIVATE)
             val last = (prefs.getString(KEY_LAST, "") ?: "").split("\n").filter { it.contains("=") }
                 .associate { it.substringBefore("=") to it.substringAfter("=") }

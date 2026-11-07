@@ -75,9 +75,9 @@ class PostHypoEarlyReleaseTest {
 
     @Test
     fun `PIN check`() {
-        assertThat(PostHypoEarlyRelease.isPinCorrect("1962")).isTrue()
-        assertThat(PostHypoEarlyRelease.isPinCorrect(" 1962 ")).isTrue()
-        assertThat(PostHypoEarlyRelease.isPinCorrect("1963")).isFalse()
+        assertThat(PostHypoEarlyRelease.isPinCorrect("0000")).isTrue()
+        assertThat(PostHypoEarlyRelease.isPinCorrect(" 0000 ")).isTrue()
+        assertThat(PostHypoEarlyRelease.isPinCorrect("0001")).isFalse()
         assertThat(PostHypoEarlyRelease.isPinCorrect("")).isFalse()
     }
 

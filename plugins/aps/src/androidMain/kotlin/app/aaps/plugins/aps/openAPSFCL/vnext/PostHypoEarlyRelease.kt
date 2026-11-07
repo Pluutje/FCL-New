@@ -23,7 +23,7 @@ import kotlin.math.abs
 object PostHypoEarlyRelease {
 
     /** Needed to switch the experiment on or to a higher level. Going lower or off needs no PIN. */
-    const val PIN = "1962"
+    const val PIN = "0000"
 
     const val PREFS_NAME = "fcl_brake_early_release"
     private const val KEY_LEVEL = "level"

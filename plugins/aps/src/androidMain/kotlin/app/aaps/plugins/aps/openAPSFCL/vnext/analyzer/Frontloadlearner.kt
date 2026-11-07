@@ -78,6 +78,7 @@ object FrontloadLearner {
     private fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
+
     // ── Publieke API ──────────────────────────────────────────────────────
 
     fun getHistory(context: Context): List<FrontloadLearningStep> {
