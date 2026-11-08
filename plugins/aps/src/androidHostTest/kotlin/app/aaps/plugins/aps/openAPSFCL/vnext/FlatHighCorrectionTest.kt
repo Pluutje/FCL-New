@@ -39,6 +39,13 @@ class FlatHighCorrectionTest {
     }
 
     @Test
+    fun `high BG with an IOB that does not cover the excess still gets a dose (7 11 case)`() {
+        // BG 15.3, target 5.5, IOB 3.0 U, ISF 3.9, cover factor 0.5: cover is about 0.6
+        val r = FlatHighCorrection.calculate(15.3, 5.5, -0.3, 3.0, 3.9, 0.0, 0.0, 0.3, false, 0.5)
+        assertThat(r.doseU).isGreaterThan(0.0)
+    }
+
+    @Test
     fun `no dose near a low projection or with hypo debt`() {
         assertThat(calc(proj = 4.4).doseU).isEqualTo(0.0)
         assertThat(calc(debt = 0.6).doseU).isEqualTo(0.0)

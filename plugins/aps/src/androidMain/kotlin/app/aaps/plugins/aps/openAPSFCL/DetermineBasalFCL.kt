@@ -536,9 +536,8 @@ class DetermineBasalFCL @Inject constructor(
             .onCycle(context, cycleLogRepository,
                      app.aaps.plugins.aps.openAPSFCL.vnext.logging.FCLvNextProfileParameterSnapshot.collectForHistory(preferences),
                      profile.sens / 18.0)
-        // Gemeten IOB-dekkingsfactor per BG-klasse (alleen meten en tonen, past de curve niet aan).
-        app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.CoverIsfHistory
-            .onCycle(context, cycleLogRepository)
+        // Persoonlijke referentie (insuline per mmol/L stijging) voor de proef "Snelle stijging", hooguit 1x per uur.
+        app.aaps.plugins.aps.openAPSFCL.vnext.InsulinBudget.onCycle(context)
 
         // Geleidelijke nacht-overgang (17/07/2026) — zie kdoc bij
         // FCLvNextDayNightHelper.minutesSinceNightStart() en

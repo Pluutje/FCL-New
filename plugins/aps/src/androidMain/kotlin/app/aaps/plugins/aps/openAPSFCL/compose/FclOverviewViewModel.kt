@@ -173,7 +173,7 @@ class FclOverviewViewModel(
             val now = dateUtil.now()
             val profile = profileFunction.getProfile()
             val reservoirU = profile?.let {
-                activePlugin.activePump.reservoirLevel.value.iU(it.insulinConcentration())
+                activePlugin.activePump.reservoirLevel.value?.iU(it.insulinConcentration())
             } ?: 0.0
 
             // Zelfde formule als ChipsViewModel.iobUiState (standaard IOB-chipje).

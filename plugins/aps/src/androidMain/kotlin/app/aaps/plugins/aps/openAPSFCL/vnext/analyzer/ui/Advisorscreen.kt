@@ -103,9 +103,6 @@ fun AdvisorScreen(
 
         Text(s.advisorAnalyse, style = MaterialTheme.typography.headlineMedium)
 
-        val expertMode = androidx.compose.ui.platform.LocalContext.current
-            .getSharedPreferences("fcl_expert_prefs", android.content.Context.MODE_PRIVATE)
-            .getBoolean("expert_mode_active", false)
 
         // "Automaat leert"-schakelaar verplaatst naar Settings → "🤖 Analyser
         // Automaat" (tussen "Dosering & gedrag" en "Dag / nacht context"),
@@ -144,38 +141,36 @@ fun AdvisorScreen(
             // Settings, zie FclExperimentScreen.kt en FCLComposeContent.kt.
 
             // ── Expert: Parameters, Backup en Analyse tabs ───────────────
-            if (expertMode) {
-                add(InfoTabPage(s.parameters) {
-                    HandmatigParametersTab(
-                        activeParams  = activeParams,
-                        onApplyParams = onApplyParams
-                    )
-                })
-                // Backup & herstel van de geleerde staat (26/08/2026) — zie
-                // FclLearnerBackup.kt / FclBackupRestoreCard.kt: aanleiding
-                // was het verlies van sterkte/timing/volhoudendheid bij de
-                // overstap naar de nieuwe telefoon op 20/08/2026. Alleen in
-                // Expert-modus, net als de andere technische tabbladen.
-                add(InfoTabPage("Backup") {
-                    FclBackupRestoreCard()
-                })
-                add(InfoTabPage(s.analyse) {
-                    AdvisorOverviewCard(recommendation)
-                    AdvisorSummaryCard(recommendation)
-                    Spacer(Modifier.height(4.dp))
-                    AdvisorActionCard(
-                        recommendation = recommendation,
-                        current = current,
-                        episodeCount = episodeCount,
-                        onApplyToAaps = onApplyToAaps
-                    )
-                    AdvisorCurrentSettingsCard(current)
-                    Spacer(Modifier.height(8.dp))
-                    AdvisorSelectionCard(recommendation)
-                    AdvisorAxisEvidenceCard(recommendation)
-                    AdvisorPatternScoresCard(recommendation)
-                })
-            }
+            add(InfoTabPage(s.parameters) {
+                HandmatigParametersTab(
+                    activeParams  = activeParams,
+                    onApplyParams = onApplyParams
+                )
+            })
+            // Backup & herstel van de geleerde staat (26/08/2026) — zie
+            // FclLearnerBackup.kt / FclBackupRestoreCard.kt: aanleiding
+            // was het verlies van sterkte/timing/volhoudendheid bij de
+            // overstap naar de nieuwe telefoon op 20/08/2026. Alleen in
+            // net als de andere technische tabbladen.
+            add(InfoTabPage("Backup") {
+                FclBackupRestoreCard()
+            })
+            add(InfoTabPage(s.analyse) {
+                AdvisorOverviewCard(recommendation)
+                AdvisorSummaryCard(recommendation)
+                Spacer(Modifier.height(4.dp))
+                AdvisorActionCard(
+                    recommendation = recommendation,
+                    current = current,
+                    episodeCount = episodeCount,
+                    onApplyToAaps = onApplyToAaps
+                )
+                AdvisorCurrentSettingsCard(current)
+                Spacer(Modifier.height(8.dp))
+                AdvisorSelectionCard(recommendation)
+                AdvisorAxisEvidenceCard(recommendation)
+                AdvisorPatternScoresCard(recommendation)
+            })
         }
 
         InfoTabPager(

@@ -17,7 +17,7 @@ import kotlin.math.abs
  *     peak is above target (`futureDrop60 > peak - target`), the boost factor fades to 1 over
  *     [COVER_FADE_MMOL] mmol/L. A later boost dose in the same meal then gets smaller by itself.
  *
- * The calculation is pure and tested. Cycles in which it acted are stored (like `InsulinBudget`) and
+ * The calculation is pure and tested. Cycles in which it acted are stored (like `FastMealCap`) and
  * written to the CSV: `early_cap_u`, `early_uncapped_u`, `early_cover_weight`.
  */
 object EarlyBoostCap {

@@ -49,11 +49,38 @@ object OverrideBrakeScale {
         return t * t * (3.0 - 2.0 * t)
     }
 
-    /** 0 to 1. [lowestBgLastHour] in mmol/L, [minutesSinceLowest] in minutes. */
-    fun severity(lowestBgLastHour: Double, minutesSinceLowest: Double): Double {
+    /**
+     * 8/11/2026 (de gebruiker): a positive override means "I eat". The BG that comes back up and is above the low range
+     * and still rising is the proof that the carbs work. Then the brake must not stay on only because the low was
+     * less than 30 minutes ago (14:07-14:42: BG 3.3 to 8.3, override portion of 1.5 U held back until 14:32).
+     *
+     * The severity is multiplied by (1 - recovery). Recovery is the product of two smooth parts:
+     *  - level: 0 at [RECOVER_BG_START_MMOL] and lower, 1 at [RECOVER_BG_START_MMOL] + [RECOVER_BG_SPAN_MMOL] and higher
+     *  - rising: 0 at a 5 min delta of 0 or lower, 1 from [RECOVER_DELTA_FULL] per 5 min
+     * While the BG is still low or falling the brake stays as before (this is the hypo safety).
+     */
+    const val RECOVER_BG_START_MMOL = 4.4
+    const val RECOVER_BG_SPAN_MMOL = 1.0
+    const val RECOVER_DELTA_FULL = 0.2
+
+    /** 0 to 1: how far the BG has come back from the low, see above. */
+    fun recovery(bgNow: Double, recentDelta5m: Double): Double =
+        smooth01((bgNow - RECOVER_BG_START_MMOL) / RECOVER_BG_SPAN_MMOL) *
+            smooth01(recentDelta5m / RECOVER_DELTA_FULL)
+
+    /**
+     * 0 to 1. [lowestBgLastHour] in mmol/L, [minutesSinceLowest] in minutes.
+     * [bgNow] (mmol/L) and [recentDelta5m] are used for the recovery. If they are not given there is no recovery.
+     */
+    fun severity(
+        lowestBgLastHour: Double,
+        minutesSinceLowest: Double,
+        bgNow: Double = lowestBgLastHour,
+        recentDelta5m: Double = 0.0
+    ): Double {
         val depth = smooth01((DEPTH_NONE_MMOL - lowestBgLastHour) / (DEPTH_NONE_MMOL - DEPTH_FULL_MMOL))
         val recent = 1.0 - smooth01((minutesSinceLowest - RECENT_FULL_MIN) / (RECENT_NONE_MIN - RECENT_FULL_MIN))
-        return depth * recent
+        return depth * recent * (1.0 - recovery(bgNow, recentDelta5m))
     }
 
     /** Brake strength: 1 without a positive override, the severity with one. */

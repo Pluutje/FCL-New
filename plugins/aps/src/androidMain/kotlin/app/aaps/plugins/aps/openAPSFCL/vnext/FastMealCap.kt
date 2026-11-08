@@ -11,7 +11,7 @@ import kotlin.math.abs
  * more than the 0.6 U per mmol/L of the slow meals. When the carbs are used up soon after the peak, the insulin that is
  * still on board brings the BG down too far. Insulin that is given during a slow rise has time to work against the rise.
  *
- * This extra limit works like [InsulinBudget], with the same personal reference (U per mmol/L of rise) and the same start of
+ * This limit uses the maths of [InsulinBudget], with the same personal reference (U per mmol/L of rise) and the same start of
  * the rise. The difference is that its factor goes down with the strength, and that it counts only as much as the rise is
  * fast (weight 0 at [FAST_FROM] mmol/L/h, 1 at [FAST_FROM] + [FAST_SPAN]). A slow rise is not limited by it.
  *  - Factor = [BASE_FACTOR] - [FACTOR_PER_STRENGTH] x strength, but not lower than [MIN_FACTOR].
@@ -21,8 +21,8 @@ import kotlin.math.abs
  *    whole dose, and the dose fades out smoothly when the room is used up. There is no hard step.
  *  - It can only lower a dose. All hypo protection stays as it is. Strength 0 = off.
  *
- * It works on top of [InsulinBudget]: the result is the lowest of the two. Cycles in which it acted are stored and written
- * to the CSV: `fast_cap_cut_u`.
+ * The general limit per rise (InsulinBudget) was removed on 8/11/2026; only its maths and the personal reference are left.
+ * Cycles in which this experiment acted are stored and written to the CSV: `fast_cap_cut_u`.
  */
 object FastMealCap {
 

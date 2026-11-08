@@ -34,6 +34,14 @@ object FlatHighCorrection {
     const val FLAT_SLOPE_SPAN = 0.8
     const val IOB_FROM = 1.5
     const val IOB_SPAN = 1.0
+    /**
+     * Cover weight (7/11/2026): IOB x ISF x cover factor / excess. 1 below [COVER_FROM], 0 at [COVER_FROM] + [COVER_SPAN].
+     * The IOB weight is the larger of the old absolute-IOB weight and this one, so a BG far above target with
+     * an IOB that does not cover the excess (BG 15, IOB 3 U) still gets the correction.
+     */
+    const val COVER_FROM = 1.0
+    const val COVER_SPAN = 1.0
+    private const val MIN_EXCESS_FOR_COVER = 0.5
     const val DEBT_FROM = 0.1
     const val DEBT_SPAN = 0.4
     /** The hypo projection (mmol/L): dose is 0 at [PROJ_FROM], full at [PROJ_FROM] + [PROJ_SPAN]. */
@@ -81,13 +89,17 @@ object FlatHighCorrection {
         hypoDebtU: Double,
         hypoProjectedMin: Double,
         iobRatio: Double,
-        blocked: Boolean
+        blocked: Boolean,
+        coverFactor: Double = 1.0
     ): Result {
         val excess = bg - target
         if (blocked || excess <= 0.0) return Result(0.0, 0.0)
         val excessW = smooth01((excess - EXCESS_FROM) / EXCESS_SPAN)
         val flatW = 1.0 - smooth01((abs(slope) - FLAT_SLOPE_FROM) / FLAT_SLOPE_SPAN)
-        val iobW = 1.0 - smooth01((iob - IOB_FROM) / IOB_SPAN)
+        val iobAbsW = 1.0 - smooth01((iob - IOB_FROM) / IOB_SPAN)
+        val cover = iob * isf * coverFactor / excess.coerceAtLeast(MIN_EXCESS_FOR_COVER)
+        val coverW = 1.0 - smooth01((cover - COVER_FROM) / COVER_SPAN)
+        val iobW = maxOf(iobAbsW, coverW)
         val debtW = 1.0 - smooth01((hypoDebtU - DEBT_FROM) / DEBT_SPAN)
         val projW = if (hypoProjectedMin > 0.0) smooth01((hypoProjectedMin - PROJ_FROM) / PROJ_SPAN) else 1.0
         val ratioW = 1.0 - smooth01((iobRatio - RATIO_FROM) / RATIO_SPAN)

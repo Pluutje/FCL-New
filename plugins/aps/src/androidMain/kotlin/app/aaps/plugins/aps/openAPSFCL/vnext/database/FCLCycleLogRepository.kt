@@ -2,23 +2,18 @@ package app.aaps.plugins.aps.openAPSFCL.vnext.database
 
 import android.content.Context
 import app.aaps.plugins.aps.openAPSFCL.vnext.CoverIsf
-import app.aaps.plugins.aps.openAPSFCL.vnext.CoverTrial
 import app.aaps.plugins.aps.openAPSFCL.vnext.FclActiveConfigBridge
-import app.aaps.plugins.aps.openAPSFCL.vnext.InsulinBudget
 import app.aaps.plugins.aps.openAPSFCL.vnext.EarlyBoostCap
 import app.aaps.plugins.aps.openAPSFCL.vnext.FastMealCap
 import app.aaps.plugins.aps.openAPSFCL.vnext.FlatHighCorrection
 import app.aaps.plugins.aps.openAPSFCL.vnext.OverrideBrakeScale
 import app.aaps.plugins.aps.openAPSFCL.vnext.SlowRiseSupport
-import app.aaps.plugins.aps.openAPSFCL.vnext.PostHypoEarlyRelease
-import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.CoverIsfHistory
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.DFLearner
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.EpisodeDetector
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.EpisodeMetricsBuilder
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.FrontloadLearner
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.FclLearnerBackup
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.FclSettingsExport
-import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.GvpCalculator
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.toLogRow
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.PostHypoBrakeLogEntity
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.database.ExplosiveRiseLogEntity
@@ -30,7 +25,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.io.File
 import java.time.Instant
-import java.time.LocalDate
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import dev.zacsweers.metro.AppScope
@@ -67,10 +61,6 @@ class FCLCycleLogRepository @Inject constructor(
     /** Slim rows in [fromMs, toMs) for the daily dose summary. */
     suspend fun doseRows(fromMs: Long, toMs: Long): List<CycleDoseRow> =
         dao.getDoseRows(fromMs, toMs)
-
-    /** Slim rows in [fromMs, toMs) to measure the IOB cover factor. */
-    suspend fun coverRows(fromMs: Long, toMs: Long): List<CycleCoverRow> =
-        dao.getCoverRows(fromMs, toMs)
 
     fun insert(entity: FCLCycleLogEntity) {
         scope.launch {
@@ -795,16 +785,6 @@ class FCLCycleLogRepository @Inject constructor(
         val fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'").withZone(ZoneOffset.UTC)
         val fmtLocal = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(java.time.ZoneId.of("Europe/Amsterdam"))
 
-        // Gemeten dekkingswaarden voor de schaduwkolommen (een keer per export lezen).
-        val shadowTable = try {
-            CoverIsfHistory.shadowTable(CoverIsfHistory.load(context), LocalDate.now(GvpCalculator.zone))
-        } catch (_: Exception) {
-            CoverIsfHistory.emptyShadowTable()
-        }
-
-        val trialEvents = try { CoverTrial.loadEvents(context) } catch (_: Exception) { emptyList() }
-        val budgetEvents = try { InsulinBudget.loadEvents(context) } catch (_: Exception) { emptyList() }
-        val earlyEvents = try { PostHypoEarlyRelease.loadEvents(context) } catch (_: Exception) { emptyList() }
         val capEvents = try { EarlyBoostCap.loadEvents(context) } catch (_: Exception) { emptyList() }
         val flatEvents = try { FlatHighCorrection.loadEvents(context) } catch (_: Exception) { emptyList() }
         val ovrBrakeEvents = try { OverrideBrakeScale.loadEvents(context) } catch (_: Exception) { emptyList() }
@@ -838,7 +818,7 @@ class FCLCycleLogRepository @Inject constructor(
                         persist?.active ?: false, persist?.fired ?: false,
                         persist?.persistentCounter ?: 0, persist?.doseU ?: 0.0,
                         persist?.escalationFactor ?: 1.0, persist?.reason ?: "",
-                        shadowTable, trialEvents, budgetEvents, earlyEvents, capEvents, flatEvents, ovrBrakeEvents,
+                        capEvents, flatEvents, ovrBrakeEvents,
                         slowRiseEvents, fastCapEvents
                     )
                 )
@@ -947,13 +927,6 @@ private fun csvHeader(sep: String): String = listOf(
     "persist_reason",
     // ── IOB-DEKKING (19/10/2026) — afgeleid uit bg/target/iob/effective_isf, zie CoverIsf ──
     "cover_isf_factor", "iob_cover_static", "iob_cover_dyn", "iob_cover_mmol",
-    // ── SCHADUW (23/10/2026) — "wat als de gemeten dekkingswaarde was gebruikt", alleen bij een commit ──
-    "shadow_cover_factor", "shadow_commit_brake_now", "shadow_commit_brake", "shadow_extra_u",
-    // ── PROEF (23/10/2026) — extra insuline van de dekkingsproef (CoverTrial) in deze cyclus ──
-    "cover_trial_s", "cover_trial_extra_u",
-    // ── BEGRENZING PER STIJGING (29/10/2026) — alleen gevuld in cycli waarin de begrenzing ingreep (of op "Alleen meten" zou ingrijpen) ──
-    "budget_wanted_u", "budget_limited_u", "budget_room_u", "budget_applied", "budget_brake", "budget_level",
-    "brake_early_weight", "brake_early_extra_u",
     // ── PLAFOND VROEGE BOOST (2/11/2026) — alleen gevuld in cycli waarin het plafond of de dekking-demping ingreep ──
     "early_uncapped_u", "early_cap_u", "early_cover_weight",
     "flat_high_u", "flat_high_excess", "flat_high_weight",
@@ -993,10 +966,6 @@ private fun FCLCycleLogEntity.toCsvLine(
     persistDoseU: Double,
     persistEscalation: Double,
     persistReason: String,
-    shadowTable: Array<DoubleArray>,
-    trialEvents: List<CoverTrial.Event>,
-    budgetEvents: List<InsulinBudget.Event>,
-    earlyEvents: List<PostHypoEarlyRelease.Event>,
     capEvents: List<EarlyBoostCap.Event>,
     flatEvents: List<FlatHighCorrection.Event>,
     ovrBrakeEvents: List<OverrideBrakeScale.Event>,
@@ -1008,18 +977,11 @@ private fun FCLCycleLogEntity.toCsvLine(
     val ovrBrakeEvent = OverrideBrakeScale.nearest(ovrBrakeEvents, timestampMs, OverrideBrakeScale.CSV_TOLERANCE_MS)
     val capEvent = EarlyBoostCap.nearest(capEvents, timestampMs, EarlyBoostCap.CSV_TOLERANCE_MS)
     val flatEvent = FlatHighCorrection.nearest(flatEvents, timestampMs, FlatHighCorrection.CSV_TOLERANCE_MS)
-    val trialEvent = CoverTrial.nearest(trialEvents, timestampMs, 150_000L)
-    val budgetEvent = InsulinBudget.nearest(budgetEvents, timestampMs, 150_000L)
-    val earlyEvent = PostHypoEarlyRelease.nearest(earlyEvents, timestampMs, PostHypoEarlyRelease.CSV_TOLERANCE_MS)
     val ts = fmt.format(Instant.ofEpochMilli(timestampMs))
     val tsLocal = fmtLocal.format(Instant.ofEpochMilli(timestampMs))
     val deltaTarget = glucoseIob.bg - glucoseIob.target
     val coverFactor = CoverIsf.factor(glucoseIob.bg, glucoseIob.target)
     val coverStatic = glucoseIob.iob * model.effectiveISF / (glucoseIob.bg - glucoseIob.target).coerceAtLeast(0.5)
-    val shadow = CoverIsfHistory.shadowForRow(
-        glucoseIob.bg, glucoseIob.target, glucoseIob.iob, model.effectiveISF, trends.recentSlope,
-        forensic.commitDoseFinal, context.codeVersion, shadowTable
-    )
 
     fun d2(v: Double) = "%.2f".format(v)
     fun d3(v: Double) = "%.3f".format(v)
@@ -1125,20 +1087,6 @@ private fun FCLCycleLogEntity.toCsvLine(
         // Afgeleid bij het exporteren, dus geen extra kolommen in de database. De factor komt uit de curve
         // van de versie die de CSV maakt; de ruwe bg/target/iob/effective_isf staan er ook in.
         d3(coverFactor), d2(coverStatic), d2(coverStatic * coverFactor), d2(glucoseIob.iob * model.effectiveISF * coverFactor),
-        // ── SCHADUW (23/10/2026) ──
-        // Alleen een berekening, de dosering gebruikt dit niet. Zie CoverIsfHistory.shadowForRow. Leeg stuk
-        // (factor 0, rem 1,000, extra 0,00) als er geen commit was of de versie nog geen dekkingsrem had.
-        d3(shadow?.factor ?: 0.0), d3(shadow?.brakeNow ?: 1.0), d3(shadow?.brakeShadow ?: 1.0), d2(shadow?.extraU ?: 0.0),
-        // ── PROEF (23/10/2026) ── 0 / 0,00 als de proef deze cyclus niets toevoegde. Bij een proef-cyclus is
-        // commit_dose_final al inclusief de extra dosis, dus de shadow-kolommen daarvan niet meetellen.
-        d2(trialEvent?.strength ?: 0.0), d2(trialEvent?.extraU ?: 0.0),
-        // ── BEGRENZING PER STIJGING (29/10/2026) ── 0,00 / false als de begrenzing deze cyclus niets deed.
-        // room kan negatief zijn (budget al op). Zie InsulinBudget.
-        d2(budgetEvent?.wantedU ?: 0.0), d2(budgetEvent?.limitedU ?: 0.0), d2(budgetEvent?.roomU ?: 0.0),
-        bool(budgetEvent?.applied ?: false), bool(budgetEvent?.brake ?: false),
-        (budgetEvent?.levelCode ?: -1).toString(),
-        // ── REM EERDER LOS (1/11/2026) ── 0,00 / 0,00 als het experiment deze cyclus niets doorliet. Zie PostHypoEarlyRelease.
-        d2(earlyEvent?.weight ?: 0.0), d2(earlyEvent?.extraU ?: 0.0),
         // ── PLAFOND VROEGE BOOST (2/11/2026) ── 0,00 / 0,00 / 0,00 als het plafond deze cyclus niets deed. Zie EarlyBoostCap.
         d2(capEvent?.uncappedU ?: 0.0), d2(capEvent?.capU ?: 0.0), d2(capEvent?.coverWeight ?: 0.0),
         // ── VLAKKE-HOOG CORRECTIE (4/11/2026) ── 0,00 als er deze cyclus niets extra is gegeven. Zie FlatHighCorrection.

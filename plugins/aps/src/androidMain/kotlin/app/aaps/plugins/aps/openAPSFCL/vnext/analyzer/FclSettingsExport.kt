@@ -10,7 +10,6 @@ import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.plugins.aps.openAPSFCL.vnext.ExperimentStrengths
 import app.aaps.plugins.aps.openAPSFCL.vnext.FclProfileBridge
 import app.aaps.plugins.aps.openAPSFCL.vnext.InsulinBudget
-import app.aaps.plugins.aps.openAPSFCL.vnext.PostHypoEarlyRelease
 import app.aaps.plugins.aps.openAPSFCL.vnext.logging.FCLvNextProfileParameterSnapshot
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -40,12 +39,9 @@ object FclSettingsExport {
         "df_learner_prefs",        // D/F, nfLevel, aggressiveness, learner state
         "v_learner_prefs",         // persistence learner
         "fl_prefs",                // frontload learner
-        "fcl_expert_prefs",        // expert mode
         "fcl_ai_param_store",      // approved parameter overrides
-        "fcl_cover_trial",         // cover brake trial
-        InsulinBudget.PREFS_NAME,  // limit per rise: level and personal reference
-        PostHypoEarlyRelease.PREFS_NAME, // brake lets go earlier: level (events are too long and skipped)
-        ExperimentStrengths.PREFS_NAME   // strength (percent) of the slow rise, fast meal and learn-from-lows experiments
+        InsulinBudget.PREFS_NAME,  // personal reference (insulin per rise)
+        ExperimentStrengths.PREFS_NAME   // strength (percent) of the slow rise, fast meal, extra early dose and earlier alert experiments
     )
 
     /** Internal tuning values (Double). Add a key here and it is exported. */
@@ -88,8 +84,6 @@ object FclSettingsExport {
             val current = FCLvNextProfileParameterSnapshot.collect(preferences)
                 .mapValues { (_, v) -> if (v is Double) "%.3f".format(java.util.Locale.US, v) else v.toString() }
                 .toMutableMap()
-            current["insulin_budget_level"] = InsulinBudget.level(context).name
-            current["brake_early_level"] = PostHypoEarlyRelease.level(context).name
             for (experiment in ExperimentStrengths.Experiment.entries) {
                 current["strength_${experiment.key}_percent"] = ExperimentStrengths.percent(context, experiment).toString()
             }
@@ -210,10 +204,9 @@ object FclSettingsExport {
         val log = JSONObject().put("changes", changesJson(context))
         sections += "settings_changes" to log
 
-        // Limit per rise: level, personal reference and how many meals it is based on.
+        // Personal reference (insulin per rise) and how many meals it is based on.
         sections += "insulin_budget" to runCatching {
             JSONObject()
-                .put("level", InsulinBudget.level(context).name)
                 .put("ref_u_per_mmol", InsulinBudget.reference(context).let { if (it.isNaN()) JSONObject.NULL else it })
                 .put("ref_episodes", InsulinBudget.referenceEpisodes(context))
         }.getOrElse { JSONObject().put("error", it.message ?: "failed") }

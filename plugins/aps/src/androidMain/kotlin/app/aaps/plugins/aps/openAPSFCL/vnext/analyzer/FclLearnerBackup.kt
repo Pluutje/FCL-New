@@ -51,7 +51,7 @@ object FclLearnerBackup {
         "df_learner_prefs",                  // D/F, nfLevel, aggressiviteit, tracked params, history
         "v_learner_prefs",                   // VLearner (volhoudendheid-leren)
         "fl_prefs",                          // FrontloadLearner
-        "fcl_expert_prefs",                  // expert-modus, T1-versterking
+        "fcl_expert_prefs",                  // T1-versterking
         "fcl_night_basal_auto_adjust_prefs", // nacht-basaal-auto-adjust baseline/modus
         "fcl_ai_param_store",                // AI-goedgekeurde parameter-overrides (hoogste prioriteit, zie kdoc daar)
         "fcl_night_ai_advisor_prefs"         // laatste nacht-AI-adviesresultaat (cache, niet gevoelig)

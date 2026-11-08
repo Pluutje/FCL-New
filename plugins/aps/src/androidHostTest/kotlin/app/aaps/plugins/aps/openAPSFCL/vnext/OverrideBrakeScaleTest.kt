@@ -85,4 +85,23 @@ class OverrideBrakeScaleTest {
         assertThat(OverrideBrakeScale.nearest(events, 10_000L, 150_000L)).isEqualTo(events[0])
         assertThat(OverrideBrakeScale.nearest(events, 200_000L, 50_000L)).isNull()
     }
+
+    @Test
+    fun `a BG that is back above the low range and rising releases the brake`() {
+        // low 3.3, 20 minutes ago
+        assertThat(OverrideBrakeScale.severity(3.3, 20.0, 3.9, 0.3)).isWithin(1e-9).of(1.0)   // still low
+        assertThat(OverrideBrakeScale.severity(3.3, 20.0, 6.0, 0.0)).isWithin(1e-9).of(1.0)   // high enough but not rising
+        assertThat(OverrideBrakeScale.severity(3.3, 20.0, 6.0, -0.3)).isWithin(1e-9).of(1.0)  // falling
+        assertThat(OverrideBrakeScale.severity(3.3, 20.0, 5.6, 0.4)).isWithin(1e-9).of(0.0)   // back and rising
+    }
+
+    @Test
+    fun `the release is smooth`() {
+        val a = OverrideBrakeScale.severity(3.3, 20.0, 4.7, 0.3)
+        val b = OverrideBrakeScale.severity(3.3, 20.0, 5.0, 0.3)
+        val c = OverrideBrakeScale.severity(3.3, 20.0, 5.3, 0.3)
+        assertThat(a).isGreaterThan(b)
+        assertThat(b).isGreaterThan(c)
+        assertThat(a).isLessThan(1.0)
+    }
 }

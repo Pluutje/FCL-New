@@ -185,7 +185,7 @@ fun DFControlTab(
             Text(
                 "💡 F staat al ${advies.episodes} episodes tegen zijn plafond " +
                     "(${"%.2f".format(advies.f)}) — mogelijk is het plafond zelf aan " +
-                    "verhoging toe (zie Expert modus).",
+                    "verhoging toe (zie het tabblad Parameters).",
                 style = MaterialTheme.typography.labelSmall,
                 color = androidx.compose.ui.graphics.Color(0xFFE08A2E)
             )

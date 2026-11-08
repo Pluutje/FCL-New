@@ -87,7 +87,7 @@ fun MaaltijdExperimentenKaart(context: Context) {
  * Lowering needs no PIN, raising does. [saved] is the saved strength, [onSaved] is called after a new strength is saved.
  */
 @Composable
-private fun StrengthSectie(
+internal fun StrengthSectie(
     context: Context,
     experiment: Experiment,
     saved: Int,
@@ -95,15 +95,19 @@ private fun StrengthSectie(
     titleRes: Int,
     introRes: Int,
     noteRes: Int,
-    results: @Composable () -> Unit
+    showTitle: Boolean = true,
+    belowSlider: @Composable () -> Unit = {},
+    results: (@Composable () -> Unit)? = null
 ) {
     var shown by remember { mutableFloatStateOf(saved.toFloat()) }
     var pending by remember { mutableStateOf<Int?>(null) }
     val headColor = MaterialTheme.colorScheme.onSurfaceVariant
 
-    HorizontalDivider(modifier = Modifier.padding(top = 10.dp))
-    Text(stringResource(titleRes), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold,
-         modifier = Modifier.padding(top = 6.dp))
+    if (showTitle) {
+        HorizontalDivider(modifier = Modifier.padding(top = 10.dp))
+        Text(stringResource(titleRes), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold,
+             modifier = Modifier.padding(top = 6.dp))
+    }
     Text(stringResource(introRes), style = MaterialTheme.typography.bodySmall)
     Text(stringResource(noteRes), style = MaterialTheme.typography.labelSmall, color = headColor)
 
@@ -129,9 +133,13 @@ private fun StrengthSectie(
         steps = ExperimentStrengths.MAX_PERCENT / ExperimentStrengths.STEP_PERCENT - 1
     )
 
-    Text(stringResource(R.string.fcl_strength_results_title, STRENGTH_WINDOW_DAYS),
-         style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-    results()
+    belowSlider()
+
+    if (results != null) {
+        Text(stringResource(R.string.fcl_strength_results_title, STRENGTH_WINDOW_DAYS),
+             style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+        results()
+    }
 
     val target = pending
     if (target != null) {

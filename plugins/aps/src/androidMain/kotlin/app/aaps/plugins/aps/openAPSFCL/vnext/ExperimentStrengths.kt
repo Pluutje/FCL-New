@@ -16,8 +16,20 @@ object ExperimentStrengths {
         SLOW_RISE("slow_rise"),
 
         /** Lower limit per rise when the BG rises fast. See [FastMealCap]. */
-        FAST_MEAL("fast_meal")
+        FAST_MEAL("fast_meal"),
+
+        /** Extra part of the early dose when the rise keeps going. See [EarlyExperimentWeights.extraDoseBonus]. */
+        T1_BOOST("t1_boost"),
+
+        /** Lower predicted peak needed to watch a meal early. See [EarlyExperimentWeights.peakStartThreshold]. */
+        EARLY_ALERT("early_alert")
     }
+
+    /** Old settings from before 8/11/2026. They are read once, until the user saves a new strength. */
+    private const val OLD_T1_PREFS = "fcl_expert_prefs"
+    private const val OLD_T1_KEY = "sustain_t1_boost_active"
+    private const val OLD_PEAK_PREFS = "fcl_watching_peak_start_settings"
+    private const val OLD_PEAK_KEY = "watching_peak_start_threshold"
 
     const val PREFS_NAME = "fcl_experiment_strengths"
     const val MAX_PERCENT = 150
@@ -34,8 +46,25 @@ object ExperimentStrengths {
     private fun prefs(context: Context) = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     /** Strength in percent, 0 to [MAX_PERCENT]. 0 = off. */
-    fun percent(context: Context, experiment: Experiment): Int =
-        prefs(context).getInt(experiment.key, 0).coerceIn(0, MAX_PERCENT)
+    fun percent(context: Context, experiment: Experiment): Int {
+        val saved = prefs(context)
+        if (!saved.contains(experiment.key)) return oldValuePercent(context, experiment)
+        return saved.getInt(experiment.key, 0).coerceIn(0, MAX_PERCENT)
+    }
+
+    /** Strength that matches the old setting of the same experiment. 0 when there is none. */
+    private fun oldValuePercent(context: Context, experiment: Experiment): Int = when (experiment) {
+        Experiment.T1_BOOST ->
+            if (context.getSharedPreferences(OLD_T1_PREFS, Context.MODE_PRIVATE).getBoolean(OLD_T1_KEY, false)) 100 else 0
+
+        Experiment.EARLY_ALERT -> {
+            val old = context.getSharedPreferences(OLD_PEAK_PREFS, Context.MODE_PRIVATE)
+                .getFloat(OLD_PEAK_KEY, EarlyExperimentWeights.PEAK_START_DEFAULT.toFloat()).toDouble()
+            EarlyExperimentWeights.percentFromOldThreshold(old).coerceIn(0, MAX_PERCENT)
+        }
+
+        else -> 0
+    }
 
     /** Strength as a factor: 0.0 (off) to 1.5. 1.0 is the normal strength. */
     fun factor(context: Context, experiment: Experiment): Double = percent(context, experiment) / 100.0

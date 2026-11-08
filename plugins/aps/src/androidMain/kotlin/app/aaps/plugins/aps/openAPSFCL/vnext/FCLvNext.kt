@@ -3934,9 +3934,9 @@ private fun computeEarlyDoseDecision(
     // ── Sustain-based T1-versterking (13/07/2026) — EXPERT MODE, default UIT ──
     // Optionele, uitzetbare mechaniek: geeft een bescheiden bonus op de vroege
     // dosis, maar UITSLUITEND als de stijging al meerdere cycli aanhoudt
-    // (zie sustainT1Confirmed hieronder) — nooit op stage 1 en nooit op een
+    // (zie EarlyExperimentWeights.extraDoseBonus) — nooit op stage 1 en nooit op een
     // enkele snelle cyclus. Zie kdoc bij de toepassing verderop in deze functie.
-    sustainT1BoostActive: Boolean = false
+    sustainT1Strength: Double = 0.0
 ): EarlyDoseDecision {
 
     // NB: boostCommitNr geeft hier bewust earlyDose.boostCommitCount door (de
@@ -4481,19 +4481,24 @@ private fun computeEarlyDoseDecision(
     // maaltijd houdt de stijging vol). Daarom:
     //   - NOOIT op stage 1 (stageToFire >= 2 vereist) — de eerste, meest
     //     onzekere commit blijft ongewijzigd klein.
-    //   - NOOIT op basis van een enkele cyclus — vereist sustainT1Confirmed,
+    //   - NOOIT op basis van een enkele cyclus — vereist een hoge sustain-score,
     //     wat pas oploopt na meerdere cycli aanhoudend hoge slope
     //     (effectiveSustainScore dicht bij zijn maximum).
     //   - NOOIT bij een nog onzekere maaltijdherkenning (mealSignal CONFIRMED
     //     vereist, niet UNCERTAIN).
     //   - Bescheiden bonus (+15%), gebonden aan dezelfde absolute cap
     //     (maxSMB × 1.5) en dezelfde IOB-penalty die al op `factor` zit.
-    // Staat standaard UIT; alleen actief als sustainT1BoostActive expliciet is
-    // aangezet onder Expert modus in de instellingen.
-    val sustainT1Confirmed = effectiveSustainScore >= 0.85 &&
-        mealSignal.state == MealState.CONFIRMED
-    val sustainT1Active = sustainT1BoostActive && sustainT1Confirmed && stageToFire >= 2
-    val sustainT1Bonus = if (sustainT1Active) 0.15 else 0.0
+    // Staat standaard UIT (sterkte 0); de sterkte (0-150%) staat op het tabblad Experimenteel
+    // (kaart "Extra vroege dosis bij aanhoudende stijging").
+    // 8/11/2026: the bonus is now a strength (0 to 150 percent, 100 percent = +15 percent) and the old hard
+    // step at sustain score 0.85 fades in from 0.75 to 0.95 (see EarlyExperimentWeights).
+    val sustainT1Bonus = EarlyExperimentWeights.extraDoseBonus(
+        strength = sustainT1Strength,
+        sustainScore = effectiveSustainScore,
+        mealConfirmed = mealSignal.state == MealState.CONFIRMED,
+        stage = stageToFire
+    )
+    val sustainT1Active = sustainT1Bonus > 0.0005
 
     val uncappedTargetU =
         maxOf(
@@ -4530,7 +4535,7 @@ private fun computeEarlyDoseDecision(
     val sustainReason = if (effectiveSustainScore > 0.05)
         " SUST=${sustainedHighSlopeMinutes.toInt()}m(×${"%.2f".format(effectiveSustainScore)})" else ""
 
-    val sustainT1Reason = if (sustainT1Active) " T1BOOST+15%" else ""
+    val sustainT1Reason = if (sustainT1Active) " T1BOOST+${"%.1f".format(sustainT1Bonus * 100.0)}%" else ""
 
     return EarlyDoseDecision(
         active = true,
@@ -4559,7 +4564,9 @@ private data class PostPeakSummary(
     val suppressReason: String,
     val lockoutReason: String,
     val commitBlockReason: String,
-    val peakBrake: PeakBrakeResult
+    val peakBrake: PeakBrakeResult,
+    /** 0..1: how much of the ABSORPTION suppression is released (see AbsorptionSuppressRelease). */
+    val absorptionRelease: Double = 0.0
 )
 
 // ── Gedeelde piek-naderingsrem (vlak vóór/op de piek geen insuline meer) ──
@@ -5086,11 +5093,18 @@ private fun evaluatePostPeak(
     val notRising = ctx.slope < 0.60
     val highIob = ctx.iobRatio >= 0.55
 
+    // 07/11/2026 (de gebruiker, 20:57-21:12: BG 15,3, IOB-ratio 0,3, dosis 0): de absorption-suppress
+    // wordt gradueel losgelaten bij hoge BG met weinig IOB en een niet-dalende BG. Zie
+    // AbsorptionSuppressRelease. Vanaf OPEN_AT gaat ze ook voor de andere onderdelen uit; daaronder
+    // schaalt de dosis glijdend (zie de aanroep bij "9a").
+    val absorptionRelease = AbsorptionSuppressRelease.calculate(ctx.deltaToTarget, ctx.iobRatio, ctx.recentDelta5m)
+
     // SUPPRESS: mild, alleen tijdens absorption
     val suppress =
         reliable && (
             // bestaande post-commit suppress — niet bij bewezen nieuwe maaltijdstijging
             (inAbsorption && !newMealOverride && !slowCarbOverride && !plateauOverride &&
+                absorptionRelease < AbsorptionSuppressRelease.OPEN_AT &&
                 (ctx.slope <= config.peakSlopeThreshold || ctx.acceleration <= config.peakAccelThreshold)
                 )
                 // bestaande pre-commit top/plateau suppress
@@ -5215,7 +5229,8 @@ private fun evaluatePostPeak(
         suppressReason = suppressReason,
         lockoutReason = lockoutReason,
         commitBlockReason = commitBlockReason,
-        peakBrake = peakBrake
+        peakBrake = peakBrake,
+        absorptionRelease = absorptionRelease
     )
 
 }
@@ -5552,12 +5567,8 @@ private fun shouldHardBlockTrajectory(
     config: FCLvNextConfig
 ): Boolean {
 
-    // ✅ Extra harde regel: duidelijke omkeer + al redelijk IOB -> meteen blokkeren
-    if (isInAbsorptionWindow(now, config) &&
-        ctx.acceleration <= config.trajectoryAbsorptionAccelThreshold &&
-        ctx.iobRatio >= config.trajectoryAbsorptionIobMin &&
-        ctx.consistency >= 0.45
-    ) return true
+    // 07/11/2026: de harde "absorption"-regel (omkeer + IOB >= 0,35 in het absorptievenster -> dosis 0)
+    // is vervangen door een glijdend gewicht, zie AbsorptionBlockWeight en de aanroep in getAdvice.
     // early bescherming alleen zolang we nog niet afremmen / piek hebben
     if (isEarlyProtectionActive(earlyStage, ctx, peak)) return false
 
@@ -5680,7 +5691,7 @@ class FCLvNext(
     // "vNN-jjjj-mm-dd-uumm" (aanmaaktijdstip, geen omschrijving; die van
     // eerdere versies raakten toch achter). Alleen als het écht relevant
     // is een korte omschrijving toevoegen.
-    private val FCL_CODE_VERSION = "v154-2026-11-06-1630"
+    private val FCL_CODE_VERSION = "v157-2026-11-08-1500"
 
     // ── Restart-detectie (16/07/2026) ─────────────────────────────────
     // true op precies de EERSTE cyclus na het (her)starten van dit class-
@@ -5700,19 +5711,6 @@ class FCLvNext(
     // opgehaald bij initialisatie. Elke herstart gaat verder waar hij gebleven was.
     private val EPISODE_PREFS = "fcl_episode_counter"
     private val EPISODE_KEY   = "meal_episode_counter"
-
-    // ── Expert-modus feature-toggles (13/07/2026) ────────────────────
-    // Zelfde SharedPreferences-bestand/sleutel als de Expert-modus aan/uit-
-    // schakelaar in FCLSettingsScreen.kt ("fcl_expert_prefs"/"expert_mode_active"),
-    // plus een nieuwe eigen sleutel voor de sustain-T1-versterking. Rechtstreeks
-    // gelezen, zelfde patroon als EPISODE_PREFS hierboven — geen nieuwe
-    // AAPS-Preferences-key nodig voor een simpele aan/uit-schakelaar.
-    private val EXPERT_PREFS = "fcl_expert_prefs"
-    private val SUSTAIN_T1_BOOST_KEY = "sustain_t1_boost_active"
-
-    private fun isSustainT1BoostActive(): Boolean =
-        context.getSharedPreferences(EXPERT_PREFS, android.content.Context.MODE_PRIVATE)
-            .getBoolean(SUSTAIN_T1_BOOST_KEY, false)
 
     // ── Vroege-signalering-drempel voor WATCHING (01/09/2026) ─────────
     // Backtest (510 historische maaltijd-episodes, /tmp/bt3/peak_threshold.py):
@@ -5737,24 +5735,18 @@ class FCLvNext(
     //    gebruiker zelf te bedienen schuif i.p.v. een vaste nieuwe default.
     //
     // MIN/MAX zijn de grenzen van wat daadwerkelijk is teruggerekend; de
-    // schuif in Expert-modus (FCLSettingsScreen.kt) kan niet buiten dit
+    // schuif op het tabblad Experimenteel (VroegeInsulineKaarten.kt) kan niet buiten dit
     // bereik komen. Default = huidige (ongewijzigde) 9,0 — een schone start
     // verandert dus niets totdat de gebruiker bewust verlaagt.
-    private val WATCHING_PEAK_START_PREFS = "fcl_watching_peak_start_settings"
-    private val WATCHING_PEAK_START_KEY = "watching_peak_start_threshold"
-    private val WATCHING_PEAK_START_DEFAULT = 9.0f
-    private val WATCHING_PEAK_START_MIN = 7.5
-    private val WATCHING_PEAK_START_MAX = 9.0
-
+    // 8/11/2026: the setting is now a strength (0 to 150 percent, 0 = 9,0 as before). The threshold drops
+    // 1,0 mmol/L per 100 percent, never below 7,5 (see EarlyExperimentWeights).
     private fun getWatchingPeakStartThreshold(): Double =
-        context.getSharedPreferences(WATCHING_PEAK_START_PREFS, android.content.Context.MODE_PRIVATE)
-            .getFloat(WATCHING_PEAK_START_KEY, WATCHING_PEAK_START_DEFAULT)
-            .toDouble()
-            .coerceIn(WATCHING_PEAK_START_MIN, WATCHING_PEAK_START_MAX)
+        EarlyExperimentWeights.peakStartThreshold(
+            ExperimentStrengths.factor(context, ExperimentStrengths.Experiment.EARLY_ALERT)
+        )
 
     // ── AIGF-instellingen (14/07/2026) ────────────────────────────────
-    // Bewust EIGEN, niet-expert SharedPreferences-bestand (i.t.t. de
-    // EXPERT_PREFS hierboven): de AIGF-instellingen horen thuis in de
+    // Bewust EIGEN, niet-expert SharedPreferences-bestand: de AIGF-instellingen horen thuis in de
     // gewone "🚶 Activiteit"-tab in Settings, niet achter de expert-modus
     // (zie FCLSettingsScreen.kt). Raw SharedPreferences i.p.v. een officiële
     // AAPS-Preferences DoubleKey/StringKey — deze plugin heeft geen toegang
@@ -6992,11 +6984,10 @@ class FCLvNext(
 
             PeakPredictionState.IDLE -> {
                 // Start watching only when episode is active AND predicted peak is meaningfully high
-                // 01/09/2026: was hardcoded 9.0 — nu instelbaar via Expert-modus schuif
-                // (getWatchingPeakStartThreshold(), 7,5-9,0, default 9,0 = ongewijzigd
-                // gedrag). Zie kdoc bij WATCHING_PEAK_START_PREFS hierboven voor de
-                // backtest-onderbouwing en de bewuste keuze voor een handmatige schuif
-                // i.p.v. een nieuwe vaste default.
+                // 01/09/2026: was hardcoded 9.0 — nu een sterkte-schuif op het tabblad Experimenteel
+                // (getWatchingPeakStartThreshold(), 7,5-9,0, sterkte 0 = 9,0 = ongewijzigd
+                // gedrag). Zie de kdoc bij getWatchingPeakStartThreshold hierboven voor de
+                // backtest-onderbouwing.
                 if (
                     peakEstimator.active &&
                     ctx.consistency >= config.minConsistency &&
@@ -7058,19 +7049,6 @@ class FCLvNext(
             hEff = hEff,
             iobScaleUsed = iobScale,
             vUsed = v
-        )
-    }
-
-    /** Experiment "brake lets go earlier": stores what it let through this cycle and adds a line to the status. */
-    /** The extra dose of the experiment in this cycle. It becomes an event when the delivered dose is known (see below). */
-    private var earlyReleasePending: PostHypoEarlyRelease.Pending? = null
-
-    private fun recordEarlyRelease(timestampMs: Long, weight: Double, extraU: Double, status: StringBuilder) {
-        if (extraU < PostHypoEarlyRelease.MIN_EXTRA_U) return
-        earlyReleasePending = PostHypoEarlyRelease.Pending(timestampMs, weight, extraU)
-        status.append(
-            "REM EERDER LOS (experiment): ${"%.0f".format(weight * 100)}% van wat de rem tegenhoudt doorgelaten, " +
-                "+${"%.2f".format(extraU)} U extra\n"
         )
     }
 
@@ -8108,7 +8086,7 @@ class FCLvNext(
             accelDeclineSinceUncertain = accelDeclineSinceUncertain,
             hypoProjectedMinNoInsulin = hypoNoInsulinProjection,
             episodeHypoDebtU = episodeHypoDebtU,
-            sustainT1BoostActive = isSustainT1BoostActive()
+            sustainT1Strength = ExperimentStrengths.factor(context, ExperimentStrengths.Experiment.T1_BOOST)
         )
         // EarlyBoostCap (2/11/2026): store the cycles in which the cap or the cover fade acted, for the CSV.
         if (early.boostActive && (early.targetU < early.uncappedTargetU - 0.005 || early.coverWeight > 0.05)) {
@@ -8360,6 +8338,17 @@ class FCLvNext(
         }
 
 // ── Trajectory damping: continu remmen o.b.v. BG / IOB / slope / accel ──
+        // 07/11/2026 (de gebruiker, 20:27: BG 16,3, slope 5, dosis 0): de oude harde absorption-regel
+        // is gradueel gemaakt. Gewicht 0..1, dosis x (1 - gewicht). Een steile stijging ver boven
+        // target laat de blokkade geleidelijk los.
+        val absorptionBlockW = AbsorptionBlockWeight.calculate(
+            inAbsorptionWindow = isInAbsorptionWindow(now, config),
+            acceleration = ctx.acceleration,
+            iobRatio = ctx.iobRatio,
+            consistency = ctx.consistency,
+            slope = ctx.slope,
+            deltaToTarget = ctx.deltaToTarget
+        )
         if (shouldHardBlockTrajectory(
                 ctx,
                 mealSignal,
@@ -8384,9 +8373,12 @@ class FCLvNext(
 
 
             val before = finalDose
-            finalDose *= trajFactor
-            logRow.trajectoryFactor = trajFactor
-            logRow.trajectoryHardBlock = false
+            finalDose *= trajFactor * (1.0 - absorptionBlockW)
+            logRow.trajectoryFactor = trajFactor * (1.0 - absorptionBlockW)
+            logRow.trajectoryHardBlock = absorptionBlockW >= 0.999
+            if (absorptionBlockW > 0.001) {
+                status.append("ABSORPTIE-BLOK gewicht=${"%.2f".format(absorptionBlockW)}\n")
+            }
             status.append(
                 "TrajectoryFactor=${"%.2f".format(trajFactor)} " +
                     "${"%.2f".format(before)}→${"%.2f".format(finalDose)}U\n"
@@ -9173,7 +9165,12 @@ class FCLvNext(
 // 9a) Peak/absorption suppression: stop of reduce rond/na piek
 
         if (suppressForPeak) {
-            val reduced = (finalDose * config.absorptionDoseFactor).coerceAtLeast(0.0)
+            // 07/11/2026: bij reden ABSORPTION schaalt de factor glijdend van absorptionDoseFactor naar 1,0
+            // met de release (hoge BG, weinig IOB, niet dalend). Andere redenen blijven ongewijzigd.
+            val suppressFactor = if (postPeak.suppressReason == "ABSORPTION")
+                AbsorptionSuppressRelease.doseFactor(config.absorptionDoseFactor, postPeak.absorptionRelease)
+            else config.absorptionDoseFactor
+            val reduced = (finalDose * suppressFactor).coerceAtLeast(0.0)
             commandedDose = reduced
             status.append("ABSORBING/PEAK: suppression → ${"%.2f".format(commandedDose)}U\n")
             logRow.guardPeakLimited = true
@@ -10377,11 +10374,23 @@ class FCLvNext(
                 // zolang er nog geen plateau is geweest sinds die vervroegde commit;
                 // ná een plateau (oprecht nieuwe gang, bijv. 2e gang van de maaltijd)
                 // werkt bgStijgtNogFors weer volledig ongewijzigd (bypassStrength=1.0).
+                // 07/11/2026 (de gebruiker, 20:02-20:17): de demping 0,30 hield de commit vast op
+                // 0,86U terwijl de algoritme zelf 3,5U wilde. De vlag "plateau" was nog niet gezet
+                // terwijl er een duidelijke nieuwe stijging was. Gradueel gemaakt: de demping
+                // vervaagt van 0,30 naar 1,0 met NewRiseWeight (lerp, geen stap).
+                val newRiseWeightBypass = NewRiseWeight.calculate(
+                    ctx.input.bgNow,
+                    ctx.input.bgHistory
+                        .filter { it.first.millis >= now.millis - NewRiseWeight.WINDOW_MIN * 60_000L }
+                        .map { it.second },
+                    ctx.recentSlope
+                )
                 val bgStijgtNogForsBypassStrength = when {
                     !bgStijgtNogFors -> 0.0
                     !vroegeStijgingBevestigdUsedThisEpisode -> 1.0
                     plateauSinceVroegeStijging -> 1.0
-                    else -> VROEGE_STIJGING_BGSTIJGT_DEMPING
+                    else -> VROEGE_STIJGING_BGSTIJGT_DEMPING +
+                        newRiseWeightBypass * (1.0 - VROEGE_STIJGING_BGSTIJGT_DEMPING)
                 }
                 // ── Piek nog niet verankerd (15/07/2026) ──────────────────
                 // Zie kdoc bij PEAK_ANCHOR_THRESHOLD_FRAC hierboven. Zolang geen
@@ -10659,22 +10668,7 @@ class FCLvNext(
                         CoverIsf.factor(ctx.input.bgNow, ctx.input.targetBG),
                         ctx.input.bgNow - ctx.input.targetBG
                     )
-                    val brakeCurve = CoverIsf.commitBrake(coverRatio)
-                    // Proef (standaard uit, zie CoverTrial): aan het begin van een maaltijd een zachtere rem,
-                    // met de gemeten dekking. Nooit lager dan de rem van de curve; geen effect bij een
-                    // post-hypo-rem (de hypo-controles verderop gelden altijd).
-                    val brake = CoverTrial.brakeForCommit(
-                        context, now.millis, ctx.input.bgNow, ctx.input.targetBG, ctx.input.currentIOB,
-                        ctx.input.effectiveISF, ctx.recentSlope, committedDoseBeforeCoverBrake, brakeCurve,
-                        blocked = postHypoBrakeActive
-                    )
-                    if (brake > brakeCurve + 1e-9) {
-                        status.append(
-                            "DEKKINGSPROEF: rem ×${"%.2f".format(brakeCurve)}→×${"%.2f".format(brake)} " +
-                                "(sterkte ${"%.2f".format(CoverTrial.strength(context))}) " +
-                                "+${"%.2f".format(committedDoseBeforeCoverBrake * (brake - brakeCurve))}U\n"
-                        )
-                    }
+                    val brake = CoverIsf.commitBrake(coverRatio)
                     if (brake < 0.99) {
                         status.append(
                             "COMMIT-DEKKINGSREM: ×${"%.2f".format(brake)} " +
@@ -11281,51 +11275,31 @@ class FCLvNext(
             logRow.guardPeakLimited = true
         }
 
-        // ── Begrenzing insuline per stijging (29/10/2026) ───────────────────────────────
-        // Zie kdoc bij InsulinBudget. Tijdens een stijging mag de insuline sinds het begin van de
-        // stijging niet harder groeien dan de eigen insuline-per-mmol-stijging toelaat. Glijdend
-        // (geen harde stop), alleen omlaag, en vóór de post-hypo-rem, zodat een afgeknepen commit ook
-        // meetelt voor de afbouw-teller verderop. Op niveau "Alleen meten" wordt alleen gelogd.
+        // ── Proef "Snelle stijging" (6/11/2026) ─────────────────────────────────────────
+        // De algemene "Begrenzing per stijging" is op 8/11/2026 verwijderd (geen aantoonbare winst). Dit extra plafond
+        // voor snelle maaltijden (standaard uit) gebruikt dezelfde persoonlijke referentie en hetzelfde begin van de
+        // stijging. Zie FastMealCap. Glijdend, alleen omlaag, en vóór de post-hypo-rem.
         run {
+            val fastStrength = ExperimentStrengths.factor(context, ExperimentStrengths.Experiment.FAST_MEAL)
+            if (fastStrength <= 0.0 || commandedDose <= 0.0) return@run
             val budgetHistory = ctx.input.bgHistory.map { it.first.millis to it.second }
-            val budgetBase = InsulinBudget.riseBase(budgetHistory, now.millis, ctx.input.bgNow)
-            if (budgetBase != null) {
-                // De insuline sinds het begin van de stijging komt uit recentEpisodeCommits: een lijst van 90 minuten
-                // die op schijf wordt bewaard (overleeft een herstart of update). deliveryHistory is te kort (7 doses).
-                val budgetSinceMs = budgetBase.second - 2 * 60_000L
-                val budgetGivenU = recentEpisodeCommits.filter { it.first.millis >= budgetSinceMs }.sumOf { it.second }
-                val budgetBefore = commandedDose
-                val budget = InsulinBudget.apply(
-                    context, now.millis, budgetBefore, ctx.input.bgNow, ctx.recentSlope,
-                    budgetBase.first, budgetGivenU,
-                    postPeak.lockout || postPeak.suppress
+            val budgetBase = InsulinBudget.riseBase(budgetHistory, now.millis, ctx.input.bgNow) ?: return@run
+            // De insuline sinds het begin van de stijging komt uit recentEpisodeCommits: een lijst van 90 minuten
+            // die op schijf wordt bewaard (overleeft een herstart of update). deliveryHistory is te kort (7 doses).
+            val budgetSinceMs = budgetBase.second - 2 * 60_000L
+            val budgetGivenU = recentEpisodeCommits.filter { it.first.millis >= budgetSinceMs }.sumOf { it.second }
+            val fastBefore = commandedDose
+            val fast = FastMealCap.calculate(
+                fastStrength, InsulinBudget.reference(context), fastBefore,
+                ctx.input.bgNow - budgetBase.first, budgetGivenU, ctx.recentSlope
+            )
+            if (fast.limitedU < fastBefore - 1e-9) {
+                commandedDose = fast.limitedU
+                FastMealCap.record(context, now.millis, fastBefore, fast)
+                status.append(
+                    "SNELLE-MAALTIJD-BEGRENZING: ${"%.2f".format(fastBefore)}→${"%.2f".format(fast.limitedU)}U " +
+                        "(ruimte ${"%.2f".format(fast.roomU)}U)\n"
                 )
-                if (budget.limitedU < budgetBefore - 1e-9) {
-                    status.append(
-                        "INSULINE-BEGRENZING${if (budget.doseU < budgetBefore - 1e-9) "" else " (alleen meten)"}: " +
-                            "×${"%.2f".format(budget.factor)} (ruimte ${"%.2f".format(budget.roomU)}U) " +
-                            "${"%.2f".format(budgetBefore)}→${"%.2f".format(budget.limitedU)}U\n"
-                    )
-                }
-                if (budget.doseU < budgetBefore - 1e-9) commandedDose = budget.doseU
-
-                // Extra limit for fast meals (experiment, off by default). See kdoc of FastMealCap.
-                val fastStrength = ExperimentStrengths.factor(context, ExperimentStrengths.Experiment.FAST_MEAL)
-                if (fastStrength > 0.0 && commandedDose > 0.0) {
-                    val fastBefore = commandedDose
-                    val fast = FastMealCap.calculate(
-                        fastStrength, InsulinBudget.reference(context), fastBefore,
-                        ctx.input.bgNow - budgetBase.first, budgetGivenU, ctx.recentSlope
-                    )
-                    if (fast.limitedU < fastBefore - 1e-9) {
-                        commandedDose = fast.limitedU
-                        FastMealCap.record(context, now.millis, fastBefore, fast)
-                        status.append(
-                            "SNELLE-MAALTIJD-BEGRENZING: ${"%.2f".format(fastBefore)}→${"%.2f".format(fast.limitedU)}U " +
-                                "(ruimte ${"%.2f".format(fast.roomU)}U)\n"
-                        )
-                    }
-                }
             }
         }
 
@@ -11346,7 +11320,8 @@ class FCLvNext(
                 hypoDebtU = episodeHypoDebtU,
                 hypoProjectedMin = logRow.hypoProjectedBg,
                 iobRatio = ctx.iobRatio,
-                blocked = flatBlocked
+                blocked = flatBlocked,
+                coverFactor = CoverIsf.factor(ctx.input.bgNow, ctx.input.targetBG)
             )
             if (flat.doseU > 0.005) {
                 commandedDose += flat.doseU
@@ -11458,7 +11433,7 @@ class FCLvNext(
         )
         val minutesSinceLowest = lowestPointInHour?.let { (now.millis - it.first.millis) / 60_000.0 } ?: Double.MAX_VALUE
         val overrideBrakeSeverity =
-            if (overridePositive) OverrideBrakeScale.severity(lowestBgLastHour, minutesSinceLowest) else 0.0
+            if (overridePositive) OverrideBrakeScale.severity(lowestBgLastHour, minutesSinceLowest, ctx.input.bgNow, ctx.recentDelta5m) else 0.0
         val overrideBrakeStrength = OverrideBrakeScale.brakeStrength(overridePositive, overrideBrakeSeverity)
         // Volledig losgelaten (oud gedrag) alleen als de override de rem helemaal uit heeft staan.
         val overrideRelaxesBrake = overridePositive && overrideBrakeStrength < 0.001
@@ -11643,15 +11618,6 @@ class FCLvNext(
                         "(slope=${"%.1f".format(ctx.recentSlope)}, ${"%.1f".format(riseFromLowestLastHour)} mmol boven laagste van het uur)\n"
                 )
             }
-            // Experiment (PIN protected, off by default): the brake lets go earlier. Only for a brake armed by hypo debt
-            // (not by a real low BG), with a confirmed meal, and never in a cycle where the hypo guard cuts the dose.
-            // See PostHypoEarlyRelease. The result is the extra dose it let through, for the CSV.
-            val earlyLevel = PostHypoEarlyRelease.level(context)
-            val earlyWeight =
-                if (earlyLevel.acts && !postHypoBrakeArmedByRecentLow && !recentlyLow &&
-                    mealSignal.state == MealState.CONFIRMED && !logRow.hypoActive
-                ) PostHypoEarlyRelease.weight(earlyLevel, ctx.input.bgNow, ctx.recentSlope, ctx.iobRatio)
-                else 0.0
             val smallU = config.smallCorrectionMaxU
             val aboveSmallU = (commandedDose - smallU).coerceAtLeast(0.0)
             if (slopeOk && bgFloorOk && riseSinceBrake > 0.001) {
@@ -11661,12 +11627,8 @@ class FCLvNext(
                 // laagste waarde: bij een rebound van 3,8 zou de rem dan al bij het aanslaan bijna vrij zijn.
                 // v147: wel een tweede weg, via releaseEvidence hierboven (alleen bij snelle stijging).
                 val baseRampFrac = maxOf(rampX * postHypoBrakeRampDamp, releaseEvidence)
-                val rampFrac = maxOf(baseRampFrac, earlyWeight)
+                val rampFrac = baseRampFrac
                 val cap = smallU + aboveSmallU * rampFrac
-                val capWithoutExperiment = smallU + aboveSmallU * baseRampFrac
-                if (earlyWeight > baseRampFrac) {
-                    recordEarlyRelease(now.millis, earlyWeight, minOf(commandedDose, cap) - minOf(commandedDose, capWithoutExperiment), status)
-                }
                 commandedDose = commandedDose.coerceAtMost(cap)
                 if (before > commandedDose) {
                     status.append(
@@ -11685,11 +11647,7 @@ class FCLvNext(
                 }
             } else {
                 // v147: ook als de gewone vrijgave dicht is, geeft maaltijd-bewijs een deel vrij.
-                val closedCap = smallU + aboveSmallU * maxOf(releaseEvidence, earlyWeight)
-                if (earlyWeight > releaseEvidence) {
-                    val withoutU = minOf(commandedDose, smallU + aboveSmallU * releaseEvidence)
-                    recordEarlyRelease(now.millis, earlyWeight, minOf(commandedDose, closedCap) - withoutU, status)
-                }
+                val closedCap = smallU + aboveSmallU * releaseEvidence
                 commandedDose = commandedDose.coerceAtMost(closedCap)
                 if (before > commandedDose) {
                     status.append(
@@ -12376,9 +12334,21 @@ class FCLvNext(
             // geslagen. Overige episode-state (episodeCommitCount, hypo-
             // schuld, taper-anker, trickle-gate uit v91) blijft ongewijzigd
             // — alleen deze ene afterload-laag krijgt de extra voorwaarde.
+            //
+            // 07/11/2026 (de gebruiker, 19:12-20:17): de leeftijd van de OUDE episode gaf ook een
+            // NIEUWE stijging in die episode een korting tot 40%. Nu gradueel gemaakt: de korting
+            // vervaagt met NewRiseWeight (stijging vanaf het dal van het laatste uur x huidige helling).
+            // Een echte staart (geen nieuwe stijging) houdt dezelfde korting als voorheen.
+            val newRiseWeightLate = NewRiseWeight.calculate(
+                ctx.input.bgNow,
+                ctx.input.bgHistory
+                    .filter { it.first.millis >= now.millis - NewRiseWeight.WINDOW_MIN * 60_000L }
+                    .map { it.second },
+                ctx.recentSlope
+            )
             val lateSecondWaveScale: Double = if (minutesSinceEpisode > 90 && episodePeakCommitU > 0.0) {
                 val frac = ((minutesSinceEpisode - 90).toDouble() / 90.0).coerceAtMost(1.0)
-                1.0 - frac * 0.60
+                1.0 - frac * 0.60 * (1.0 - newRiseWeightLate)
             } else 1.0
 
             // ── AIGF-reductie als extra afterload-laag (14/07/2026) ──────
@@ -12850,13 +12820,6 @@ class FCLvNext(
         // ✅ NEW: als het onder de zichtbare/werkelijke delivery drempel is, behandel als 0
         val effectiveDeliveredNow =
             if (deliveredNow >= minDeliveryU) deliveredNow else 0.0
-
-        // Experiment "brake lets go earlier": store the event with the dose that was really delivered, so that
-        // standard dose + extra dose = delivered dose. Only if this cycle added an extra dose (same timestamp).
-        PostHypoEarlyRelease.finish(earlyReleasePending, now.millis, effectiveDeliveredNow)?.let {
-            PostHypoEarlyRelease.addEvent(context, it)
-        }
-        earlyReleasePending = null
 
         // ── RECENT FRONTLOAD TRACKING (28/07/2026, herzien) ────────────
         // Zie kdoc bij recentFrontloadDoseU/recentFrontloadAt hierboven. Los van

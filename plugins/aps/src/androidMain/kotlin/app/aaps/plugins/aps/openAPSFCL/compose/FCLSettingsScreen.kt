@@ -7,7 +7,6 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandLess
@@ -18,8 +17,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.PermissionController
@@ -94,11 +91,7 @@ fun FCLSettingsScreen(
     var expandedContext   by remember { mutableStateOf(false) }
     var expandedAutosens  by remember { mutableStateOf(false) }
 
-    var showExpertSection   by remember { mutableStateOf(false) }
-    var expertPinInput      by remember { mutableStateOf("") }
-    var expertPinError      by remember { mutableStateOf(false) }
-    var expertPinDialogOpen by remember { mutableStateOf(false) }
-    val EXPERT_PIN = "0000"
+    var expandedTaal        by remember { mutableStateOf(false) }
     val ctx = androidx.compose.ui.platform.LocalContext.current
     // Geleidelijke nacht-overgang (17/07/2026) — zie FclNachtOvergangSettings.kt.
     // BUGFIX (17/07/2026): moet NA de ctx-declaratie hierboven staan — ctx
@@ -642,218 +635,29 @@ fun FCLSettingsScreen(
             }
         }
 
-        // ── Expert modus ──────────────────────────────────────────────────
-        if (!showExpertSection) {
-            OutlinedButton(
-                onClick = { expertPinDialogOpen = true; expertPinInput = ""; expertPinError = false },
-                modifier = Modifier.fillMaxWidth()
+        // ── Taal ──────────────────────────────────────────────────────────
+        // 8/11/2026 (de gebruiker): de Expert-modus (met pincode en aan/uit-schakelaar) is vervallen. De twee
+        // experimentele instellingen die daaronder stonden (T1-versterking en de vroege-signalering drempel)
+        // staan nu op het tabblad Experimenteel. Hier blijft alleen de taalkeuze over.
+        FCLSection(
+            title = if (selectedLocale.code == "nl") "Taal" else "Language",
+            expanded = expandedTaal,
+            onToggle = { expandedTaal = !expandedTaal }
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text(s.expertModus)
-            }
-        } else {
-            FCLSection(
-                title = s.expertModus,
-                expanded = true,
-                onToggle = { showExpertSection = false }
-            ) {
-                // ── Taalinstelling ───────────────────────────────────
-                Text(
-                    if (selectedLocale.code == "nl") "Taalinstelling" else "Language",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    app.aaps.plugins.aps.openAPSFCL.vnext.lang.FclLocale.values().forEach { locale ->
-                        FilterChip(
-                            selected = selectedLocale == locale,
-                            onClick = {
-                                selectedLocale = locale
-                                app.aaps.plugins.aps.openAPSFCL.vnext.lang.FclStrings.saveLocale(ctx, locale)
-                            },
-                            label = { Text(locale.displayName) },
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                }
-
-                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-
-                // ── Expert modus aan/uit toggle ──────────────────────
-                var expertModeActive by remember {
-                    mutableStateOf(
-                        ctx.getSharedPreferences("fcl_expert_prefs", android.content.Context.MODE_PRIVATE)
-                            .getBoolean("expert_mode_active", false)
+                app.aaps.plugins.aps.openAPSFCL.vnext.lang.FclLocale.values().forEach { locale ->
+                    FilterChip(
+                        selected = selectedLocale == locale,
+                        onClick = {
+                            selectedLocale = locale
+                            app.aaps.plugins.aps.openAPSFCL.vnext.lang.FclStrings.saveLocale(ctx, locale)
+                        },
+                        label = { Text(locale.displayName) },
+                        modifier = Modifier.weight(1f)
                     )
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            if (expertModeActive) s.expertModeAan else s.expertModeUit,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Text(
-                            s.fijnafstemming,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Switch(
-                        checked = expertModeActive,
-                        onCheckedChange = { active ->
-                            expertModeActive = active
-                            ctx.getSharedPreferences("fcl_expert_prefs", android.content.Context.MODE_PRIVATE)
-                                .edit().putBoolean("expert_mode_active", active).apply()
-                        }
-                    )
-                }
-
-                // ── Fijnafstemming blok (alleen zichtbaar als expert mode aan) ──
-                if (expertModeActive) {
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    // ── T1-versterking (13/07/2026) ────────────────────
-                    // Losse, uitzetbare feature-toggle onder Expert modus. Direct
-                    // gelezen door FCLvNext.kt (zelfde "fcl_expert_prefs"-bestand,
-                    // zie isSustainT1BoostActive() aldaar) — geen herstart nodig,
-                    // volgende cyclus leest de nieuwe waarde.
-                    var sustainT1BoostActive by remember {
-                        mutableStateOf(
-                            ctx.getSharedPreferences("fcl_expert_prefs", android.content.Context.MODE_PRIVATE)
-                                .getBoolean("sustain_t1_boost_active", false)
-                        )
-                    }
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant
-                        )
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    s.expertT1BoostTitel,
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                Switch(
-                                    checked = sustainT1BoostActive,
-                                    onCheckedChange = { active ->
-                                        sustainT1BoostActive = active
-                                        ctx.getSharedPreferences("fcl_expert_prefs", android.content.Context.MODE_PRIVATE)
-                                            .edit().putBoolean("sustain_t1_boost_active", active).apply()
-                                    }
-                                )
-                            }
-                            Text(
-                                s.expertT1BoostUitleg,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-
-                    // ── Vroege-signalering-drempel (predictedPeak start voor WATCHING) ──
-                    // 01/09/2026: handmatige testschuif, zie kdoc bij
-                    // WATCHING_PEAK_START_PREFS in FCLvNext.kt voor de backtest-
-                    // onderbouwing. Bewust EIGEN SharedPreferences-bestand (zelfde
-                    // patroon als AIGF/T1-boost hierboven) — geen nieuwe AAPS-
-                    // Preferences-key nodig. Default (9,0) = huidig, ongewijzigd
-                    // gedrag; schuif kan alleen binnen het backtest-geverifieerde
-                    // bereik 7,5-9,0 bewegen (MIN/MAX-constantes hieronder moeten
-                    // gelijk blijven aan WATCHING_PEAK_START_MIN/MAX in FCLvNext.kt).
-                    val watchingPeakStartMin = 7.5f
-                    val watchingPeakStartMax = 9.0f
-                    var watchingPeakStartThreshold by remember {
-                        mutableStateOf(
-                            ctx.getSharedPreferences("fcl_watching_peak_start_settings", android.content.Context.MODE_PRIVATE)
-                                .getFloat("watching_peak_start_threshold", 9.0f)
-                                .coerceIn(watchingPeakStartMin, watchingPeakStartMax)
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant
-                        )
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Text(
-                                s.expertPeakStartTitel,
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
-                            )
-                            Text(
-                                s.expertPeakStartUitleg,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                s.expertPeakStartWaarde.format(watchingPeakStartThreshold),
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
-                                color = if (watchingPeakStartThreshold >= watchingPeakStartMax)
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                else
-                                    MaterialTheme.colorScheme.primary
-                            )
-                            Slider(
-                                value = watchingPeakStartThreshold,
-                                onValueChange = { v ->
-                                    val clamped = v.coerceIn(watchingPeakStartMin, watchingPeakStartMax)
-                                    watchingPeakStartThreshold = clamped
-                                    ctx.getSharedPreferences("fcl_watching_peak_start_settings", android.content.Context.MODE_PRIVATE)
-                                        .edit().putFloat("watching_peak_start_threshold", clamped).apply()
-                                },
-                                valueRange = watchingPeakStartMin..watchingPeakStartMax,
-                                steps = 14  // stapjes van 0,1 mmol tussen 7,5 en 9,0
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant
-                        )
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Text(
-                                s.fijnafstemming,
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
-                            )
-                            Text(
-                                s.expertModusMeerOpties,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
                 }
             }
         }
@@ -1461,49 +1265,6 @@ fun FCLSettingsScreen(
                 TextButton(onClick = { showInfoDialog = false }) {
                     Text(s.close)
                 }
-            }
-        )
-    }
-
-    // ── Pincode dialoog voor expert modus ─────────────────────────────────
-    if (expertPinDialogOpen) {
-        AlertDialog(
-            onDismissRequest = { expertPinDialogOpen = false },
-            title = { Text(s.expertModus) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        "Voer de pincode in (standaard: 0000).",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    OutlinedTextField(
-                        value = expertPinInput,
-                        onValueChange = { if (it.length <= 4) { expertPinInput = it; expertPinError = false } },
-                        label = { Text(s.pincode) },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                        visualTransformation = PasswordVisualTransformation(),
-                        isError = expertPinError,
-                        singleLine = true
-                    )
-                    if (expertPinError) {
-                        Text(
-                            s.expertPinFout,
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                Button(onClick = {
-                    if (expertPinInput == EXPERT_PIN) {
-                        showExpertSection = true
-                        expertPinDialogOpen = false
-                    } else expertPinError = true
-                }) { Text(s.openen) }
-            },
-            dismissButton = {
-                TextButton(onClick = { expertPinDialogOpen = false }) { Text(s.annuleren) }
             }
         )
     }

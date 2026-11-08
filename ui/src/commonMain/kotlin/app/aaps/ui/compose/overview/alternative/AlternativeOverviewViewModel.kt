@@ -103,7 +103,7 @@ class AlternativeOverviewViewModel(
             val now = dateUtil.now()
             val profile = profileFunction.getProfile()
             val reservoirU = profile?.let {
-                activePlugin.activePump.reservoirLevel.value.iU(it.insulinConcentration())
+                activePlugin.activePump.reservoirLevel.value?.iU(it.insulinConcentration())
             } ?: 0.0
 
             // Same formula as the standard IOB chip.

@@ -213,18 +213,6 @@ interface FclStrings {
     val settingsOchtendStart: String
     val settingsOchtendStartWeekend: String
     val settingsNachtStart: String
-    val expertModus: String
-    val expertModusActief: String
-    val expertModusMeerOpties: String
-    val expertT1BoostTitel: String
-    val expertT1BoostUitleg: String
-    val expertPeakStartTitel: String
-    val expertPeakStartUitleg: String
-    val expertPeakStartWaarde: String
-    val expertPin: String
-    val expertPinFout: String
-    val pincode: String
-    val openen: String
     val annuleren: String
     val sluiten: String
 
@@ -295,9 +283,6 @@ interface FclStrings {
     val nogGeenData: String
     val autoSensHeader: String
     val configNogNietBeschikbaar: String
-    val expertModeAan: String
-    val expertModeUit: String
-    val fijnafstemming: String
     val autosensOverdagUit: String
     val autosensUit: String
 

@@ -209,29 +209,6 @@
 
     <string name="fcl_card_adjusts">Past dosering aan</string>
     <string name="fcl_card_signals">Signaleert alleen</string>
-    <string name="fcl_cover_title">IOB-werking</string>
-    <string name="fcl_cover_summary" comment="%1$d=measured percent, %2$d=curve percent. Example: 14 and 55">In de praktijk dekt de IOB nu ongeveer %1$d%% van wat de ISF van het profiel zegt, bij een BG van 3 mmol of meer boven target. De vaste curve van het algoritme gaat uit van ongeveer %2$d%%.</string>
-    <string name="fcl_cover_summary_why">Dat verschil is normaal. De gemeten waarde is netto: hij bevat ook de koolhydraten die nog worden opgenomen en wat het algoritme zelf deed. Daarom kan hij niet zomaar als dekking worden gebruikt. De dosering gebruikt nog steeds de vaste curve.</string>
-    <string name="fcl_cover_intro" comment="%1$d=number of days. Example: 28">Gemeten: hoeveel de BG na 3 uur is gedaald, vergeleken met wat de ISF zegt (1,00 = precies zoals de ISF). Alleen als de IOB 1,5 E of meer is en de BG boven target. Tussen haakjes het aantal metingen. Laatste %1$d dagen.</string>
-    <string name="fcl_cover_col_class">BG boven target</string>
-    <string name="fcl_cover_col_flat">Vlak/dalend</string>
-    <string name="fcl_cover_col_rising">Stijgend</string>
-    <string name="fcl_cover_col_curve">Curve</string>
-    <string name="fcl_cover_cell" comment="%1$.2f=measured factor, %2$d=number of measurements. Example: 0.15 (89)">%1$.2f (%2$d)</string>
-    <string name="fcl_cover_class_range" comment="%1$.1f=lower edge, %2$.1f=upper edge, both in mmol/L above target. Example: 1.5 – 3.0 mmol">%1$.1f – %2$.1f mmol</string>
-    <string name="fcl_cover_class_open" comment="%1$.1f=lower edge in mmol/L above target. Example: 7.0+ mmol">%1$.1f+ mmol</string>
-    <string name="fcl_cover_factor" comment="%1$.2f=factor. Example: 0.67">%1$.2f</string>
-    <string name="fcl_cover_no_data">Nog te weinig metingen. De metingen worden vanaf nu bewaard.</string>
-    <string name="fcl_cover_shadow_title">Dekkingsrem: controle met de gemeten waarde</string>
-    <string name="fcl_cover_shadow_intro" comment="%1$.2f=lowest factor used. Example: 0.40">Controle: wat zou de dekkingsrem op de commit hebben gedaan als hij de gemeten waarde gebruikte (niet lager dan %1$.2f en niet hoger dan de curve)? Er wordt niets mee gedoseerd. Per commit wordt gekeken naar de BG in de 3 uur erna, na de dosis die echt is gegeven.</string>
-    <string name="fcl_cover_shadow_none" comment="%1$d=number of days. Example: 7">Nog geen commits met dekkingsrem in de laatste %1$d dagen.</string>
-    <string name="fcl_cover_shadow_total" comment="%1$d=days, %2$d=commits that would be bigger, %3$d=all commits, %4$.1f=extra units, %5$.1f=extra units per day">Laatste %1$d dagen: %2$d van %3$d commits zouden groter zijn geweest, samen %4$.1f E extra (%5$.1f E per dag).</string>
-    <string name="fcl_cover_shadow_high" comment="%1$d=number of commits">Bij %1$d daarvan werd de BG daarna 11 of hoger. De extra insuline had dat waarschijnlijk lager gehouden.</string>
-    <string name="fcl_cover_shadow_low" comment="%1$d=number of commits">Bij %1$d daarvan was de BG daarna al laag. De extra insuline had die waarschijnlijk onder 4,0 gebracht.</string>
-    <string name="fcl_cover_shadow_zero">De dekkingsrem had in deze periode geen verschil gemaakt.</string>
-    <string name="fcl_cover_shadow_note">Een schatting. Ze gaat uit van een deel van de werking van de ISF binnen 3 uur. Pas na meer weken data is er een betrouwbaar beeld.</string>
-    <string name="fcl_cover_trend_title">Verloop per week</string>
-    <string name="fcl_cover_trend_intro" comment="%1$.1f=lowest BG class edge in mmol/L above target. Example: 3.0">Gemiddelde van de metingen per week, alleen voor een BG van %1$.1f mmol of meer boven target. Zo zie je of de waarde stabiel blijft. Tussen haakjes het aantal metingen. Het einde van elke week staat links.</string>
     <string name="fcl_timing_title">Insuline-timing</string>
     <string name="fcl_timing_loading">Even rekenen...</string>
     <string name="fcl_timing_no_data" comment="%1$d=meals needed, %2$d=meals found. Example: 5 and 2">Nog te weinig maaltijden voor een advies (minstens %1$d nodig, nu %2$d). De metingen worden bewaard en komen vanzelf.</string>
@@ -263,92 +240,17 @@
     <string name="fcl_timing_trend_intro">Mediaan per week. Tussen haakjes het aantal maaltijden. Het einde van elke week staat links.</string>
     <string name="fcl_timing_week_cell" comment="%1$+d=median minutes, %2$d=meals. Example: +15 (4)">%1$+d min (%2$d)</string>
     <string name="fcl_timing_note" comment="%1$d=minutes to the insulin peak. Example: 45">Een schatting. De werking van de insuline is berekend uit de insuline die echt is gegeven, met een piek na %1$d minuten. De echte curve kan afwijken. Dit is alleen een meting: de dosering verandert niet.</string>
-    <string name="fcl_trial_title">Dekkingsproef</string>
-    <string name="fcl_trial_state_on">Aan</string>
-    <string name="fcl_trial_state_off">Uit. De dosering verandert niet.</string>
-    <string name="fcl_trial_intro">Aan het begin van een maaltijd (snelle stijging, BG niet ver boven target) geeft de dekkingsrem een deel van de commit terug, volgens de gemeten dekking. De sterkte begint klein en gaat omhoog als er geen lage BG volgt. Na een lage BG halveert de sterkte direct.</string>
-    <string name="fcl_trial_strength" comment="%1$d=strength percent, %2$d=maximum percent. Example: 25 and 75">Sterkte nu: %1$d%% (maximum %2$d%%)</string>
-    <string name="fcl_trial_progress" comment="%1$d=clean commits so far, %2$d=commits needed. Example: 4 and 10">%1$d van %2$d commits zonder lage BG voor de volgende stap omhoog</string>
-    <string name="fcl_trial_hold" comment="%1$s=date. Example: 30 okt">Geen verhoging tot %1$s (na een lage BG).</string>
-    <string name="fcl_trial_last_low" comment="%1$s=date, %2$.1f=lowest BG, %3$d=new strength percent">Laatste wijziging op %1$s: BG %2$.1f na een commit, sterkte gehalveerd naar %3$d%%.</string>
-    <string name="fcl_trial_last_up" comment="%1$s=date, %2$d=new strength percent">Laatste wijziging op %1$s: sterkte omhoog naar %2$d%%.</string>
-    <string name="fcl_trial_results_title" comment="%1$d=days. Example: 7">Resultaat laatste %1$d dagen</string>
-    <string name="fcl_trial_results_none">Nog geen commits die door de proef groter zijn gemaakt.</string>
-    <string name="fcl_trial_results" comment="%1$d=commits, %2$.1f=extra units, %3$d=judged commits">%1$d commits kregen samen %2$.1f E extra. Daarvan zijn %3$d beoordeeld (3 uur erna).</string>
-    <string name="fcl_trial_results_lows" comment="%1$d=lows, %2$d=highs">Daarna een BG onder 3,9: %1$d. Daarna een BG van 11 of hoger: %2$d.</string>
-    <string name="fcl_trial_settings_title">Instellingen</string>
-    <string name="fcl_trial_set_start">Startsterkte</string>
-    <string name="fcl_trial_set_step">Stap omhoog</string>
-    <string name="fcl_trial_set_max">Maximale sterkte</string>
-    <string name="fcl_trial_set_batch">Commits zonder lage BG per stap</string>
-    <string name="fcl_trial_set_hold">Geen verhoging na een lage BG</string>
-    <string name="fcl_trial_set_low">Grens lage BG</string>
-    <string name="fcl_trial_set_cap_commit">Maximaal extra per commit</string>
-    <string name="fcl_trial_set_cap_day">Maximaal extra per dag</string>
-    <string name="fcl_trial_set_slope">Alleen bij een stijging van minstens</string>
-    <string name="fcl_trial_set_above">Alleen tot zoveel boven target</string>
-    <string name="fcl_trial_settings_note">Deze waarden staan nu vast. In een volgende versie kunnen ze hier met schuiven worden aangepast.</string>
-    <string name="fcl_trial_pct" comment="%1$d=percent. Example: 25%">%1$d%%</string>
-    <string name="fcl_trial_days" comment="%1$d=days. Example: 7 dagen">%1$d dagen</string>
-    <string name="fcl_trial_mmol" comment="%1$.1f=mmol/L. Example: 3.9 mmol">%1$.1f mmol</string>
-    <string name="fcl_trial_units" comment="%1$.1f=units. Example: 0.5 E">%1$.1f E</string>
-    <string name="fcl_trial_slope" comment="%1$.1f=mmol/L per hour. Example: 4.0 mmol/u">%1$.1f mmol/u</string>
 
-    <!-- Begrenzing per stijging (InsulinBudget) -->
-    <string name="fcl_budget_title">Begrenzing per stijging</string>
-    <string name="fcl_budget_state" comment="%1$s=name of the level. Example: Matig">Niveau: %1$s</string>
-    <string name="fcl_budget_intro">Tijdens een stijging geeft het algoritme de insuline in stappen. Deze begrenzing let erop dat de insuline niet harder oploopt dan de stijging zelf rechtvaardigt, gemeten aan jouw eigen laatste 4 weken. Zo wordt een te grote dosis bij een kleine maaltijd teruggebracht en kom je na de piek minder vaak te laag uit. De begrenzing verlaagt alleen en werkt niet bij een vlakke BG.</string>
-    <string name="fcl_budget_choose">Kies hoe streng</string>
-    <string name="fcl_budget_level_measure">Alleen meten</string>
-    <string name="fcl_budget_level_light">Licht</string>
-    <string name="fcl_budget_level_moderate">Matig</string>
-    <string name="fcl_budget_level_strong">Sterk</string>
-    <string name="fcl_budget_desc_measure">De dosering verandert niet. Hieronder zie je hoe vaak Matig zou ingrijpen.</string>
-    <string name="fcl_budget_desc_light">Grijpt alleen in bij een duidelijk te grote dosis. Een veilige eerste stap als je na een maaltijd soms te laag komt.</string>
-    <string name="fcl_budget_desc_moderate">Grijpt eerder in. Past als je na de piek regelmatig te laag uitkomt.</string>
-    <string name="fcl_budget_desc_strong">Grijpt het vroegst in. Alleen als Matig nog te veel lage waarden geeft. De BG kan na een maaltijd hoger worden.</string>
-    <string name="fcl_budget_ref_title">Jouw eigen maat</string>
-    <string name="fcl_budget_ref" comment="%1$.2f=units per mmol/L rise, %2$d=number of meals. Example: 0.85 E per mmol/L, 40 maaltijden">Jouw gemiddelde dosis is %1$.2f E per mmol/L stijging (laatste 28 dagen, %2$d maaltijden).</string>
-    <string name="fcl_budget_ref_none" comment="%1$d=meals found, %2$d=meals needed. Example: 8 of 15">Nog te weinig maaltijden om je eigen maat te bepalen (%1$d van %2$d). Tot dan doet de begrenzing niets.</string>
-    <string name="fcl_budget_results_title" comment="%1$d=days. Example: 7">Laatste %1$d dagen</string>
-    <string name="fcl_budget_results_none">Nog geen dosis die de begrenzing had afgeknepen.</string>
-    <string name="fcl_budget_results_applied" comment="%1$d=times, %2$.1f=units, %3$d=days">De begrenzing greep %1$d keer in en hield samen %2$.1f E tegen, op %3$d dagen.</string>
-    <string name="fcl_budget_results_measure" comment="%1$d=times, %2$.1f=units, %3$d=days">Matig zou %1$d keer hebben ingegrepen en samen %2$.1f E hebben tegengehouden, op %3$d dagen.</string>
-    <string name="fcl_budget_brake" comment="%1$d=cycles">De piekrem hield %1$d keer een stijgende BG tegen terwijl er nog ruimte was. Dit wordt alleen geteld, de piekrem verandert niet.</string>
-    <string name="fcl_budget_note">Alle bescherming tegen een lage BG blijft gelden. De begrenzing kan een dosis alleen kleiner maken, nooit groter.</string>
-
-    <!-- Rem eerder los (experiment, pincode) -->
-    <string name="fcl_early_title">Rem eerder los</string>
-    <string name="fcl_early_state" comment="%1$s=name of the level. Example: Laag">Niveau: %1$s</string>
-    <string name="fcl_early_intro">Na een afgekapte dosis kan de post-hypo-rem de volgende doses van een maaltijd lang klein houden. Daarna komt vaak een grote dosis, vlak bij de piek. Dit experiment laat de rem eerder los, in stappen, als de maaltijd bevestigd is, de BG boven 6,5 is en snel stijgt, en de IOB niet hoog is. Dit kan meer insuline geven dan nu. Het werkt niet na een echte lage BG.</string>
-    <string name="fcl_early_choose">Kies hoeveel de rem loslaat</string>
-    <string name="fcl_early_level_off">Uit</string>
-    <string name="fcl_early_level_low">Laag</string>
-    <string name="fcl_early_level_medium">Medium</string>
-    <string name="fcl_early_level_high">Hoog</string>
-    <string name="fcl_early_desc_off">De rem werkt zoals altijd.</string>
-    <string name="fcl_early_desc_low">Laat hooguit een vijfde van wat de rem tegenhoudt eerder door. Begin hier.</string>
-    <string name="fcl_early_desc_medium">Laat hooguit ruim een derde van wat de rem tegenhoudt eerder door.</string>
-    <string name="fcl_early_desc_high">Laat hooguit ruim de helft van wat de rem tegenhoudt eerder door. Meer kans op een lage BG na de maaltijd.</string>
-    <string name="fcl_early_pin_title">Pincode nodig</string>
-    <string name="fcl_early_pin_text">Dit experiment kan meer insuline geven dan nu. Zet het alleen aan als je de risico\'s kent. Vul de pincode in om verder te gaan.</string>
-    <string name="fcl_early_pin_label">Pincode</string>
-    <string name="fcl_early_pin_wrong">Pincode onjuist</string>
-    <string name="fcl_early_pin_ok">Doorgaan</string>
-    <string name="fcl_early_pin_cancel">Annuleren</string>
-    <string name="fcl_early_results_title" comment="%1$d=days. Example: 7">Laatste %1$d dagen</string>
-    <string name="fcl_early_results_none">Nog geen dosis die door het experiment eerder is doorgelaten.</string>
-    <string name="fcl_early_results" comment="%1$d=meals, %2$d=moments (cycles), %3$d=days">Het experiment liet in %1$d maaltijd(en) extra door (%2$d keer), op %3$d dag(en).</string>
-    <string name="fcl_early_meal" comment="%1$s=date and time of the first moment of the meal, %2$d=number of moments, %3$.2f=extra units of this meal. Example: Maaltijd 2/11 12:55 · 3 keer · extra 0.42 E">Maaltijd %1$s · %2$d keer · extra %3$.2f E</string>
-    <string name="fcl_early_range" comment="%1$.1f=highest BG, %2$s=time of the highest BG, %3$.1f=lowest BG, %4$s=time of the lowest BG. Example: Piek 11.3 (13:20) · laagste 4.8 (15:10)">Piek %1$.1f (%2$s) · laagste %3$.1f (%4$s)</string>
-    <string name="fcl_early_range_running" comment="Same as above, but the meal is not over yet. %1$.1f=highest BG, %2$s=time, %3$.1f=lowest BG, %4$s=time">Tot nu: piek %1$.1f (%2$s) · laagste %3$.1f (%4$s)</string>
-    <string name="fcl_early_range_nolow" comment="%1$.1f=highest BG, %2$s=time of the highest BG. There is no BG after the last dose yet, so the lowest is shown as a dash.">Piek %1$.1f (%2$s) · laagste –</string>
-    <string name="fcl_early_range_running_nolow" comment="Same as above, but the meal is not over yet. %1$.1f=highest BG, %2$s=time">Tot nu: piek %1$.1f (%2$s) · laagste –</string>
-    <string name="fcl_early_range_rising" comment="The meal is not over and the BG is still rising, so there is no lowest value yet. %1$.1f=highest BG so far, %2$s=time of the highest BG">Tot nu: piek %1$.1f (%2$s) · laagste: nog stijgend</string>
-    <string name="fcl_early_line" comment="%1$s=date and time, %2$.2f=standard dose of the cycle, %3$.2f=extra dose from the experiment, %4$.2f=delivered dose (standard plus extra), %5$d=percent of what the brake held back that was let through. Example: 2/11 12:55 · 0.34 + 0.28 extra = 0.62 E (18%)">%1$s · %2$.2f + %3$.2f extra = %4$.2f E (%5$d%%)</string>
-    <string name="fcl_early_line_old" comment="Older moments without details. %1$s=date and time, %2$d=percent, %3$.2f=extra units">%1$s · %2$d%% · +%3$.2f E</string>
-    <string name="fcl_early_more" comment="%1$d=number of older meals not shown">En %1$d eerdere maaltijden.</string>
-    <string name="fcl_early_note">De hypo-bescherming blijft altijd gelden. In elke cyclus waarin zij een dosis afkapt, doet dit experiment niets. In de CSV staan de kolommen brake_early_weight en brake_early_extra_u.</string>
+    <!-- Vroege insuline: twee instellingen die eerst onder Expert modus stonden -->
+    <string name="fcl_t1_title">Extra vroege dosis bij aanhoudende stijging</string>
+    <string name="fcl_t1_intro">Geeft extra insuline bij de vroege doses van een maaltijd, maar alleen als de stijging al een paar metingen aanhoudt. Hoe sterker de stijging aanhoudt, hoe meer extra.</string>
+    <string name="fcl_t1_note">Grijpt nooit in op de allereerste, nog onzekere dosis. 100% is 15% extra op de vroege dosis. Het maximum per dosis blijft gelden.</string>
+    <string name="fcl_t1_effect" comment="%1$.1f=extra part of the early dose in percent. Example: 15.0">Extra op de vroege dosis: %1$.1f%%</string>
+    <string name="fcl_strength_state" comment="%1$d=strength in percent. Example: 50">Sterkte: %1$d%%</string>
+    <string name="fcl_peakstart_title">Eerder alert bij hogere maaltijd</string>
+    <string name="fcl_peakstart_intro">Het algoritme gaat een maaltijd vroeg volgen als de voorspelde piek hoog genoeg is. Met meer sterkte is die grens lager, dus het is eerder alert, ook bij kleinere maaltijden.</string>
+    <string name="fcl_peakstart_note">0% is het normale gedrag (grens 9,0 mmol/L). Elke 100% verlaagt de grens met 1,0 mmol/L, tot 7,5 mmol/L bij 150%. Verhoog in kleine stappen.</string>
+    <string name="fcl_peakstart_effect" comment="%1$.1f=predicted peak in mmol/L needed to watch a meal early. Example: 8.0">Alert vanaf een voorspelde piek van %1$.1f mmol/L</string>
 
     <!-- Experimenten met een sterkte-schuif (standaard 0% = uit) -->
     <string name="fcl_meals_title">Experimenten trage en snelle maaltijden</string>
