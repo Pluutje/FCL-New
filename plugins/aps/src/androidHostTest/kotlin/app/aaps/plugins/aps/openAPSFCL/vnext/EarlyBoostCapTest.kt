@@ -102,6 +102,28 @@ class EarlyBoostCapTest {
     }
 
     @Test
+    fun `commit of 8 November 23 12 is cut to about the cap`() {
+        // predicted peak 6.7, target 5.4, ISF 3.5: cap = 3 * 1.3 / 3.5 = 1.11 U, the commit was 3.38 U
+        val cap = EarlyBoostCap.capU(6.7, 5.4, 3.5)
+        val cut = EarlyBoostCap.cappedTarget(3.38, cap, EarlyBoostCap.capWeight(6.7), 0.30)
+        assertThat(cut).isWithin(0.01).of(1.11)
+    }
+
+    @Test
+    fun `commit is not cut below the smallest commit`() {
+        val cap = EarlyBoostCap.capU(5.6, 5.4, 3.5)
+        val cut = EarlyBoostCap.cappedTarget(3.0, cap, EarlyBoostCap.capWeight(5.6), 0.30)
+        assertThat(cut).isWithin(1e-9).of(0.30)
+    }
+
+    @Test
+    fun `commit of a big meal with predicted peak 11 is not cut`() {
+        val cap = EarlyBoostCap.capU(11.0, 5.4, 4.5)
+        val cut = EarlyBoostCap.cappedTarget(3.5, cap, EarlyBoostCap.capWeight(11.0), 0.30)
+        assertThat(cut).isEqualTo(3.5)
+    }
+
+    @Test
     fun `nearest finds the closest event inside the tolerance`() {
         val events = listOf(
             EarlyBoostCap.Event(1_000_000L, 5.47, 2.11, 0.3),

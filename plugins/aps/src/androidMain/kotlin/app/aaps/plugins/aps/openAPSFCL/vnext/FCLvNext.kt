@@ -5691,7 +5691,7 @@ class FCLvNext(
     // "vNN-jjjj-mm-dd-uumm" (aanmaaktijdstip, geen omschrijving; die van
     // eerdere versies raakten toch achter). Alleen als het écht relevant
     // is een korte omschrijving toevoegen.
-    private val FCL_CODE_VERSION = "v157-2026-11-08-1500"
+    private val FCL_CODE_VERSION = "v159-2026-11-09-0000"
 
     // ── Restart-detectie (16/07/2026) ─────────────────────────────────
     // true op precies de EERSTE cyclus na het (her)starten van dit class-
@@ -6068,6 +6068,11 @@ class FCLvNext(
             if (field != value) saveEpisodeCommitCount(value)
             field = value
         }
+    // 8/11/2026: som van de gewichten van alle doses in deze episode (zie CommitDecayRelease). Een kleine
+    // vroege dosis telt weinig mee, een volle commit telt 1. Alleen in het geheugen; na een herstart begint
+    // dit bij 0, dus dan is er minder afbouw (nooit meer).
+    private var episodeCommitWeightSum: Double = 0.0
+
     // LET OP (28/07/2026, de gebruiker — zie hieronder): dit veld wordt UITSLUITEND
     // bijgewerkt binnen het early.active-blok verderop (dus niet bij een
     // WFF- of commit-only cyclus) — dat is bewust, want dit budget stuurt
@@ -6772,6 +6777,7 @@ class FCLvNext(
             mealEpisodeStartTime = null
             mealEpisodeStartBg = null
             episodeCommitCount = 0
+            episodeCommitWeightSum = 0.0
             episodeBoostBudgetU = 0.0
             // 16/08/2026: episodeAigfBPct/Result/WakeOverlapFrac NIET meer
             // hier resetten — component B is nu continu, zie HERONTWERP-kdoc
@@ -7547,6 +7553,7 @@ class FCLvNext(
             mealEpisodeStartTime = now
             mealEpisodeStartBg = ctx.input.bgNow
             episodeCommitCount = 0
+            episodeCommitWeightSum = 0.0
             episodeBoostBudgetU = 0.0
             // 16/08/2026: episodeAigfBPct/Result/WakeOverlapFrac NIET meer
             // hier resetten — component B is nu continu, zie HERONTWERP-kdoc
@@ -7611,6 +7618,7 @@ class FCLvNext(
             lastHighMealAggressionA = 0.0
             lastHighMealAggressionAt = null
             episodeCommitCount = 0
+            episodeCommitWeightSum = 0.0
             episodeBoostBudgetU = 0.0
             // 16/08/2026: episodeAigfBPct/Result/WakeOverlapFrac NIET meer
             // hier resetten — component B is nu continu, zie HERONTWERP-kdoc
@@ -7661,6 +7669,7 @@ class FCLvNext(
                     "(teller=$episodeCommitCount, late_decay=${"%.2f".format(lastKnownLateDecayMul)})\n"
             )
             episodeCommitCount = 0
+            episodeCommitWeightSum = 0.0
             episodeBoostBudgetU = 0.0
             episodePeakCommitU = 0.0
             lastKnownLateDecayMul = 1.0
@@ -8481,6 +8490,7 @@ class FCLvNext(
             // latere commit-path bolussen zijn dan commitNr ≥ 2 → decay actief
             if (finalDose > before) {
                 episodeCommitCount++
+                episodeCommitWeightSum += CommitDecayRelease.commitWeight(finalDose, config.maxSMB)
                 earlyFiredThisCycle = true
                 // Onthoud tijdstip en grootte voor post-boost TBR-continuatie
                 lastEarlyBoostAt = now
@@ -9507,6 +9517,7 @@ class FCLvNext(
                             "iobR=${"%.2f".format(ctx.iobRatio)}\n"
                     )
                     episodeCommitCount = 0
+                    episodeCommitWeightSum = 0.0
                     episodePeakCommitU = 0.0
                     // 07/08/2026: dit reset-punt miste de AIGF-B-resets die
                     // de andere drie episode-grens-resets al wel hadden (zelfde
@@ -10002,10 +10013,32 @@ class FCLvNext(
                 // eerste-aflevering, reentry) -- consistent, en nooit soepeler dan
                 // voorheen op het moment dat de oude knip zelf al actief was.
                 val resetCeiling = lerp(1.0, DOSE_RATIO_DAMPING, doseRatioDampingFrac)
-                val normalDecayValue = if (lateDecayActive) {
+                val countedDecayValue = if (lateDecayActive) {
                     (1.0 - effectiveDecay * (commitNr - 1).toDouble())
                         .coerceIn(decayFloor, 1.0)
                 } else 1.0
+                // 8/11/2026: bij een duidelijk sterke, vroege stijging telt elke dosis naar zijn grootte mee
+                // (CommitDecayRelease), niet als een hele commit. Zo wordt de derde dosis na twee kleine vroege
+                // doses niet meer bijna op de vloer gezet. Geleidelijk (release 0 tot 1) en nooit sterker dan
+                // de oude afbouw.
+                val commitDecayRelease = if (lateDecayActive) {
+                    CommitDecayRelease.release(ctx.acceleration, ctx.deltaToTarget, ctx.iobRatio)
+                } else 0.0
+                val normalDecayValue = if (commitDecayRelease > 0.001) {
+                    val weightedFloor = (decayFloorBase - episodeCommitWeightSum.coerceIn(0.0, 5.0) * 0.02 - postOmslagFloorCut)
+                        .coerceAtLeast(POST_OMSLAG_ABSOLUTE_MIN_FLOOR)
+                    val weightedDecayValue = (1.0 - effectiveDecay * episodeCommitWeightSum)
+                        .coerceIn(weightedFloor, 1.0)
+                    val blended = CommitDecayRelease.blend(countedDecayValue, weightedDecayValue, commitDecayRelease)
+                    if (blended > countedDecayValue + 0.005) {
+                        status.append(
+                            "AFBOUW LOSGELATEN (sterke vroege stijging): ${"%.2f".format(countedDecayValue)}->" +
+                                "${"%.2f".format(blended)} (release=${"%.2f".format(commitDecayRelease)}, " +
+                                "gewogen teller=${"%.2f".format(episodeCommitWeightSum)} i.p.v. ${commitNr - 1})\n"
+                        )
+                    }
+                    blended
+                } else countedDecayValue
                 lateDecayMul = if (vroegeStijgingRampFrac > 0.0) {
                     // v120 -- GELEIDELIJKE OPBOUW I.P.V. INSTANTE RESET (17/09/2026, de
                     // gebruiker) -- zie uitgebreide kdoc bij vroegeStijgingBevestigdSinds
@@ -10652,7 +10685,24 @@ class FCLvNext(
                 val aigfCommitBoost = if (aigfEnabled && episodeAigfBPct < 100.0 - 1e-9)
                     (100.0 / episodeAigfBPct)
                 else 1.0
-                val committedDoseBeforeCoverBrake = preAigfCommittedDose * aigfCommitBoost
+                val committedDoseBeforePeakCap = preAigfCommittedDose * aigfCommitBoost
+                // 8/11/2026 (23:12: 3,38U bij een voorspelde piek van 6,7): de commit mag niet meer zijn dan
+                // CAP_FACTOR keer wat de voorspelde piek nodig heeft. Zelfde regel als de vroege dosis
+                // (EarlyBoostCap): vloeiend uit tussen een voorspelde piek van 8,5 en 10,5, dus een echte
+                // grote maaltijd blijft onbeperkt. Nooit onder de kleinste commit.
+                val commitPeakCapU = EarlyBoostCap.capU(peak.predictedPeak, ctx.input.targetBG, ctx.input.effectiveISF)
+                val commitPeakCapWeight = EarlyBoostCap.capWeight(peak.predictedPeak)
+                val committedDoseBeforeCoverBrake = EarlyBoostCap.cappedTarget(
+                    committedDoseBeforePeakCap, commitPeakCapU, commitPeakCapWeight, config.minCommitDose
+                )
+                if (committedDoseBeforeCoverBrake < committedDoseBeforePeakCap - 0.005) {
+                    status.append(
+                        "COMMIT-PIEKPLAFOND: ${"%.2f".format(committedDoseBeforePeakCap)}→" +
+                            "${"%.2f".format(committedDoseBeforeCoverBrake)}U " +
+                            "(voorspelde piek ${"%.1f".format(peak.predictedPeak)}, plafond ${"%.2f".format(commitPeakCapU)}U, " +
+                            "gewicht ${"%.2f".format(commitPeakCapWeight)})\n"
+                    )
+                }
                 if (aigfCommitBoost > 1.0 + 1e-9) {
                     status.append("AIGF-B COMMIT BOOST ×${"%.2f".format(aigfCommitBoost)} (aigf-b=${"%.1f".format(episodeAigfBPct)})\n")
                 }
@@ -10737,7 +10787,10 @@ class FCLvNext(
                     didCommitThisCycle = true
                     commitIntendedThisCycle = committedDose
                     // Alleen tellen als early floor deze cyclus niet al telde
-                    if (!earlyFiredThisCycle) episodeCommitCount++
+                    if (!earlyFiredThisCycle) {
+                        episodeCommitCount++
+                        episodeCommitWeightSum += CommitDecayRelease.commitWeight(committedDose, config.maxSMB)
+                    }
                     // 14/08/2026: zie kdoc bij episodeAnyRealDeliveryDone
                     // hierboven — dit IS het punt waarop de bestaande code een
                     // commit al als "echt" beschouwt (committedDose heeft
