@@ -24,10 +24,17 @@ interface PumpEmulatorControl {
     /** While true, the pump cannot be reached: a connect never comes up. */
     fun setOutOfRange(outOfRange: Boolean): Boolean
 
-    /** The next [command] never reaches the pump: the pump does nothing and sends nothing. */
+    /**
+     * The next [command] never reaches the pump: the pump does nothing and sends nothing. Lost commands are used in the
+     * order they were set: one waits until those set before it are used.
+     */
     fun loseCommand(command: EmulatedCommand): Boolean
 
-    /** The pump runs the next [command], and its answer is lost. For the app this is not the same as [loseCommand]. */
+    /**
+     * The pump runs the next [command], and its answer is lost. For the app this is not the same as [loseCommand].
+     * Lost answers are used in the order they were set, so a test can name a sequence: "the cancel answer is lost, then
+     * the answer to the status read after it".
+     */
     fun loseAnswer(command: EmulatedCommand): Boolean
 
     /** The pump reports [alarm] now. */
@@ -35,6 +42,25 @@ interface PumpEmulatorControl {
 
     /** The next bolus stops after [units], as at an occlusion. */
     fun stopNextBolusAt(units: Double): Boolean
+
+    /**
+     * The pump clock goes [offsetMs] further off the phone clock, as a clock that drifted or was not set. A pump that logs
+     * its own time then logs it off by that much. False for an emulator that cannot.
+     */
+    fun shiftPumpClock(offsetMs: Long): Boolean = false
+
+    /**
+     * The user gives a bolus of [units] on the pump itself, without the app, and the pump logs it as it logs any bolus.
+     * The driver then finds it in the pump history. False for a pump that cannot give a bolus without the app, as a patch
+     * with no buttons.
+     */
+    fun bolusOnPump(units: Double): Boolean = false
+
+    /**
+     * The user stops ([suspended] true) or starts again the insulin on the pump itself, without the app, and the pump
+     * logs it as it logs any stop. False for a pump that cannot be stopped without the app, as a patch with no buttons.
+     */
+    fun suspendOnPump(suspended: Boolean): Boolean = false
 
     /** What the emulated pump holds now. */
     fun state(): EmulatedPumpState
@@ -62,7 +88,11 @@ enum class EmulatedCommand {
     BOLUS_STOP,
     TEMP_BASAL_START,
     TEMP_BASAL_STOP,
+    EXTENDED_BOLUS_START,
+    EXTENDED_BOLUS_STOP,
     BASAL_PROFILE,
+
+    /** A read of what the pump runs now: its status, or its temp basal. Not a read of its history. */
     STATUS
 }
 
@@ -85,6 +115,11 @@ enum class EmulatedAlarm {
  * @param linkUp a phone is connected now
  * @param commands how many commands the pump has received since it started. A step that sends the same command again
  * and again shows here.
+ * @param extendedBolus the extended bolus that runs now, or null. An emulator of a pump that can give one must fill it,
+ * or the scenario finds an extended bolus in AAPS that the pump seems not to run.
+ * @param battery battery left in percent, or null when the pump does not say
+ * @param basal the basal the pump gives in each hour of the day, 24 rates in U/h from midnight, or null when the
+ * emulator cannot say. A scenario compares it with the profile AAPS runs.
  */
 data class EmulatedPumpState(
     val boluses: List<Double>,
@@ -93,8 +128,14 @@ data class EmulatedPumpState(
     val suspended: Boolean,
     val reservoir: Double?,
     val linkUp: Boolean,
-    val commands: Int
+    val commands: Int,
+    val extendedBolus: EmulatedExtendedBolus? = null,
+    val battery: Int? = null,
+    val basal: List<Double>? = null
 )
 
 /** A pump sets a temp basal either as a rate or as a percent of the basal, so one of the two is set. */
 data class EmulatedTempBasal(val absolute: Double?, val percent: Int?)
+
+/** An extended bolus: [units] over [minutes]. */
+data class EmulatedExtendedBolus(val units: Double, val minutes: Int)

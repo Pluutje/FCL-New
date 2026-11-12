@@ -26,6 +26,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
 import org.mockito.kotlin.any
 import org.mockito.kotlin.anyOrNull
+import org.mockito.kotlin.anyVararg
 import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.isA
@@ -164,6 +165,7 @@ class CarelevoPumpPluginBolusTest : CarelevoPumpPluginTestBase() {
         // local persist must NOT turn that into "nothing happened": the delivery loop still runs
         // and the bolus still reaches pumpSync, or IOB would silently lose a delivered dose.
         whenever(startImmeBolusInfusionUseCase.persistImmeBolusStarted(any(), any(), any(), any(), any(), anyOrNull())).thenReturn(false)
+        whenever { bleSession.readInfusionInfo(any()) }.thenReturn(infusionInfo(bolusTotal = 2.0), infusionInfo(bolusTotal = 2.25))
 
         val result = runBlocking {
             plugin.deliverTreatment(DetailedBolusInfo().apply {
@@ -329,8 +331,9 @@ class CarelevoPumpPluginBolusTest : CarelevoPumpPluginTestBase() {
     @Test
     fun `deliverTreatment should go on when the left bolus was already recorded`() {
         leftover(volume = 1.0, bolusTotalBefore = 2.0)
-        // syncBolusWithPumpId answers false: the record of this pump id existed and was only updated.
-        whenever { bleSession.readInfusionInfo(any()) }.thenReturn(infusionInfo(bolusTotal = 3.0))
+        // syncBolusWithPumpId answers false: the record of this pump id existed and was only updated. Then the new
+        // bolus: the total before it, and after it.
+        whenever { bleSession.readInfusionInfo(any()) }.thenReturn(infusionInfo(bolusTotal = 3.0), infusionInfo(bolusTotal = 3.0), infusionInfo(bolusTotal = 3.25))
 
         val result = runBlocking { plugin.deliverTreatment(bolus(0.25)) }
 
@@ -386,11 +389,51 @@ class CarelevoPumpPluginBolusTest : CarelevoPumpPluginTestBase() {
     @Test
     fun `a finished bolus is recorded with the pump id saved at its start`() {
         whenever(dateUtil.now()).thenReturn(START_PUMP_ID)
+        whenever { bleSession.readInfusionInfo(any()) }.thenReturn(infusionInfo(bolusTotal = 2.0), infusionInfo(bolusTotal = 2.25))
 
         runBlocking { plugin.deliverTreatment(bolus(0.25)) }
 
         verify(startImmeBolusInfusionUseCase).persistImmeBolusStarted(any(), any(), any(), eq(START_PUMP_ID), eq(BS.Type.NORMAL), eq(2.0))
         verifyBlocking(pumpSync) { syncBolusWithPumpId(any(), any(), anyOrNull(), eq(START_PUMP_ID), any(), any()) }
+    }
+
+    /**
+     * Found by the emulator scenario test: the patch stopped the bolus on its own, as at an occlusion, and the whole
+     * dose stayed recorded, reported as given. Its bolus total tells what it gave.
+     */
+    @Test
+    fun `a bolus the patch stopped on its own counts what the patch gave and is not reported as given`() {
+        whenever(dateUtil.now()).thenReturn(START_PUMP_ID)
+        whenever { bleSession.readInfusionInfo(any()) }.thenReturn(infusionInfo(bolusTotal = 2.0), infusionInfo(bolusTotal = 2.5))
+        whenever(rh.gs(any<Int>(), anyVararg())).thenReturn("0.50 U")
+        whenever(rh.gs(eq(R.string.carelevo_bolus_stopped_by_patch), anyVararg())).thenReturn("stopped")
+
+        val result = runBlocking { plugin.deliverTreatment(bolus(2.0)) }
+
+        assertThat(result.comment).isEqualTo("stopped")
+        assertThat(result.success).isFalse()
+        assertThat(result.enacted).isTrue()
+        assertThat(result.bolusDelivered).isWithin(0.001).of(0.5)
+        // The record of the whole dose, then the same record set to what the patch gave.
+        val recorded = argumentCaptor<PumpInsulin>()
+        verifyBlocking(pumpSync, times(2)) { syncBolusWithPumpId(any(), recorded.capture(), any(), eq(START_PUMP_ID), any(), any()) }
+        assertThat(recorded.lastValue.cU).isWithin(0.001).of(0.5)
+        // The patch's alarms are read at once, so the reason, as an occlusion, shows too.
+        verifyBlocking(bleSession) { readActiveAlarmSnapshots(any()) }
+    }
+
+    /** Too much is the safer error: when the patch cannot tell, the whole dose stays. */
+    @Test
+    @Timeout(10)
+    fun `a finished bolus keeps the whole dose when the patch cannot tell its total after it`() {
+        whenever { bleSession.readInfusionInfo(any()) }.thenReturn(infusionInfo(bolusTotal = 2.0)).thenAnswer { throw RuntimeException("link down") }
+
+        val result = runBlocking { plugin.deliverTreatment(bolus(1.0)) }
+
+        assertThat(result.success).isTrue()
+        assertThat(result.bolusDelivered).isWithin(0.001).of(1.0)
+        verifyBlocking(pumpSync, times(1)) { syncBolusWithPumpId(any(), any(), anyOrNull(), any(), any(), any()) }
+        verifyBlocking(bleSession, never()) { readActiveAlarmSnapshots(any()) }
     }
 
     @Test
@@ -537,9 +580,10 @@ class CarelevoPumpPluginBolusTest : CarelevoPumpPluginTestBase() {
     )
 
     @Test
-    fun `cancelExtendedBolus should fail when the session throws`() {
+    fun `cancelExtendedBolus should fail when the session throws and the patch still runs it`() {
         whenever { bleSession.runSingle(any(), isA<ExtendBolusCancelCommand>(), any()) }
             .thenAnswer { throw IllegalStateException("failed") }
+        whenever { bleSession.readInfusionInfo(any()) }.thenReturn(infusionInfo(bolusTotal = 2.0, modeRaw = EXTEND_BOLUS_MODE))
 
         val result = runBlocking { plugin.cancelExtendedBolus() }
 
@@ -547,11 +591,50 @@ class CarelevoPumpPluginBolusTest : CarelevoPumpPluginTestBase() {
         assertThat(result.enacted).isFalse()
     }
 
+    /** The cancel reached the patch and only its answer was lost. AAPS kept an extended bolus the patch had ended. */
+    @Test
+    fun `cancelExtendedBolus whose answer is lost is recorded when the patch runs none`() {
+        whenever { bleSession.runSingle(any(), isA<ExtendBolusCancelCommand>(), any()) }
+            .thenAnswer { throw IllegalStateException("timeout") }
+        whenever { bleSession.readInfusionInfo(any()) }.thenReturn(infusionInfo(bolusTotal = 2.0, modeRaw = BASAL_MODE))
+
+        val result = runBlocking { plugin.cancelExtendedBolus() }
+
+        assertThat(result.success).isTrue()
+        verifyBlocking(pumpSync) { syncStopExtendedBolusWithPumpId(any(), any(), any(), any()) }
+    }
+
+    /** The patch started it and only its answer was lost. AAPS had no record of insulin the patch gives. */
+    @Test
+    fun `setExtendedBolus whose answer is lost is recorded when the patch runs it`() {
+        whenever { bleSession.runSingle(any(), isA<ExtendBolusCommand>(), any()) }
+            .thenAnswer { throw IllegalStateException("timeout") }
+        whenever { bleSession.readInfusionInfo(any()) }.thenReturn(infusionInfo(bolusTotal = 2.0, modeRaw = EXTEND_BOLUS_MODE))
+
+        val result = runBlocking { plugin.setExtendedBolus(insulin = 1.2, durationInMinutes = 30) }
+
+        assertThat(result.success).isTrue()
+        verifyBlocking(pumpSync) { syncExtendedBolusWithPumpId(any(), any(), any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun `setExtendedBolus whose answer is lost is not recorded when the patch runs none`() {
+        whenever { bleSession.runSingle(any(), isA<ExtendBolusCommand>(), any()) }
+            .thenAnswer { throw IllegalStateException("timeout") }
+        whenever { bleSession.readInfusionInfo(any()) }.thenReturn(infusionInfo(bolusTotal = 2.0, modeRaw = BASAL_MODE))
+
+        val result = runBlocking { plugin.setExtendedBolus(insulin = 1.2, durationInMinutes = 30) }
+
+        assertThat(result.success).isFalse()
+        verifyBlocking(pumpSync, never()) { syncExtendedBolusWithPumpId(any(), any(), any(), any(), any(), any(), any()) }
+    }
+
     private companion object {
 
         // Raw infusion modes the patch reports in 0x91.
         const val BASAL_MODE = 1
         const val IMME_BOLUS_MODE = 3
+        const val EXTEND_BOLUS_MODE = 5
 
         const val LEFTOVER_PUMP_ID = 1_760_000_000_000L
         const val START_PUMP_ID = 1_760_000_100_000L
