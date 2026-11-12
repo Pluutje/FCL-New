@@ -1,7 +1,10 @@
 package app.aaps.plugins.aps.openAPSFCL.vnext.database
 
 import android.content.Context
+import app.aaps.plugins.aps.openAPSFCL.vnext.CoverDecay
 import app.aaps.plugins.aps.openAPSFCL.vnext.CoverIsf
+import app.aaps.plugins.aps.openAPSFCL.vnext.DoseCutLog
+import app.aaps.plugins.aps.openAPSFCL.vnext.InsulinBudget
 import app.aaps.plugins.aps.openAPSFCL.vnext.FclActiveConfigBridge
 import app.aaps.plugins.aps.openAPSFCL.vnext.EarlyBoostCap
 import app.aaps.plugins.aps.openAPSFCL.vnext.FastMealCap
@@ -790,6 +793,10 @@ class FCLCycleLogRepository @Inject constructor(
         val ovrBrakeEvents = try { OverrideBrakeScale.loadEvents(context) } catch (_: Exception) { emptyList() }
         val slowRiseEvents = try { SlowRiseSupport.loadEvents(context) } catch (_: Exception) { emptyList() }
         val fastCapEvents = try { FastMealCap.loadEvents(context) } catch (_: Exception) { emptyList() }
+        val coverDecayEvents = try { CoverDecay.loadEvents(context) } catch (_: Exception) { emptyList() }
+        val doseCutEvents = try { DoseCutLog.loadEvents(context) } catch (_: Exception) { emptyList() }
+        // The personal reference as it is now (it changes slowly), for the relative cover column.
+        val coverReference = try { InsulinBudget.reference(context) } catch (_: Exception) { Double.NaN }
 
         file.bufferedWriter().use { writer ->
             writer.write(csvHeader(sep))
@@ -819,7 +826,7 @@ class FCLCycleLogRepository @Inject constructor(
                         persist?.persistentCounter ?: 0, persist?.doseU ?: 0.0,
                         persist?.escalationFactor ?: 1.0, persist?.reason ?: "",
                         capEvents, flatEvents, ovrBrakeEvents,
-                        slowRiseEvents, fastCapEvents
+                        slowRiseEvents, fastCapEvents, coverDecayEvents, doseCutEvents, coverReference
                     )
                 )
                 writer.newLine()
@@ -931,7 +938,14 @@ private fun csvHeader(sep: String): String = listOf(
     "early_uncapped_u", "early_cap_u", "early_cover_weight",
     "flat_high_u", "flat_high_excess", "flat_high_weight",
     "ovr_brake_severity", "ovr_brake_portion_cut_u",
-    "slow_rise_u", "slow_rise_weight", "fast_cap_cut_u"
+    "slow_rise_u", "slow_rise_weight", "fast_cap_cut_u",
+    // ── COVER DECAY (10/11/2026) — see CoverDecay. iob_per_need is worked out from bg/target/iob/slope/recent_slope
+    // for every cycle. The other three are 0,00 in cycles where the experiment did not change the decay. ──
+    "cover_decay_iob_per_need", "cover_decay_old_mul", "cover_decay_new_mul", "cover_decay_rel_cover",
+    "cover_decay_delta_u",
+    // ── DOSE CUT TRACE (11/11/2026) — see DoseCutTrace. Log only. Empty / 0,00 when no layer cut the dose by 0,02 U or more.
+    // rel_cover is worked out for every cycle: iob_per_need / the personal reference (as it is at export). 0,00 without a reference.
+    "top_cut_layer", "top_cut_u", "total_cut_u", "rel_cover"
 ).joinToString(sep)
 
 // ── CSV regel — delta_target afgeleid als bg - target ────────────────────
@@ -970,8 +984,13 @@ private fun FCLCycleLogEntity.toCsvLine(
     flatEvents: List<FlatHighCorrection.Event>,
     ovrBrakeEvents: List<OverrideBrakeScale.Event>,
     slowRiseEvents: List<SlowRiseSupport.Event>,
-    fastCapEvents: List<FastMealCap.Event>
+    fastCapEvents: List<FastMealCap.Event>,
+    coverDecayEvents: List<CoverDecay.Event>,
+    doseCutEvents: List<DoseCutLog.Event>,
+    coverReference: Double
 ): String {
+    val doseCutEvent = DoseCutLog.nearest(doseCutEvents, timestampMs, DoseCutLog.CSV_TOLERANCE_MS)
+    val coverDecayEvent = CoverDecay.nearest(coverDecayEvents, timestampMs, CoverDecay.CSV_TOLERANCE_MS)
     val slowRiseEvent = SlowRiseSupport.nearest(slowRiseEvents, timestampMs, SlowRiseSupport.CSV_TOLERANCE_MS)
     val fastCapEvent = FastMealCap.nearest(fastCapEvents, timestampMs, FastMealCap.CSV_TOLERANCE_MS)
     val ovrBrakeEvent = OverrideBrakeScale.nearest(ovrBrakeEvents, timestampMs, OverrideBrakeScale.CSV_TOLERANCE_MS)
@@ -1094,6 +1113,16 @@ private fun FCLCycleLogEntity.toCsvLine(
         // ── OVERRIDE-REM (5/11/2026) ── 0,00 / 0,00 zonder positieve override of zonder recente lage BG. Zie OverrideBrakeScale.
         d2(ovrBrakeEvent?.severity ?: 0.0), d2(ovrBrakeEvent?.portionCutU ?: 0.0),
         // ── EXPERIMENTEN TRAGE/SNELLE MAALTIJD (6/11/2026) ── 0,00 als er deze cyclus niets is gedaan. Zie SlowRiseSupport en FastMealCap.
-        d3(slowRiseEvent?.doseU ?: 0.0), d2(slowRiseEvent?.weight ?: 0.0), d3(fastCapEvent?.cutU ?: 0.0)
+        d3(slowRiseEvent?.doseU ?: 0.0), d2(slowRiseEvent?.weight ?: 0.0), d3(fastCapEvent?.cutU ?: 0.0),
+        // ── COVER DECAY (10/11/2026) ── The first is worked out at export, so no extra column in the database. See CoverDecay.
+        d3(CoverDecay.iobPerNeed(glucoseIob.iob, glucoseIob.bg - glucoseIob.target, trends.slope, trends.recentSlope)),
+        d2(coverDecayEvent?.oldMul ?: 0.0), d2(coverDecayEvent?.newMul ?: 0.0), d2(coverDecayEvent?.relativeCover ?: 0.0),
+        d3(coverDecayEvent?.deltaU ?: 0.0),
+        // ── DOSE CUT TRACE (11/11/2026) ── see DoseCutTrace. rel_cover = iob_per_need / personal reference.
+        doseCutEvent?.layer ?: "", d3(doseCutEvent?.topCutU ?: 0.0), d3(doseCutEvent?.totalCutU ?: 0.0),
+        d3(
+            if (coverReference.isNaN() || coverReference <= 0.0) 0.0
+            else CoverDecay.iobPerNeed(glucoseIob.iob, glucoseIob.bg - glucoseIob.target, trends.slope, trends.recentSlope) / coverReference
+        )
     ).joinToString(sep)
 }

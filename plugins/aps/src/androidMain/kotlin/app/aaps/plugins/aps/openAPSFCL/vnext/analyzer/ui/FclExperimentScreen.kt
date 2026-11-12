@@ -29,6 +29,9 @@ fun FclExperimentScreen() {
         MaaltijdExperimentenKaart(context)
         T1VersterkingKaart(context)
         VroegeSignaleringKaart(context)
+        DaalDoorlaatKaart(context)
+        DekkingsAfbouwKaart(context)
+        HerstelRemKaart(context)
         InsulinTimingKaart(context)
     }
 }

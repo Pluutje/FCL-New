@@ -683,6 +683,18 @@ private var plateauHoldBoostThisCycle: Double = 0.0
 // late_decay_mul bleef 0,12-0,22 en er ging maar 0,15 U per cyclus uit terwijl 0,7 U gewenst was.
 // Gewicht 0..1, groeit geleidelijk met: stijging over het laatste uur, hoogte boven target, lage IOB-ratio.
 private var slowRiseWeightThisCycle: Double = 0.0
+
+// Experiment "cover decay" (10/11/2026), see CoverDecay. Both are set again in every cycle.
+// Applied: the blend was done in the commit block, so it is not done a second time at the taper clamp.
+// Weight: how much of the cover decay is in the blend (0 = off), used to fade the commit cover brake.
+private var coverDecayAppliedThisCycle: Boolean = false
+private var coverDecayWeightThisCycle: Double = 0.0
+// For the stored event at the end of the cycle: the decay before the blend, the result, and the commit dose (0 = no commit).
+private var coverDecayOldMulThisCycle: Double = 0.0
+private var coverDecayResultThisCycle: CoverDecay.Result? = null
+private var coverDecayCommitDoseThisCycle: Double = 0.0
+// 11/11/2026: log only, see DoseCutTrace. Never changes a dose.
+private val doseCutTrace = DoseCutTrace()
 private const val SLOW_RISE_WINDOW_MIN = 60
 private const val SLOW_RISE_START_MMOL = 0.3      // stijging over het venster waar het gewicht begint
 private const val SLOW_RISE_RAMP_MMOL = 0.8       // en hier is het volledig (1,1 mmol per uur)
@@ -5691,7 +5703,7 @@ class FCLvNext(
     // "vNN-jjjj-mm-dd-uumm" (aanmaaktijdstip, geen omschrijving; die van
     // eerdere versies raakten toch achter). Alleen als het écht relevant
     // is een korte omschrijving toevoegen.
-    private val FCL_CODE_VERSION = "v159-2026-11-09-0000"
+    private val FCL_CODE_VERSION = "v162-2026-11-12-1900"
 
     // ── Restart-detectie (16/07/2026) ─────────────────────────────────
     // true op precies de EERSTE cyclus na het (her)starten van dit class-
@@ -7169,10 +7181,105 @@ class FCLvNext(
     }
 
     // ================================================    Get Advice ++++++++++++++++++++++++++++++++++++++
+    /**
+     * Experiment "cover decay" (10/11/2026): blends the late-commit decay [oldMul] with the decay from the IOB cover.
+     * See [CoverDecay]. Strength 0 (the default), no personal reference, the first commit of a meal and the night
+     * give [oldMul] back unchanged.
+     *
+     * This is a member function on purpose: getAdvice is very large, and more local variables there gave a
+     * VerifyError before.
+     */
+    private fun blendCoverDecay(
+        ctx: FCLvNextContext,
+        oldMul: Double,
+        commitNr: Int,
+        nowMs: Long,
+        status: StringBuilder
+    ): Double {
+        coverDecayAppliedThisCycle = true
+        val result = CoverDecay.calculate(
+            strength = ExperimentStrengths.factor(context, ExperimentStrengths.Experiment.COVER_DECAY),
+            dayWeight = 1.0 - ctx.input.nightTransitionFraction,
+            refUPerMmol = InsulinBudget.reference(context),
+            commitNr = commitNr,
+            iob = ctx.input.currentIOB,
+            mmolAboveTarget = ctx.deltaToTarget,
+            slope = ctx.slope,
+            recentSlope = ctx.recentSlope,
+            oldMul = oldMul
+        )
+        coverDecayWeightThisCycle = result.weight
+        if (result.weight <= 0.0) return oldMul
+        coverDecayOldMulThisCycle = oldMul
+        coverDecayResultThisCycle = result
+        status.append(
+            "DEKKINGS-AFBOUW: lateDecayMul ${"%.2f".format(oldMul)}→${"%.2f".format(result.blendedMul)} " +
+                "(dekking ${"%.2f".format(result.relativeCover)}, afbouw ${"%.2f".format(result.decayMul)}, " +
+                "gewicht ${"%.2f".format(result.weight)})\n"
+        )
+        return result.blendedMul
+    }
+
+    /**
+     * Experiment "rebound brake" (12/11/2026): holds back a part of the dose in the first hour after a low BG.
+     * See [ReboundBrake]. [dose] is the dose after the post-hypo brake, [doseBeforePostHypoBrake] the dose before it,
+     * so the cut of that brake is not counted twice. [overrideBrakeStrength] is 1.0 without a positive override and the
+     * severity of the low with one (see [OverrideBrakeScale]). Strength 0 (the default) gives [dose] back unchanged.
+     *
+     * This is a member function on purpose: getAdvice is very large, and more local variables there gave a
+     * VerifyError before.
+     */
+    private fun applyReboundBrake(
+        ctx: FCLvNextContext,
+        dose: Double,
+        doseBeforePostHypoBrake: Double,
+        overrideBrakeStrength: Double,
+        nowMs: Long,
+        status: StringBuilder
+    ): Double {
+        val strength = ExperimentStrengths.factor(context, ExperimentStrengths.Experiment.REBOUND_BRAKE)
+        if (strength <= 0.0 || dose <= 0.0) return dose
+        val history = ctx.input.bgHistory.map { it.first.millis to it.second }
+        val low = ReboundBrake.lowestInWindow(history, nowMs) ?: return dose
+        val alreadyCut = if (doseBeforePostHypoBrake > 0.0) 1.0 - dose / doseBeforePostHypoBrake else 0.0
+        // A positive override means "I eat": the brake is scaled like the post-hypo brake (1.0 without an override).
+        val factor = ReboundBrake.withOverride(
+            ReboundBrake.factor(strength, low.first, low.second, ctx.input.bgNow, alreadyCut),
+            overrideBrakeStrength
+        )
+        if (factor >= 0.999) return dose
+        val reduced = dose * factor
+        ReboundBrake.record(context, nowMs, dose - reduced, low.first)
+        status.append(
+            "HERSTELSTIJGING-REM: ${"%.2f".format(dose)}→${"%.2f".format(reduced)}U " +
+                "(laagste BG ${"%.1f".format(low.first)} ${low.second.toInt()} min geleden, ×${"%.2f".format(factor)}" +
+                (if (overrideBrakeStrength < 0.999) ", override-schaal ${"%.2f".format(overrideBrakeStrength)}" else "") + ")\n"
+        )
+        return reduced
+    }
+
+    /**
+     * Stores the event of the experiment "cover decay" at the end of the cycle, with an estimate of the insulin it
+     * added or held back. [commandedDose] is the final dose of this cycle. See [CoverDecay.commitDeltaU].
+     */
+    private fun storeCoverDecayEvent(nowMs: Long, commandedDose: Double) {
+        val result = coverDecayResultThisCycle ?: return
+        val deltaU = CoverDecay.commitDeltaU(
+            coverDecayCommitDoseThisCycle, coverDecayOldMulThisCycle, result.blendedMul, commandedDose
+        )
+        CoverDecay.record(context, nowMs, coverDecayOldMulThisCycle, result, deltaU)
+    }
+
     @SuppressLint("SuspiciousIndentation") fun getAdvice(input: FCLvNextInput): FCLvNextAdvice {
         // reset reserve logging per cycle
         reserveActionThisCycle = "NONE"
         reserveDeltaThisCycle = 0.0
+        coverDecayAppliedThisCycle = false
+        coverDecayWeightThisCycle = 0.0
+        coverDecayOldMulThisCycle = 0.0
+        coverDecayResultThisCycle = null
+        coverDecayCommitDoseThisCycle = 0.0
+        doseCutTrace.reset()
         explosiveRiseFracThisCycle = 0.0
         explosiveRiseMulThisCycle = 1.0
         explosiveRiseActiveThisCycle = false
@@ -7737,7 +7844,20 @@ class FCLvNext(
                         ctx.consistency >= 0.55
                     )
 
-        if (hardNoDelivery) {
+        // 9/11/2026: these two stops (SHORT-TERM DIP and LONG-SLOPE BLOCK) were a hard 0 for the whole cycle.
+        // Backtest: in 256 cycles of one week, 114 had a BG of 7.5 or higher, and with an IOB ratio below 0.30 the BG
+        // stayed at 7.3 to 8.6 for the next hour and never went below 5.7. Now a part of the dose passes when the BG
+        // is well above target, the fall is mild and the IOB is low (DowntrendPass, the same weight as the
+        // down-trend gate). The cycle goes on and the dose is multiplied by this weight near the end of the cycle.
+        // At a weight of 0.02 or lower it is still the old stop.
+        // The strength of the experiment "Doorlaat bij lichte daling" (0 = off = the old hard stop, the default).
+        val downtrendPassStrength = ExperimentStrengths.factor(context, ExperimentStrengths.Experiment.DOWNTREND_PASS)
+        val softHoldPass =
+            if (hardNoDelivery) {
+                DowntrendPass.weight(ctx.deltaToTarget, ctx.recentSlope, ctx.iobRatio, downtrendPassStrength)
+            } else 1.0
+
+        if (hardNoDelivery && softHoldPass <= 0.02) {
 
             val reason =
                 if (downGate.pauseThisCycle && !isMacroRising(ctx, peak, config)) {
@@ -7749,6 +7869,11 @@ class FCLvNext(
                 }
 
             status.append("$reason → handoff to AAPS\n")
+            // 11/11/2026: log only. No dose was worked out in this cycle, so the stop itself is the top layer.
+            doseCutTrace.markHardStop(
+                if (reason.startsWith("SHORT-TERM DIP")) "HARD_STOP_SHORT_TERM_DIP" else "HARD_STOP_LONG_SLOPE"
+            )
+            DoseCutLog.record(context, now.millis, doseCutTrace)
 
             // ⬇️ LOGROW VULLEN
             logRow.decisionReason = reason
@@ -7907,13 +8032,16 @@ class FCLvNext(
             brake
         }
 
+        doseCutTrace.mark("START", decidedDose)
         var finalDose =
             (decidedDose * iobFactor * config.doseStrengthMul * stepDecelBrake)
                 .coerceAtLeast(0.0)
+        doseCutTrace.mark("IOB_STEP_BRAKE", finalDose)
 
         if (mealSignal.state == MealState.NONE && ctx.acceleration > 0.2 && ctx.iobRatio >= 0.75) {
             status.append("RISING IOB CAP → finalDose limited\n")
             finalDose = minOf(finalDose, 0.6 * config.maxSMB)
+            doseCutTrace.mark("RISING_IOB_CAP", finalDose)
         }
 
 
@@ -7982,6 +8110,7 @@ class FCLvNext(
                 // geen beperking
             }
         }
+        doseCutTrace.mark("ACCESS_LEVEL", finalDose)
 
 
 // ─────────────────────────────────────────────
@@ -8129,6 +8258,7 @@ class FCLvNext(
                     "delta=${"%.2f".format(ctx.deltaToTarget)} → finalDose=0\n"
             )
             finalDose = 0.0
+            doseCutTrace.mark("HOLD_CORRECTIONS", finalDose)
         }
 
 
@@ -8286,6 +8416,7 @@ class FCLvNext(
                     "streak=$sensorBlipStreakCount/2 → finalDose=0\n"
             )
             finalDose = 0.0
+            doseCutTrace.mark("SENSOR_BLIP", finalDose)
         } else if (blipBaseNow) {
             // Blip-conditie aanwezig maar opgeheven door discriminator
             status.append(
@@ -8323,6 +8454,7 @@ class FCLvNext(
                 finalDose = microCapped
             }
         }
+        doseCutTrace.mark("MICRO_RAMP", finalDose)
 
 
         // ─────────────────────────────────────────────
@@ -8345,6 +8477,7 @@ class FCLvNext(
             )
             finalDose = preMealFloor
         }
+        doseCutTrace.mark("PRE_MEAL_FLOOR", finalDose)
 
 // ── Trajectory damping: continu remmen o.b.v. BG / IOB / slope / accel ──
         // 07/11/2026 (de gebruiker, 20:27: BG 16,3, slope 5, dosis 0): de oude harde absorption-regel
@@ -8369,6 +8502,7 @@ class FCLvNext(
         ) {
             status.append("Trajectory HARD BLOCK → finalDose=0\n")
             finalDose = 0.0
+            doseCutTrace.mark("TRAJECTORY_HARD_BLOCK", finalDose)
             logRow.trajectoryHardBlock = true
         } else {
             val fastLaneDip = (ctx.recentDelta5m <= -0.06 || ctx.recentSlope <= -0.20)
@@ -8393,6 +8527,7 @@ class FCLvNext(
                     "${"%.2f".format(before)}→${"%.2f".format(finalDose)}U\n"
             )
         }
+        doseCutTrace.mark("TRAJECTORY_DAMPING", finalDose)
 
 
         if (early.active && early.targetU > accessCap) {
@@ -8454,6 +8589,7 @@ class FCLvNext(
 
             val before = finalDose
             finalDose = maxOf(finalDose, cappedEarly)
+            doseCutTrace.mark("EARLY_FLOOR", finalDose)
 
             earlyDose.stage = maxOf(earlyDose.stage, early.stageToFire)
             earlyDose.lastFireAt = now
@@ -8610,6 +8746,7 @@ class FCLvNext(
                 finalDose = 0.0
                 status.append("PERSIST HOLD: finalDose=0\n")
             }
+            doseCutTrace.mark("PERSIST", finalDose)
         }
 
 
@@ -8647,6 +8784,7 @@ class FCLvNext(
 
             val before = finalDose
             finalDose = maxOf(finalDose, impulse)
+            doseCutTrace.mark("EARLY_CONFIRM", finalDose)
 
             earlyConfirmDone = true
 
@@ -8712,6 +8850,7 @@ class FCLvNext(
             )
             finalDose = effectiveMaxSmb
             logRow.guardMaxSmbLimited = !boosted  // alleen markeren als normale cap
+            doseCutTrace.mark("MAX_SMB_CAP", finalDose)
         }
 
         // ─────────────────────────────────────────────
@@ -9023,6 +9162,7 @@ class FCLvNext(
                 )
             }
         }
+        doseCutTrace.mark("WATCHING_FRONTLOAD", finalDose)
 
 
 // ─────────────────────────────────────────────
@@ -9170,6 +9310,7 @@ class FCLvNext(
                 lastSmallCorrectionAt = now
             }
         }
+        doseCutTrace.mark("SMALL_CORRECTION_COOLDOWN", commandedDose)
 
 
 // 9a) Peak/absorption suppression: stop of reduce rond/na piek
@@ -9184,6 +9325,7 @@ class FCLvNext(
             commandedDose = reduced
             status.append("ABSORBING/PEAK: suppression → ${"%.2f".format(commandedDose)}U\n")
             logRow.guardPeakLimited = true
+            doseCutTrace.mark("PEAK_SUPPRESSION", commandedDose)
         }
 
 // 9b) Re-entry: tweede gang (mag suppression overrulen als het écht weer stijgt)
@@ -10279,6 +10421,10 @@ class FCLvNext(
                 // lastKnownLateDecayMul hierboven).
                 lastKnownLateDecayMul = lateDecayMul
 
+                // Experiment "cover decay" (10/11/2026), see CoverDecay. After the line above on purpose: the stored
+                // value stays the old one, so the old rules of the next cycle do not change. Strength 0 = no change.
+                lateDecayMul = blendCoverDecay(ctx, lateDecayMul, commitNr, now.millis, status)
+
                 logRow.toppingOutBoost = toppingOutBoost
                 if (postOmslagFloorCut > 0.001) {
                     status.append(
@@ -10686,6 +10832,7 @@ class FCLvNext(
                     (100.0 / episodeAigfBPct)
                 else 1.0
                 val committedDoseBeforePeakCap = preAigfCommittedDose * aigfCommitBoost
+                doseCutTrace.mark("COMMIT_DECAY_ANCHOR_CAPS", committedDoseBeforePeakCap)
                 // 8/11/2026 (23:12: 3,38U bij een voorspelde piek van 6,7): de commit mag niet meer zijn dan
                 // CAP_FACTOR keer wat de voorspelde piek nodig heeft. Zelfde regel als de vroege dosis
                 // (EarlyBoostCap): vloeiend uit tussen een voorspelde piek van 8,5 en 10,5, dus een echte
@@ -10695,6 +10842,7 @@ class FCLvNext(
                 val committedDoseBeforeCoverBrake = EarlyBoostCap.cappedTarget(
                     committedDoseBeforePeakCap, commitPeakCapU, commitPeakCapWeight, config.minCommitDose
                 )
+                doseCutTrace.mark("COMMIT_PEAK_CAP", committedDoseBeforeCoverBrake)
                 if (committedDoseBeforeCoverBrake < committedDoseBeforePeakCap - 0.005) {
                     status.append(
                         "COMMIT-PIEKPLAFOND: ${"%.2f".format(committedDoseBeforePeakCap)}→" +
@@ -10718,7 +10866,8 @@ class FCLvNext(
                         CoverIsf.factor(ctx.input.bgNow, ctx.input.targetBG),
                         ctx.input.bgNow - ctx.input.targetBG
                     )
-                    val brake = CoverIsf.commitBrake(coverRatio)
+                    // The experiment "cover decay" uses the same IOB cover. This brake fades out as it fades in.
+                    val brake = CoverDecay.fadeOtherBrake(CoverIsf.commitBrake(coverRatio), coverDecayWeightThisCycle)
                     if (brake < 0.99) {
                         status.append(
                             "COMMIT-DEKKINGSREM: ×${"%.2f".format(brake)} " +
@@ -10729,6 +10878,7 @@ class FCLvNext(
                     brake
                 }
                 val committedDose = committedDoseBeforeCoverBrake * commitCoverBrake
+                doseCutTrace.mark("COMMIT_COVER_BRAKE", committedDose)
                 logRow.commitDoseFinal = committedDose
                 // 10/09/2026 — zie kdoc bij lastKnownCommitDoseFinalU-declaratie:
                 // alleen HIER bijwerken (dus alleen als deze tak echt draait), zodat
@@ -10768,6 +10918,7 @@ class FCLvNext(
 
                     commandedDose = committedDose
                     commandedDoseIsFromCommit = true
+                    coverDecayCommitDoseThisCycle = committedDose
 
                     // Verlengt absorptionWindow alleen bij substantiele commits (>= 0.40U).
                     // Kleine correctie-commits (0.20-0.35U) mogen de suppress-window
@@ -10811,6 +10962,7 @@ class FCLvNext(
 
                 } else {
                     status.append("COMMIT skipped (below minCommitDose)\n")
+                    doseCutTrace.forget("COMMIT_", commandedDose)
                 }
 
             } else {
@@ -10865,6 +11017,7 @@ class FCLvNext(
                             "commandedDose ${"%.2f".format(commandedDose)}→0.00U\n"
                     )
                     commandedDose = 0.0
+                    doseCutTrace.mark("FALLBACK_TURN_VETO", commandedDose)
                 }
             }
         }
@@ -10938,6 +11091,7 @@ class FCLvNext(
                 }
             }
             commandedDose *= ovrMul
+            doseCutTrace.mark("TEMP_OVERRIDE", commandedDose)
             status.append(
                 "TEMP OVERRIDE: ${"%.2f".format(beforeTempOverride)}→${"%.2f".format(commandedDose)}U " +
                     "(doel ${tempOverrideStatus.targetPct}%, effectief ${"%.0f".format(ovrMul * 100)}%, " +
@@ -10957,6 +11111,7 @@ class FCLvNext(
             if (kotlin.math.abs(ttFactor - 1.0) > 0.005) {
                 val beforeTt = commandedDose
                 commandedDose *= ttFactor
+                doseCutTrace.mark("TEMP_TARGET_DOSE", commandedDose)
                 status.append(
                     "TEMP TARGET DOSIS: ${"%.2f".format(beforeTt)}→${"%.2f".format(commandedDose)}U " +
                         "(profiel ${"%.1f".format(FclTempTargetDoseSettings.currentProfileTargetMmol())}, " +
@@ -11026,6 +11181,7 @@ class FCLvNext(
                 "${hypoProj.reason} → commandedDose " +
                     "${"%.2f".format(doseBefore)}→${"%.2f".format(commandedDose)}U (right-sized)\n"
             )
+            doseCutTrace.mark("HYPO_PROTECTION", commandedDose)
         }
 
 
@@ -11217,6 +11373,7 @@ class FCLvNext(
                 )
 
                 commandedDose = 0.0
+                doseCutTrace.mark("RESERVE_STASH", commandedDose)
             }
 
         }
@@ -11246,6 +11403,7 @@ class FCLvNext(
 
                 // reduceer wat we NU gaan leveren
                 commandedDose = preReserve.deliverNow
+                doseCutTrace.mark("PRE_RESERVE_SPLIT", commandedDose)
             }
         }
 
@@ -11298,6 +11456,7 @@ class FCLvNext(
                     hypoFinal.reason + " → commandedDose " +
                         "${"%.2f".format(doseBefore)}→${"%.2f".format(commandedDose)}U (right-sized)\n"
                 )
+                doseCutTrace.mark("HYPO_PROTECTION", commandedDose)
             }
         }
 
@@ -11311,6 +11470,7 @@ class FCLvNext(
         if (postPeak.lockout) {
             status.append("POSTPEAK LOCKOUT → commandedDose=0\n")
             commandedDose = 0.0
+            doseCutTrace.mark("POSTPEAK_LOCKOUT", commandedDose)
             earlyConfirmDone = false
             logRow.guardPeakLimited = true
         }
@@ -11325,6 +11485,7 @@ class FCLvNext(
             val before = commandedDose
             commandedDose = minOf(commandedDose, config.maxSMB * topGuard.capFactor)
             status.append("${topGuard.reason}: ${"%.2f".format(before)}→${"%.2f".format(commandedDose)}U\n")
+            doseCutTrace.mark("TOP_GUARD", commandedDose)
             logRow.guardPeakLimited = true
         }
 
@@ -11353,6 +11514,7 @@ class FCLvNext(
                     "SNELLE-MAALTIJD-BEGRENZING: ${"%.2f".format(fastBefore)}→${"%.2f".format(fast.limitedU)}U " +
                         "(ruimte ${"%.2f".format(fast.roomU)}U)\n"
                 )
+                doseCutTrace.mark("FAST_MEAL_CAP", commandedDose)
             }
         }
 
@@ -11415,6 +11577,7 @@ class FCLvNext(
                 }
             }
         }
+        doseCutTrace.mark("FLAT_SLOW_EXTRA", commandedDose)
 
         // ── Post-hypo-rebound rem: activeren + toepassen (24/07/2026, de gebruiker;
         // aangescherpt + ratchet 25/07/2026, de gebruiker) ──────────────────────────
@@ -11728,6 +11891,10 @@ class FCLvNext(
         // voor de afbouw. Eerder liep de teller (commit 2 -> 6 in 20 min) en het boost-budget
         // door terwijl er bijna niets was geleverd; toen de rem losliet was de afbouw al
         // voorbij (lateDecayMul 0,15 -> 0,45 U per cyclus).
+        doseCutTrace.mark("POST_HYPO_BRAKE", commandedDose)
+        // 12/11/2026: experiment, off by default. Gradual extra brake after a low BG, see ReboundBrake.
+        commandedDose = applyReboundBrake(ctx, commandedDose, doseBeforePostHypoBrake, overrideBrakeStrength, now.millis, status)
+        doseCutTrace.mark("REBOUND_BRAKE", commandedDose)
         val brakeCut = doseBeforePostHypoBrake - commandedDose
         if (postHypoBrakeActive && doseBeforePostHypoBrake > 0.0 &&
             commandedDose < 0.5 * doseBeforePostHypoBrake &&
@@ -11840,6 +12007,7 @@ class FCLvNext(
             }
 
             commandedDose = 0.0
+            doseCutTrace.mark("LATE_BOLUS_BLOCK", commandedDose)
             earlyConfirmDone = false
             logRow.guardPeakLimited = true
         }
@@ -11941,6 +12109,7 @@ class FCLvNext(
                             "${"%.2f".format(before)}→${"%.2f".format(commandedDose)}U " +
                             "(plafond=${"%.2f".format(reacquireCeiling)})\n"
                     )
+                    doseCutTrace.mark("BURST_CAP", commandedDose)
 
                 } else {
 
@@ -11950,6 +12119,7 @@ class FCLvNext(
                     )
 
                     commandedDose = 0.0
+                    doseCutTrace.mark("BURST_CAP", commandedDose)
                     earlyConfirmDone = false
                 }
             }
@@ -12020,6 +12190,10 @@ class FCLvNext(
         // lastKnownCommitDoseFinalU (zie kdoc bij de declaratie) — hetzelfde
         // "overleeft de cyclus"-patroon als lastKnownLateDecayMul hierboven
         // al had, nu ook hier.
+        // Experiment "cover decay": in a cycle without the commit block, lateDecayMul is still the stored old value.
+        if (!coverDecayAppliedThisCycle) {
+            lateDecayMul = blendCoverDecay(ctx, lateDecayMul, episodeCommitCount + 1, now.millis, status)
+        }
         if (commandedDose > 0.0 && !lastBgStijgtNogFors && !commandedDoseIsFromCommit) {
             val taperCeiling = when {
                 episodePeakCommitU > 0.0 ->
@@ -12040,6 +12214,7 @@ class FCLvNext(
                 )
             }
         }
+        doseCutTrace.mark("TAPER_CLAMP", commandedDose)
 
         // v151: ceiling for a normal dose right after a commit (see POST_COMMIT_*).
         // The commit cooldown does not stop this path, so a second big dose could follow 4 min later.
@@ -12062,6 +12237,7 @@ class FCLvNext(
                 }
             }
         }
+        doseCutTrace.mark("POST_COMMIT_CEILING", commandedDose)
 
         // ─────────────────────────────────────────────
         // ⏩ VROEGE DOSIS BIJ BEVESTIGDE STIJGING (12/10/2026)
@@ -12105,6 +12281,7 @@ class FCLvNext(
                 }
             }
         }
+        doseCutTrace.mark("EARLY_FRONTLOAD", commandedDose)
 
         // ─────────────────────────────────────────────
         // 🛟 HERSTEL-BUFFER NA BIJNA-HYPO (12/10/2026)
@@ -12141,6 +12318,7 @@ class FCLvNext(
                         "stijging=${"%.2f".format(riseFrac)}, buffer=${"%.1f".format(bufferU)}U, " +
                         "al gegeven=${"%.1f".format(alreadyGivenU)}U)\n"
                 )
+                doseCutTrace.mark("REBOUND_BUFFER", commandedDose)
             }
         }
 
@@ -12170,6 +12348,7 @@ class FCLvNext(
                     maxIob = input.maxIOB,
                     overshootFactor = iobOvershootFactor
                 )
+            doseCutTrace.mark("IOB_HARD_CAP", commandedDose)
 
 // ✅ GECONSOLIDEERD (30/06/2026): piek-nadering taper via postPeak.peakBrake
             // i.p.v. eigen losse conditie (was: ctx.slope in -0.10..0.50, te laat
@@ -12188,6 +12367,7 @@ class FCLvNext(
                     val reducedHeadroom = headroom * peakApproachFactor
                     val beforeTaper = commandedDose
                     commandedDose = minOf(commandedDose, reducedHeadroom)
+                    doseCutTrace.mark("PEAK_APPROACH_TAPER", commandedDose)
                     if (commandedDose < beforeTaper - 1e-9) {
                         status.append(
                             "PEAK-APPROACH TAPER: iobR=${"%.2f".format(ctx.iobRatio)} " +
@@ -12431,6 +12611,7 @@ class FCLvNext(
             if (afterloadScale < 1.0 - 1e-9) {
                 val beforeAfterload = commandedDose
                 commandedDose *= afterloadScale
+                doseCutTrace.mark("AFTERLOAD_GUARD", commandedDose)
                 status.append(
                     "AFTERLOAD GUARD: fd60=${"%.2f".format(futureDrop60Mmol)}mmol " +
                         "fdScale=${"%.2f".format(futureDrop60Scale)} " +
@@ -12683,9 +12864,34 @@ class FCLvNext(
         // ─────────────────────────────────────────────
         // 🧯 DOWN-TREND FINAL DOSE GATE (last line of defense)
         if (downGate.locked && mealSignal.state == MealState.NONE) {
-            status.append("DOWNTREND LOCKED (no-meal): commandedDose forced to 0\n")
-            commandedDose = 0.0
-            earlyConfirmDone = false
+            // 9/11/2026: no longer a hard 0. A part of the dose passes when the BG is still well above target, the
+            // fall is mild and the IOB is low (see DowntrendPass). Close to target or with a steep fall it is still 0.
+            val downtrendPass = DowntrendPass.weight(ctx.deltaToTarget, ctx.recentSlope, ctx.iobRatio, downtrendPassStrength)
+            if (downtrendPass > 0.001 && commandedDose > 0.0) {
+                val beforeDowntrend = commandedDose
+                commandedDose *= downtrendPass
+                doseCutTrace.mark("DOWNTREND_GATE", commandedDose)
+                DowntrendPassLog.addEvent(context, DowntrendPassLog.Event(now.millis, commandedDose))
+                status.append(
+                    "DOWNTREND LOCKED (no-meal): ${"%.2f".format(beforeDowntrend)}→${"%.2f".format(commandedDose)}U " +
+                        "(doorlaat ${"%.0f".format(downtrendPass * 100)}%)\n"
+                )
+            } else {
+                status.append("DOWNTREND LOCKED (no-meal): commandedDose forced to 0\n")
+                commandedDose = 0.0
+                doseCutTrace.mark("DOWNTREND_GATE", commandedDose)
+                earlyConfirmDone = false
+            }
+        } else if (softHoldPass < 1.0 && commandedDose > 0.0) {
+            // SHORT-TERM DIP or LONG-SLOPE BLOCK that no longer stops the cycle (see softHoldPass above).
+            val beforeHold = commandedDose
+            commandedDose *= softHoldPass
+            doseCutTrace.mark("DOWNTREND_SOFT_HOLD", commandedDose)
+            DowntrendPassLog.addEvent(context, DowntrendPassLog.Event(now.millis, commandedDose))
+            status.append(
+                "DAAL-STOP GEDEMPT: ${"%.2f".format(beforeHold)}→${"%.2f".format(commandedDose)}U " +
+                    "(doorlaat ${"%.0f".format(softHoldPass * 100)}%)\n"
+            )
         }
 
         // "Altijd geven"-portie (04/10/2026): op het ingestelde tijdstip erbij, ook als de BG daalt of
@@ -12693,6 +12899,7 @@ class FCLvNext(
         // ALWAYS_GIVE_MIN_BG_MMOL — dan wacht de portie (blijft open) tot de BG weer hoger is.
         // 06/10/2026 (de gebruiker): ook wachten als de BG echt aan het dalen is (down-trend-gate, geen
         // maaltijd). De portie blijft dan open tot de BG weer stijgt of de override vervalt.
+        doseCutTrace.mark("DOWNTREND_PASS_END", commandedDose)
         val alwaysGiveFalling = downGate.locked && mealSignal.state == MealState.NONE
         if (portionRequest != null && portionRequest.alwaysGive) {
             if (ctx.input.bgNow >= FclTempOverrideSettings.ALWAYS_GIVE_MIN_BG_MMOL && !alwaysGiveFalling) {
@@ -12737,6 +12944,7 @@ class FCLvNext(
                     "afgekapt. Dit zou nooit mogen gebeuren; graag dit incident melden.\n"
             )
             commandedDose = absoluteVeiligheidsCap
+            doseCutTrace.mark("ABSOLUTE_SAFETY_CAP", commandedDose)
         }
 
         // ── Bevroren-BG-invoer-bewaking (05/10/2026) — zie kdoc bij FROZEN_BG_MIN_ABS_DELTA5M ──
@@ -12753,6 +12961,7 @@ class FCLvNext(
                         "(${"%.2f".format(commandedDose)}U) geblokkeerd tot de BG weer verandert\n"
                 )
                 commandedDose = 0.0
+                doseCutTrace.mark("FROZEN_BG", commandedDose)
             }
         }
 
@@ -12790,6 +12999,7 @@ class FCLvNext(
                     "gelden de (nu herstelde) taper-remmen weer normaal.\n"
             )
             commandedDose = 0.0
+            doseCutTrace.mark("RESTART_BLOCK", commandedDose)
         }
 
         // ─────────────────────────────────────────────
@@ -13090,6 +13300,8 @@ class FCLvNext(
 
         logRow.finalDose = finalDose
         logRow.commandedDose = commandedDose
+        storeCoverDecayEvent(now.millis, commandedDose)
+        DoseCutLog.record(context, now.millis, doseCutTrace)
         // 12/10/2026 — herstel-buffer (REBOUND_*): onthoud de uiteindelijke dosis van deze cyclus.
         if (commandedDose > 0.0) {
             ctx.input.bgHistory.maxOfOrNull { it.first.millis }?.let { reboundDoseLog.addLast(it to commandedDose) }

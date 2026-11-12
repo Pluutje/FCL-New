@@ -26,9 +26,14 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import app.aaps.plugins.aps.R
+import app.aaps.plugins.aps.openAPSFCL.vnext.CoverDecay
+import app.aaps.plugins.aps.openAPSFCL.vnext.DowntrendPass
+import app.aaps.plugins.aps.openAPSFCL.vnext.DowntrendPassLog
 import app.aaps.plugins.aps.openAPSFCL.vnext.ExperimentStrengths
 import app.aaps.plugins.aps.openAPSFCL.vnext.ExperimentStrengths.Experiment
 import app.aaps.plugins.aps.openAPSFCL.vnext.FastMealCap
+import app.aaps.plugins.aps.openAPSFCL.vnext.InsulinBudget
+import app.aaps.plugins.aps.openAPSFCL.vnext.ReboundBrake
 import app.aaps.plugins.aps.openAPSFCL.vnext.SlowRiseSupport
 import kotlin.math.roundToInt
 
@@ -76,6 +81,118 @@ fun MaaltijdExperimentenKaart(context: Context) {
                 Text(stringResource(R.string.fcl_strength_results_none), style = MaterialTheme.typography.bodySmall)
             } else {
                 Text(stringResource(R.string.fcl_fast_results, STRENGTH_WINDOW_DAYS, fastEvents.size, fastEvents.sumOf { it.cutU }.toFloat()),
+                     style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+/**
+ * Card for the experiment "Doorlaat bij lichte daling" ([DowntrendPass]): a strength slider from 0 to 150 percent
+ * (0 = off, the default) and the results of the last days.
+ */
+@Composable
+fun DaalDoorlaatKaart(context: Context) {
+    var strength by remember { mutableIntStateOf(ExperimentStrengths.percent(context, Experiment.DOWNTREND_PASS)) }
+    val sinceMs = System.currentTimeMillis() - STRENGTH_WINDOW_DAYS * 86_400_000L
+    val events = remember { DowntrendPassLog.loadEvents(context).filter { it.timestampMs >= sinceMs } }
+    ExperimentKaart(
+        title = stringResource(R.string.fcl_downpass_title),
+        badge = stringResource(if (strength > 0) R.string.fcl_card_adjusts else R.string.fcl_card_signals),
+        extraLine = stringResource(R.string.fcl_strength_state, strength)
+    ) {
+        Text(stringResource(R.string.fcl_strength_scale), style = MaterialTheme.typography.labelSmall,
+             color = MaterialTheme.colorScheme.onSurfaceVariant)
+        StrengthSectie(
+            context, Experiment.DOWNTREND_PASS, strength, { strength = it },
+            R.string.fcl_downpass_title, R.string.fcl_downpass_intro, R.string.fcl_downpass_note,
+            showTitle = false,
+            belowSlider = {
+                val maxPass = DowntrendPass.maxPass(strength / 100.0) * 100.0
+                Text(stringResource(R.string.fcl_downpass_effect, maxPass.toInt()), style = MaterialTheme.typography.bodySmall)
+            }
+        ) {
+            if (events.isEmpty()) {
+                Text(stringResource(R.string.fcl_strength_results_none), style = MaterialTheme.typography.bodySmall)
+            } else {
+                Text(stringResource(R.string.fcl_downpass_results, STRENGTH_WINDOW_DAYS, events.size, events.sumOf { it.doseU }.toFloat()),
+                     style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+/**
+ * Card for the experiment "Vervolgdoses groter bij weinig actieve insuline" ([CoverDecay]): a strength slider from 0 to 150 percent
+ * (0 = off, the default) and how often the decay was changed in the last days.
+ */
+@Composable
+fun DekkingsAfbouwKaart(context: Context) {
+    var strength by remember { mutableIntStateOf(ExperimentStrengths.percent(context, Experiment.COVER_DECAY)) }
+    val sinceMs = System.currentTimeMillis() - STRENGTH_WINDOW_DAYS * 86_400_000L
+    val events = remember { CoverDecay.loadEvents(context).filter { it.timestampMs >= sinceMs } }
+    val hasReference = remember { !InsulinBudget.reference(context).isNaN() }
+    ExperimentKaart(
+        title = stringResource(R.string.fcl_coverdecay_title),
+        badge = stringResource(if (strength > 0) R.string.fcl_card_adjusts else R.string.fcl_card_signals),
+        extraLine = stringResource(R.string.fcl_strength_state, strength)
+    ) {
+        Text(stringResource(R.string.fcl_strength_scale), style = MaterialTheme.typography.labelSmall,
+             color = MaterialTheme.colorScheme.onSurfaceVariant)
+        StrengthSectie(
+            context, Experiment.COVER_DECAY, strength, { strength = it },
+            R.string.fcl_coverdecay_title, R.string.fcl_coverdecay_intro, R.string.fcl_coverdecay_note,
+            showTitle = false,
+            belowSlider = {
+                if (!hasReference) {
+                    Text(stringResource(R.string.fcl_coverdecay_no_reference), style = MaterialTheme.typography.bodySmall,
+                         color = MaterialTheme.colorScheme.error)
+                }
+            }
+        ) {
+            if (events.isEmpty()) {
+                Text(stringResource(R.string.fcl_strength_results_none), style = MaterialTheme.typography.bodySmall)
+            } else {
+                val more = events.filter { it.deltaU >= 0.005 }
+                val less = events.filter { it.deltaU <= -0.005 }
+                Text(stringResource(R.string.fcl_coverdecay_results, STRENGTH_WINDOW_DAYS,
+                                    more.size, more.sumOf { it.deltaU }.toFloat(),
+                                    less.size, -less.sumOf { it.deltaU }.toFloat()),
+                     style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+/**
+ * Card for the experiment "Rem op insuline na een lage BG" ([ReboundBrake]): a strength slider from 0 to 150 percent
+ * (0 = off, the default) and how much insulin was held back in the last days.
+ */
+@Composable
+fun HerstelRemKaart(context: Context) {
+    var strength by remember { mutableIntStateOf(ExperimentStrengths.percent(context, Experiment.REBOUND_BRAKE)) }
+    val sinceMs = System.currentTimeMillis() - STRENGTH_WINDOW_DAYS * 86_400_000L
+    val events = remember { ReboundBrake.loadEvents(context).filter { it.timestampMs >= sinceMs } }
+    ExperimentKaart(
+        title = stringResource(R.string.fcl_rebound_title),
+        badge = stringResource(if (strength > 0) R.string.fcl_card_adjusts else R.string.fcl_card_signals),
+        extraLine = stringResource(R.string.fcl_strength_state, strength)
+    ) {
+        Text(stringResource(R.string.fcl_strength_scale), style = MaterialTheme.typography.labelSmall,
+             color = MaterialTheme.colorScheme.onSurfaceVariant)
+        StrengthSectie(
+            context, Experiment.REBOUND_BRAKE, strength, { strength = it },
+            R.string.fcl_rebound_title, R.string.fcl_rebound_intro, R.string.fcl_rebound_note,
+            showTitle = false,
+            belowSlider = {
+                val maxCut = ReboundBrake.maxCut(strength / 100.0) * 100.0
+                Text(stringResource(R.string.fcl_rebound_effect, maxCut.roundToInt()), style = MaterialTheme.typography.bodySmall)
+            }
+        ) {
+            if (events.isEmpty()) {
+                Text(stringResource(R.string.fcl_strength_results_none), style = MaterialTheme.typography.bodySmall)
+            } else {
+                Text(stringResource(R.string.fcl_rebound_results, STRENGTH_WINDOW_DAYS, events.size, events.sumOf { it.cutU }.toFloat()),
                      style = MaterialTheme.typography.bodySmall)
             }
         }

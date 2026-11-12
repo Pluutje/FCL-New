@@ -22,7 +22,16 @@ object ExperimentStrengths {
         T1_BOOST("t1_boost"),
 
         /** Lower predicted peak needed to watch a meal early. See [EarlyExperimentWeights.peakStartThreshold]. */
-        EARLY_ALERT("early_alert")
+        EARLY_ALERT("early_alert"),
+
+        /** A part of the dose passes when the BG falls mildly but is still well above target. See [DowntrendPass]. */
+        DOWNTREND_PASS("downtrend_pass"),
+
+        /** The decay after the first commit follows the IOB cover and not the number of commits. See [CoverDecay]. */
+        COVER_DECAY("cover_decay"),
+
+        /** A part of the dose is held back in the first hour after a low BG, while the BG rises again. See [ReboundBrake]. */
+        REBOUND_BRAKE("rebound_brake")
     }
 
     /** Old settings from before 8/11/2026. They are read once, until the user saves a new strength. */
