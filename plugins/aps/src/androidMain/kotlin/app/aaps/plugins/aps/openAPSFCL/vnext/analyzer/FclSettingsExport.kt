@@ -87,6 +87,9 @@ object FclSettingsExport {
             for (experiment in ExperimentStrengths.Experiment.entries) {
                 current["strength_${experiment.key}_percent"] = ExperimentStrengths.percent(context, experiment).toString()
             }
+            // 14/11/2026: the aggressiveness sliders (day and night) were not in the change log.
+            current["aggressiveness_day"] = DFLearner.getAggressiveness(context).toString()
+            current["aggressiveness_night"] = DFLearner.getNachtAggressiviteit(context).toString()
             val prefs = context.getSharedPreferences(LOG_PREFS, Context.MODE_PRIVATE)
             val last = (prefs.getString(KEY_LAST, "") ?: "").split("\n").filter { it.contains("=") }
                 .associate { it.substringBefore("=") to it.substringAfter("=") }
