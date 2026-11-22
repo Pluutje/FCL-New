@@ -2,82 +2,77 @@ package app.aaps.plugins.aps.openAPSFCL.vnext.advisor.ai
 
 /**
  * ============================================================================
- * FCL AI-Advisor — datamodellen
+ * FCL AI-Advisor — data models
  * ============================================================================
  */
 
-/** Eén voorgesteld parametervoorstel, vóór gebruikersgoedkeuring. */
+/** One suggested setting change, before the user approves it. */
 data class AiParamSuggestion(
+    /** Key from [FclAiAdvisorRanges] (a slider, max SMB or max IOB). */
     val param: String,
     val currentValue: Double,
     val proposedValue: Double,
-    val confidence: Double,        // 0.0–1.0, door het model zelf opgegeven
-    val reasonNl: String,          // onderbouwing, citeert evidenceFields
+    val confidence: Double,        // 0.0–1.0, given by the model itself
+    val reasonNl: String,          // reasoning, quotes evidenceFields
     val evidenceFields: List<String>,
-    /** Gezet door de validator; reden van afwijzing als rejected=true. */
+    /** Set by the validator; reason of the rejection when rejected=true. */
     val rejected: Boolean = false,
     val rejectionReasonNl: String? = null
 )
 
-/** Status van een kaart in de UI — wat de gebruiker er (nog) mee gedaan heeft. */
+/** Status of a card in the UI — what the user did with it (so far). */
 enum class AiSuggestionStatus { PENDING, APPROVED, REJECTED }
 
 data class AiAdvisorRunResult(
     val generatedAtUtc: String,
     val rawModelResponse: String,
     val suggestions: List<AiParamSuggestion>,
-    val parseError: String? = null,  // null = parsing/validatie geslaagd (suggesties kunnen alsnog individueel rejected zijn)
+    val parseError: String? = null,  // null = parsing/validation worked (single suggestions can still be rejected)
     /**
-     * 21/07/2026 — puur informatieve constatering van het model, GEEN
-     * voorstel (niet goed/af te keuren). Bedoeld voor precies één situatie (zie
-     * FclAiAdvisorPromptBuilder): timing-parameters zitten al op hun hardMax,
-     * het probleem (bijv. aanhoudende overshoot) blijft bestaan, en geen enkele
-     * parameter in FclAiAdvisorRanges kan dat verantwoord oplossen. Voorheen
-     * greep het model in die situatie terug op lateCommitDecayFactor verlagen
-     * (afbouw van late commits soepeler maken) — precies de late-commits-
-     * groter-maken-richting die deze week juist stap voor stap is dichtgezet
-     * (RESCUE_OVERPOWERED/HYPO late-first, post-omslag-afbouw). Dit veld geeft
-     * het model een uitweg om dat hardop te zeggen i.p.v. de verkeerde knop te
-     * pakken.
+     * Information only, NOT a suggestion (nothing to approve). Used when the model sees a problem
+     * that none of the allowed settings can solve in a safe way.
      */
     val advisoryNoteNl: String? = null
 )
 
-/** Compact dagrapport dat als input-payload naar het model gaat — geen ruwe CSV. */
+/** Compact report that goes to the model as input — no raw CSV. */
 data class FclDailyReportPayload(
     val dateUtc: String,
     val periodHours: Int,
     val timeInRangePct: Double,
+    /** Percent of the time above 10.0 mmol/L. */
+    val timeAboveRangePct: Double,
+    /** Percent of the time below 3.9 mmol/L. */
+    val timeBelowRangePct: Double,
     val hypoCount: Int,
     val hypoMinutesTotal: Int,
     val avgTimeToPeakMin: Double?,
+    /** Average drop after the BG peak inside the post window. High = much insulin around the peak. */
     val avgOvershootAfterPeakMmol: Double?,
-    /** Gemiddelde |predFout0_20|+|predFout20_40| uit EpisodeMetrics — directe
-     *  evidence voor peakPredictionThreshold/peakPredictionHorizonH/
-     *  earlyPeakBiasMmol. Positief = systematische overschatting van de piek,
-     *  negatief = onderschatting. null = geen episodes met predictiedata. */
-    val avgPredictionErrorMmol: Double?,
-    /** key = parameternaam, value = active/default/delta zoals in FCLvNext_active_params.json */
+    /** Average peak BG of the recognized meals in the period. */
+    val avgPeakBgMmol: Double?,
+    /** Number of recognized meals in the period. */
+    val episodeCount: Int,
+    /** key = setting key of [FclAiAdvisorRanges], value = the current value of that setting. */
     val activeParams: Map<String, ActiveParamSnapshot>,
-    /** Korte samenvattingsregels uit FCLvNext_LearnerLog_v1.csv van vandaag (geen ruwe rijen). */
+    /** Short summary lines of the learner log in the period (no raw rows). */
     val learnerEventsSummary: List<String>,
-    /** Korte, genummerde episode-incidenten (zoals het 14:15U-incident) — max ~5/dag om prompt compact te houden. */
+    /** Short, numbered episode incidents — max ~5 per report to keep the prompt small. */
     val notableEpisodes: List<String>,
-    /** Aantal episodes deze periode met >= 3 verschillende commit-nummers
-     *  (>= 3 losse doseermomenten binnen één maaltijdepisode). Noemer voor
-     *  flatTaperEpisodeCount hieronder. (08/07/2026) */
-    val multiCommitEpisodeCount: Int,
-    /** Van die multi-commit-episodes: hoeveel hadden een "vlakke afbouw" —
-     *  de LAATSTE commit was nog >= 80% van de hoogste eerdere commit, dus
-     *  geen merkbare afname ondanks meerdere commits. Hoog t.o.v.
-     *  multiCommitEpisodeCount = de afbouw werkte niet, ook al lijkt de
-     *  vroege trigger (earlyBoostFactor/earlyBoostMinConfidence) misschien
-     *  "te agressief" op basis van hypoCount alleen. (08/07/2026) */
-    val flatTaperEpisodeCount: Int
+    /** One line per hypo (newest first, max 5): what came before it. Empty when there was no hypo. */
+    val hypoEpisodes: List<String>,
+    /** Cycles in the period with a log row. Denominator for the three counts below. */
+    val totalCycles: Int,
+    /** Cycles where the dose was cut by the max IOB limit as the biggest cut. */
+    val cyclesCutByMaxIob: Int,
+    /** Cycles where the dose was cut by the max SMB limit as the biggest cut. */
+    val cyclesCutByMaxSmb: Int,
+    /** Cycles where another brake (not a limit) made the biggest cut. */
+    val cyclesCutByOtherBrake: Int
 )
 
 data class ActiveParamSnapshot(
     val active: Double,
     val default: Double,
-    val src: String   // "modified" | "default" | "override" — zoals in active_params.json
+    val src: String   // "setting"
 )

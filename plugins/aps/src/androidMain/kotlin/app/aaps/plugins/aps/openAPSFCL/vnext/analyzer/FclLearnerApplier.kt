@@ -25,9 +25,9 @@ object FclLearnerApplier {
             d = p.d, f = p.f,
             refWmd = p.refWmd, refWff = p.refWff, refEb = p.refEb,
             refPeakBias = p.refPeakBias, refLcd = p.refLcd,
-            vExtra = p.vExtra, aggLevel = p.agg
+            vExtra = p.vExtra, agg = p.levels()
         )
-        val stvMap = DFMapping.toStvMap(p.d, p.f, 85.0, p.vExtra, aggLevel = p.agg)
+        val stvMap = DFMapping.toStvMap(p.d, p.f, 85.0, p.vExtra, agg = p.levels())
 
         val ok = ConfigOverrideWriter.writeWithStvAndParams(
             stvMap         = stvMap,

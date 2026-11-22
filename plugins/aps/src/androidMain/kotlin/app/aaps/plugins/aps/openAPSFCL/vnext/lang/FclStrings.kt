@@ -161,6 +161,7 @@ interface FclStrings {
     val parameters: String
     val nachtNLabel: String
     val tddLabel: String
+    fun experimentsOn(count: Int): String
     val analyse: String
     val confidence: String
     val gebruikt: String
@@ -188,7 +189,6 @@ interface FclStrings {
     val normaal: String
     val laat: String
     val zeerlaat: String
-    val aggressiviteitsKaart: String
     val aggressiviteitsUitleg: String
 
     // ── MaxSMB tab ────────────────────────────────────────────────────────
@@ -198,6 +198,19 @@ interface FclStrings {
 
     // ── Instellingen ──────────────────────────────────────────────────────
     val settingsDosisBehavior: String
+    // Three levels + night level in Settings (15/11/2026)
+    val settingsAggStrengthTitle: String
+    val settingsAggStrengthHelp: String
+    val settingsAggTimingTitle: String
+    val settingsAggTimingHelp: String
+    val settingsAggPersistTitle: String
+    val settingsAggPersistHelp: String
+    val settingsAggNightTitle: String
+    val settingsAggNightHelp: String
+    fun settingsAggLevel(level: Int): String
+    fun settingsAggActive(percent: Int): String
+    fun settingsAggLimit(percent: Int): String
+    fun settingsAggNightActive(nf: String): String
     val settingsTtDoseTitle: String
     val settingsTtDoseSummary: String
     val settingsTtDoseInfo: String

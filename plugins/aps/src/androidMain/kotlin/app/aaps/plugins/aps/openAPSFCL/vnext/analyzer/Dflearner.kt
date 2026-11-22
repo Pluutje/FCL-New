@@ -1,6 +1,7 @@
 package app.aaps.plugins.aps.openAPSFCL.vnext.analyzer
 
 import app.aaps.plugins.aps.openAPSFCL.vnext.BgUnits
+import app.aaps.plugins.aps.openAPSFCL.vnext.ExperimentStrengths
 import android.content.Context
 import kotlin.math.abs
 import kotlin.math.max
@@ -109,7 +110,6 @@ object DFLearner {
     // gekoppeld aan params (dat gebeurt in Stap 2).
     // 1=voorzichtig, 5=standaard, 9=agressief
     private const val KEY_AGGRESSIVENESS = "df_aggressiveness"
-    private const val KEY_AGGRESSIVENESS_APPLIED = "df_aggressiveness_applied"
     const val AGGRESSIVENESS_DEFAULT = 5
     const val AGGRESSIVENESS_MIN = 1
     const val AGGRESSIVENESS_MAX = 9
@@ -362,20 +362,6 @@ object DFLearner {
     fun setRefLcd(context: Context, v: Double) =
         prefs(context).edit().putFloat(KEY_REF_LCD, v.coerceIn(DFMapping.REF_LCD_MIN, DFMapping.REF_LCD_MAX).toFloat()).apply()
 
-    /**
-     * Synchroniseer lateCommitDecayFactor (refLcd) in de learner-prefs met een extern
-     * vastgestelde waarde (bijv. door de AI-advisor goedgekeurd). Zelfde reden en patroon
-     * als syncEarlyBoostFactor/syncWatchingFrac hierboven: zonder deze sync evalueert
-     * evaluateLateCommitDecay() bij de eerstvolgende episode vanaf een verouderd refLcd,
-     * los van waar de AI de waarde net naartoe heeft gezet.
-     *
-     * Zelfde vereenvoudiging als bij earlyBoostFactor: de volledige AI-waarde wordt direct
-     * in refLcd gezet (niet teruggerekend door de F-afgeleide basisterm eruit te halen) —
-     * niet wiskundig exact, maar consistent met hoe earlyBoostFactor het al doet.
-     */
-    fun syncLateCommitDecayFactor(context: android.content.Context, value: Double) =
-        setRefLcd(context, value)
-
     // ═══════════════════════════════════════════════════════════════════════
     // Generieke tracked-parameters (10/07/2026)
     // ═══════════════════════════════════════════════════════════════════════
@@ -414,12 +400,6 @@ object DFLearner {
     fun setTrackedParam(context: Context, key: String, value: Double) {
         prefs(context).edit().putFloat(TRACKED_PREFIX + key, value.toFloat()).apply()
     }
-
-    /** Aanroepen door FclAiAdvisorApplier bij goedkeuring — zelfde eenvoudige
-     *  directe-overschrijf-patroon als syncEarlyBoostFactor/syncWatchingFrac/
-     *  syncLateCommitDecayFactor, nu generiek voor de overige 7 parameters. */
-    fun syncTrackedParam(context: Context, key: String, value: Double) =
-        setTrackedParam(context, key, value)
 
     /**
      * Zachte convergentie voor alle generieke tracked-parameters, één keer per
@@ -492,25 +472,10 @@ object DFLearner {
     }
 
     /**
-     * Laatst-toegepaste nacht-aggressiviteit (zelfde "Toepassen"-gating
-     * patroon als getLastAppliedAggressiveness/getLastAppliedNfLevel).
-     */
-    private const val KEY_NACHT_AGGRESSIVITEIT_APPLIED = "nacht_aggressiviteit_applied"
-
-    fun getLastAppliedNachtAggressiviteit(context: Context): Int =
-        prefs(context).getInt(KEY_NACHT_AGGRESSIVITEIT_APPLIED, NACHT_AGGRESSIVITEIT_DEFAULT)
-
-    fun setLastAppliedNachtAggressiviteit(context: Context, level: Int) {
-        prefs(context).edit()
-            .putInt(KEY_NACHT_AGGRESSIVITEIT_APPLIED, level.coerceIn(NACHT_AGGRESSIVITEIT_MIN, NACHT_AGGRESSIVITEIT_MAX))
-            .apply()
-    }
-
-    /**
      * De daadwerkelijk naar AAPS te sturen NF-waarde: geleerde NF + de
-     * handmatige stap-offset van de Nacht-Agressiviteit-schuif, geclipt op
+     * handmatige stap-offset van de Nacht-schuif (Settings), geclipt op
      * 1-9. Eén centrale plek voor deze optelling, gebruikt door zowel
-     * NachtLearner (auto-toepassen) als NachtControlTab ("Toepassen in AAPS").
+     * NachtLearner (auto-toepassen) als de Settings-schuif.
      */
     fun effectiveNfLevel(context: Context): Double {
         val geleerd = getNfLevel(context)
@@ -518,32 +483,41 @@ object DFLearner {
         return (geleerd + offset).coerceIn(1.0, 9.0)
     }
 
-    fun getAggressiveness(context: Context): Int =
+    // ── Three levels that move the learned values (15/11/2026) ─────────────
+    // Strength, timing and persistence each have their own level (1 to 9, 5 = no effect). Before, one level
+    // (df_aggressiveness) moved all three. A new level that was never set falls back on the old one, so nobody
+    // has to migrate: Ecko 5/5/5, Rick 7/7/7. An old backup works the same way (see FclLearnerBackup).
+    private const val KEY_AGG_STRENGTH = "df_agg_strength"
+    private const val KEY_AGG_TIMING = "df_agg_timing"
+    private const val KEY_AGG_PERSISTENCE = "df_agg_persistence"
+
+    /** The three storage keys. Used to clear them when an old backup brings back the single level. */
+    val AGG_LEVEL_KEYS = listOf(KEY_AGG_STRENGTH, KEY_AGG_TIMING, KEY_AGG_PERSISTENCE)
+    const val LEGACY_AGGRESSIVENESS_KEY = KEY_AGGRESSIVENESS
+
+    private fun clampLevel(level: Int) = level.coerceIn(AggLevels.MIN, AggLevels.MAX)
+
+    fun getAggLevels(context: Context): AggLevels {
+        val p = prefs(context)
+        val legacy = p.getInt(KEY_AGGRESSIVENESS, AGGRESSIVENESS_DEFAULT)
+        return AggLevels(
+            strength = clampLevel(p.getInt(KEY_AGG_STRENGTH, legacy)),
+            timing = clampLevel(p.getInt(KEY_AGG_TIMING, legacy)),
+            persistence = clampLevel(p.getInt(KEY_AGG_PERSISTENCE, legacy))
+        )
+    }
+
+    fun setAggLevels(context: Context, levels: AggLevels) {
+        prefs(context).edit()
+            .putInt(KEY_AGG_STRENGTH, clampLevel(levels.strength))
+            .putInt(KEY_AGG_TIMING, clampLevel(levels.timing))
+            .putInt(KEY_AGG_PERSISTENCE, clampLevel(levels.persistence))
+            .apply()
+    }
+
+    /** The old single level, only for the settings export (the old field stays). */
+    fun getLegacyAggressiveness(context: Context): Int =
         prefs(context).getInt(KEY_AGGRESSIVENESS, AGGRESSIVENESS_DEFAULT)
-
-    fun setAggressiveness(context: Context, level: Int) {
-        prefs(context).edit()
-            .putInt(KEY_AGGRESSIVENESS, level.coerceIn(AGGRESSIVENESS_MIN, AGGRESSIVENESS_MAX))
-            .apply()
-    }
-
-    /**
-     * Het agressiviteitsniveau zoals dat het laatst via "Toepassen in AAPS"
-     * (ConfigOverrideWriter) actief is gemaakt. Verschilt dit van
-     * getAggressiveness(), dan staat de slider op een niveau dat nog niet
-     * is doorgevoerd — de Advisor-UI toont dan de toepassen-knop.
-     *
-     * Default = AGGRESSIVENESS_DEFAULT (5): bij een schone start is er nog
-     * geen override actief, dus "niets toegepast" == "niveau 5".
-     */
-    fun getLastAppliedAggressiveness(context: Context): Int =
-        prefs(context).getInt(KEY_AGGRESSIVENESS_APPLIED, AGGRESSIVENESS_DEFAULT)
-
-    fun setLastAppliedAggressiveness(context: Context, level: Int) {
-        prefs(context).edit()
-            .putInt(KEY_AGGRESSIVENESS_APPLIED, level.coerceIn(AGGRESSIVENESS_MIN, AGGRESSIVENESS_MAX))
-            .apply()
-    }
 
     // Leergeschiedenis tellers (voor de status-indicator in de UI)
 
@@ -1530,37 +1504,8 @@ object DFLearner {
     fun getEarlyBoostFactor(context: android.content.Context): Double =
         prefs(context).getFloat(KEY_EB_BOOST, EB_BOOST_DEFAULT).toDouble()
 
-    /**
-     * Synchroniseer de earlyBoostFactor in de learner-prefs met een extern
-     * vastgestelde waarde (bijv. door de AI-advisor goedgekeurd).
-     *
-     * Waarom nodig (01/07/2026): ConfigOverrideWriter bouwt zijn overrides
-     * met `earlyBoostFactor = p.earlyBoostFactor ?: DFLearner.getEarlyBoostFactor(it)`.
-     * Als de AI-advisor `prefs.put(DoubleKey.fcl_vnext_early_boost_factor, 2.0)` zet
-     * maar de learner-prefs nog 1.84 bevatten, overschrijft de volgende
-     * ConfigOverrideWriter-run de AI-waarde met 1.84. Door ook de learner-prefs
-     * bij te werken blijven beide in sync en blijft de AI-waarde persistent.
-     */
-    fun syncEarlyBoostFactor(context: android.content.Context, value: Double) {
-        prefs(context).edit()
-            .putFloat(KEY_EB_BOOST, value.coerceIn(EB_BOOST_MIN, EB_BOOST_MAX).toFloat())
-            .apply()
-    }
-
     fun getWatchingFrac(context: android.content.Context): Double =
         prefs(context).getFloat(KEY_EB_WATCHING, EB_WATCHING_DEFAULT).toDouble()
-
-    /**
-     * Synchroniseer watchingFrontloadFrac in de learner-prefs met een extern vastgestelde
-     * waarde (bijv. door de AI-advisor goedgekeurd). Zelfde reden als syncEarlyBoostFactor:
-     * ConfigOverrideWriter gebruikt DFLearner.getWatchingFrac() als fallback en overschrijft
-     * anders de AI-waarde bij de volgende episode-evaluatie.
-     */
-    fun syncWatchingFrac(context: android.content.Context, value: Double) {
-        prefs(context).edit()
-            .putFloat(KEY_EB_WATCHING, value.coerceIn(EB_WATCHING_MIN, EB_WATCHING_MAX).toFloat())
-            .apply()
-    }
 
     fun getEbStepSize(context: android.content.Context): Double =
         prefs(context).getFloat(KEY_EB_STEP, EB_STEP_DEFAULT).toDouble()
@@ -1806,6 +1751,16 @@ object DFLearner {
     private const val LCD_FORWARD_PEAK_THRESHOLD = 10.5
     private const val LCD_FORWARD_VROEG_MIN = 30
 
+    /** Strength where the learner no longer lowers the decay (the built effect of the experiment is reached). */
+    private const val LCD_FORWARD_OFF_STRENGTH = 0.75
+
+    /**
+     * Size of a FORWARD step (lower decay) while the "cover decay" experiment is on.
+     * 1.0 when the experiment is off, then it falls in a straight line to 0.0 at [LCD_FORWARD_OFF_STRENGTH].
+     */
+    fun forwardStepScale(experimentStrength: Double): Double =
+        1.0 - (experimentStrength / LCD_FORWARD_OFF_STRENGTH).coerceIn(0.0, 1.0)
+
     fun getLcdStep(context: android.content.Context): Double =
         prefs(context).getFloat(KEY_LCD_STEP, LCD_STEP_DEFAULT.toFloat()).toDouble()
 
@@ -1870,7 +1825,10 @@ object DFLearner {
         // — zelfde voorzichtigheidsprincipe als evaluateEarlyBoost (een
         // gemiste (bijna-)hypo weegt zwaarder dan een te voorzichtige episode).
         // FORWARD → refLcd omlaag (minder demping), kleine stap.
-        val stepSigned = if (signal == "BACK") 3.0 * step else -step
+        // 15/11/2026: while the "cover decay" experiment is on, FORWARD gets smaller (gradual, 0 at 75%).
+        // The experiment already lowers the decay when the IOB cover is low. BACK always works.
+        val coverStrength = ExperimentStrengths.factor(context, ExperimentStrengths.Experiment.COVER_DECAY)
+        val stepSigned = if (signal == "BACK") 3.0 * step else -step * forwardStepScale(coverStrength)
         val newRef = (oldRef + stepSigned).coerceIn(DFMapping.REF_LCD_MIN, DFMapping.REF_LCD_MAX)
 
         setRefLcd(context, newRef)

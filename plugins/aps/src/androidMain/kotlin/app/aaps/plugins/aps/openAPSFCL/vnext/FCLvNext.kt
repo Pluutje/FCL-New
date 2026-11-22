@@ -693,6 +693,14 @@ private var coverDecayWeightThisCycle: Double = 0.0
 private var coverDecayOldMulThisCycle: Double = 0.0
 private var coverDecayResultThisCycle: CoverDecay.Result? = null
 private var coverDecayCommitDoseThisCycle: Double = 0.0
+// 15/11/2026, log only: "still needs insulin" and the scale of the post-peak cut in this cycle (1.0 = no change).
+private var coverNeedsWeightThisCycle: Double = 0.0
+private var coverOmslagScaleThisCycle: Double = 1.0
+// 15/11/2026, experiment IOB_RELAX: weight of the relative cover in the IOB brake and the IOB factor before it (for the CSV).
+private var iobRelaxWeightThisCycle: Double = 0.0
+private var iobFactorOriginalThisCycle: Double = 1.0
+// 16/11/2026, experiment COVER_DECAY: the step decay brake before the experiment changed it (for the CSV).
+private var stepBrakeOriginalThisCycle: Double = 1.0
 // 11/11/2026: log only, see DoseCutTrace. Never changes a dose.
 private val doseCutTrace = DoseCutTrace()
 private const val SLOW_RISE_WINDOW_MIN = 60
@@ -2451,6 +2459,39 @@ private fun iobDampingFactor(
         .coerceIn(config.iobMinFactor, 1.0)
 }
 
+/**
+ * Log only (15/11/2026): the IOB ratio on the scale of the relative IOB cover, the IOB factor that follows from it, and
+ * the step decay brake. Does not change any dose. Never throws.
+ */
+private fun logIobRelative(
+    context: android.content.Context,
+    iobRatio: Double,
+    iob: Double,
+    mmolAboveTarget: Double,
+    slope: Double,
+    recentSlope: Double,
+    peakIobBoost: Double,
+    config: FCLvNextConfig,
+    iobPower: Double,
+    stepBrake: Double,
+    relaxWeight: Double,
+    factorOriginal: Double,
+    stepBrakeOriginal: Double
+) {
+    try {
+        val ratioRel = IobRelativeLog.equivalentRatio(
+            iob, mmolAboveTarget, slope, recentSlope, InsulinBudget.reference(context)
+        )
+        if (!IobRelativeLog.worthStoring(iobRatio, ratioRel)) return
+        val factorRel = iobDampingFactor((ratioRel / peakIobBoost).coerceAtLeast(0.0), config, iobPower)
+        IobRelativeLog.addEvent(
+            context,
+            IobRelativeLog.Event(System.currentTimeMillis(), ratioRel, factorRel, stepBrake, relaxWeight, factorOriginal, stepBrakeOriginal)
+        )
+    } catch (_: Exception) {
+    }
+}
+
 private fun roundToStep(value: Double, step: Double): Double {
     if (step <= 0.0) return value
     return (kotlin.math.round(value / step) * step)
@@ -3922,7 +3963,9 @@ private data class EarlyDoseDecision(
     // EarlyBoostCap (2/11/2026): the target before the cap, the cap itself and the cover weight. NaN / 0 when not used.
     val uncappedTargetU: Double = 0.0,
     val capU: Double = Double.NaN,
-    val coverWeight: Double = 0.0
+    val coverWeight: Double = 0.0,
+    // 15/11/2026, log only: the extra insulin in the target that comes from the T1 bonus (see EarlyExperimentLog).
+    val t1BonusU: Double = 0.0
 )
 
 private fun computeEarlyDoseDecision(
@@ -4518,6 +4561,14 @@ private fun computeEarlyDoseDecision(
             minEarlyU
         ).coerceAtMost(config.maxSMB * 1.5)   // absolute cap: nooit meer dan 1.5× maxSMB
 
+    // 15/11/2026, log only: the same target without the T1 bonus. The difference is the share of the experiment.
+    val uncappedTargetWithoutT1 =
+        maxOf(
+            config.maxSMB * factor * config.doseStrengthMul * effectiveBoostFactor + debtCompensationU,
+            minEarlyU
+        ).coerceAtMost(config.maxSMB * 1.5)
+    val t1BonusU = if (sustainT1Active) (uncappedTargetU - uncappedTargetWithoutT1).coerceAtLeast(0.0) else 0.0
+
     // EarlyBoostCap part 1 (2/11/2026): only for a boost dose. The target may not be more than
     // CAP_FACTOR times what the predicted peak needs. Fades out for a predicted peak of 8.5 to 10.5 mmol/L,
     // so a real big meal is not limited. The smallest early dose (minEarlyU) is kept.
@@ -4561,7 +4612,8 @@ private fun computeEarlyDoseDecision(
         boostCommitNr = earlyDose.boostCommitCount + 1,
         uncappedTargetU = uncappedTargetU,
         capU = peakCapU,
-        coverWeight = coverWeight
+        coverWeight = coverWeight,
+        t1BonusU = t1BonusU
     )
 }
 
@@ -4696,9 +4748,13 @@ private fun computePeakBrake(
     prevRawDecel: Boolean = false,
     // 17/09/2026 (de gebruiker — analyse 16/9 15:59- en 17/9 07:19-maaltijden):
     // recentDelta5m van de vorige cyclus, voor delta5mDecelerating hieronder.
-    prevRecentDelta5m: Double? = null
+    prevRecentDelta5m: Double? = null,
+    // 15/11/2026 (experiment IOB_RELAX, see IobRelax): IOB ratio the brake works with. Null = ctx.iobRatio.
+    // Only lower than ctx.iobRatio (looser brake). Other users of iobRatio are not changed.
+    iobRatioForBrake: Double? = null
 ): PeakBrakeResult {
 
+    val brakeIobRatio = iobRatioForBrake ?: ctx.iobRatio
     val suppressThreshold = config.peakIobBrakeSuppressThreshold   // nu actief 0.30
     val lockoutThreshold = config.peakIobBrakeLockoutThreshold     // 0.55
     // HERZIEN (19/09/2026, de gebruiker): was 0,65. Nagerekend tegen het 18/9
@@ -4783,7 +4839,7 @@ private fun computePeakBrake(
             ctx.recentDelta5m <= prev * 0.60
     } ?: false
 
-    val rawDecelSignal = recentSlopeDrop >= dropMin && ctx.iobRatio >= suppressThreshold &&
+    val rawDecelSignal = recentSlopeDrop >= dropMin && brakeIobRatio >= suppressThreshold &&
         (curveConfirmtOmslag || delta5mDecelerating)
 
     // PERSISTENTIE-EIS (01/08/2026): incident 31/07 19:00 maaltijd —
@@ -4816,7 +4872,7 @@ private fun computePeakBrake(
     val effectiveSuppressThreshold =
         if (wasActiveLastCycle) suppressThreshold - releaseMargin else suppressThreshold
 
-    if (peak.state == PeakPredictionState.IDLE || ctx.iobRatio < effectiveSuppressThreshold) {
+    if (peak.state == PeakPredictionState.IDLE || brakeIobRatio < effectiveSuppressThreshold) {
         return PeakBrakeResult(1.0, false, 0.0, 0.50, recentSlopeDrop, "NONE", rawDecelSignal)
     }
 
@@ -4830,7 +4886,7 @@ private fun computePeakBrake(
         return PeakBrakeResult(1.0, false, 0.0, 0.50, recentSlopeDrop, "NONE", rawDecelSignal)
     }
 
-    val t = smooth01((ctx.iobRatio - suppressThreshold) / (slopeCeilingFullIobRatio - suppressThreshold))
+    val t = smooth01((brakeIobRatio - suppressThreshold) / (slopeCeilingFullIobRatio - suppressThreshold))
     val slopeCeiling = 0.50 + t * (maxSlopeCeiling - 0.50)
 
     val brakeCondition =
@@ -4929,7 +4985,7 @@ private fun computePeakBrake(
         accelConfidenceRaw < 0.5
     val accelConfidence = if (declinedFromPeak) 0.0 else accelConfidenceRaw
     val deepBrakeRaw = if (declinedFromPeak) 1.0 else
-        smooth01((ctx.iobRatio - lockoutThreshold) / (fullBrakeIobRatio - lockoutThreshold))
+        smooth01((brakeIobRatio - lockoutThreshold) / (fullBrakeIobRatio - lockoutThreshold))
     // HERZIEN (19/09/2026, zie kdoc bij PEAK_BRAKE_ACCEL_RELIEF_MAX hierboven):
     // accelConfidence mag deepBrakeRaw nooit voor de volle 100% opheffen — een
     // restrem (minimaal 1-PEAK_BRAKE_ACCEL_RELIEF_MAX) blijft altijd staan
@@ -4943,7 +4999,7 @@ private fun computePeakBrake(
     val hardBrake = deepBrakeFrac >= 0.5
 
     val severity = smooth01(
-        0.5 * ((ctx.iobRatio - suppressThreshold) / (lockoutThreshold - suppressThreshold)) +
+        0.5 * ((brakeIobRatio - suppressThreshold) / (lockoutThreshold - suppressThreshold)) +
             0.3 * ((slopeCeiling - ctx.slope) / slopeCeiling).coerceIn(0.0, 1.0) +
             0.2 * (recentSlopeDrop / 2.0).coerceIn(0.0, 1.0)
     )
@@ -4973,7 +5029,8 @@ private fun evaluatePostPeak(
     prevRecentSlope: Double? = null,     // voor computePeakBrake() deceleratie-signaal
     prevBrakeActive: Boolean = false,    // voor computePeakBrake() hysterese (17/07/2026)
     prevRawDecel: Boolean = false,       // voor computePeakBrake() persistentie-eis (01/08/2026)
-    prevRecentDelta5m: Double? = null    // voor computePeakBrake() delta5mDecelerating (17/09/2026)
+    prevRecentDelta5m: Double? = null,   // voor computePeakBrake() delta5mDecelerating (17/09/2026)
+    iobRatioForBrake: Double? = null     // experiment IOB_RELAX (15/11/2026), alleen voor computePeakBrake()
 ): PostPeakSummary {
 
     val inAbsorption = isInAbsorptionWindow(now, config)
@@ -5096,7 +5153,7 @@ private fun evaluatePostPeak(
 
     // ✅ GECONSOLIDEERD (30/06/2026): predictieve IOB-rem via computePeakBrake().
     // Vervangt de oude losse peakIobBrake-conditie (ctx.slope <= 0.50 vaste grens).
-    val peakBrake = computePeakBrake(ctx, peak, config, prevRecentSlope, prevBrakeActive, prevRawDecel, prevRecentDelta5m)
+    val peakBrake = computePeakBrake(ctx, peak, config, prevRecentSlope, prevBrakeActive, prevRawDecel, prevRecentDelta5m, iobRatioForBrake)
     val peakIobBrake = peakBrake.reason != "NONE"   // soft of hard → telt als brake-signaal
 
 
@@ -5703,7 +5760,7 @@ class FCLvNext(
     // "vNN-jjjj-mm-dd-uumm" (aanmaaktijdstip, geen omschrijving; die van
     // eerdere versies raakten toch achter). Alleen als het écht relevant
     // is een korte omschrijving toevoegen.
-    private val FCL_CODE_VERSION = "v162-2026-11-12-1900"
+    private val FCL_CODE_VERSION = "v166-2026-11-22-2000"
 
     // ── Restart-detectie (16/07/2026) ─────────────────────────────────
     // true op precies de EERSTE cyclus na het (her)starten van dit class-
@@ -7014,6 +7071,11 @@ class FCLvNext(
                 ) {
                     peakEstimator.state = PeakPredictionState.WATCHING
                     peakEstimator.confirmCounter = 0
+                    // 15/11/2026, log only: watching started only because of the lower threshold of the experiment.
+                    val alertStrength = ExperimentStrengths.factor(context, ExperimentStrengths.Experiment.EARLY_ALERT)
+                    if (EarlyExperimentLog.alertHit(predictedPeak, alertStrength)) {
+                        EarlyExperimentLog.addEvent(context, EarlyExperimentLog.Event(System.currentTimeMillis(), 0.0, 1))
+                    }
                 }
             }
 
@@ -7244,7 +7306,10 @@ class FCLvNext(
         val alreadyCut = if (doseBeforePostHypoBrake > 0.0) 1.0 - dose / doseBeforePostHypoBrake else 0.0
         // A positive override means "I eat": the brake is scaled like the post-hypo brake (1.0 without an override).
         val factor = ReboundBrake.withOverride(
-            ReboundBrake.factor(strength, low.first, low.second, ctx.input.bgNow, alreadyCut),
+            ReboundBrake.factor(
+                strength, low.first, low.second, ctx.input.bgNow, alreadyCut,
+                mealEpisodeStartBg?.let { ctx.input.bgNow - it }.takeIf { activeMealEpisodeId != -1L }
+            ),
             overrideBrakeStrength
         )
         if (factor >= 0.999) return dose
@@ -7259,15 +7324,109 @@ class FCLvNext(
     }
 
     /**
+     * Experiment IOB_RELAX (15/11/2026): weight (0..1) of the relative IOB cover in the IOB brakes. See [IobRelax.weight].
+     * 0 when the strength is 0, when there is no personal reference, or at night.
+     */
+    private fun iobRelaxWeight(ctx: FCLvNextContext): Double =
+        IobRelax.weight(
+            ExperimentStrengths.factor(context, ExperimentStrengths.Experiment.IOB_RELAX),
+            InsulinBudget.referenceEpisodes(context),
+            1.0 - ctx.input.nightTransitionFraction,
+            !InsulinBudget.reference(context).isNaN()
+        )
+
+    /** The relative cover on `iobRatio` scale, or NaN without a personal reference. */
+    private fun iobRelaxRatioRel(ctx: FCLvNextContext): Double =
+        IobRelativeLog.equivalentRatio(
+            ctx.input.currentIOB, ctx.deltaToTarget, ctx.slope, ctx.recentSlope, InsulinBudget.reference(context)
+        )
+
+    /**
+     * Experiment IOB_RELAX: the IOB factor for the dose step brake. [original] is the normal factor. The result is never
+     * lower than [original]. Stores the weight and the original factor for the CSV. Member function on purpose
+     * (getAdvice is very large, more locals there gave a VerifyError before).
+     */
+    private fun iobRelaxFactor(
+        ctx: FCLvNextContext,
+        peakIobBoost: Double,
+        config: FCLvNextConfig,
+        iobPower: Double,
+        original: Double
+    ): Double {
+        iobFactorOriginalThisCycle = original
+        iobRelaxWeightThisCycle = iobRelaxWeight(ctx)
+        if (iobRelaxWeightThisCycle <= 0.0) return original
+        val ratioRel = iobRelaxRatioRel(ctx)
+        if (ratioRel.isNaN()) return original
+        val factorRel = iobDampingFactor((ratioRel / peakIobBoost).coerceAtLeast(0.0), config, iobPower)
+        return IobRelax.blendFactor(original, factorRel, iobRelaxWeightThisCycle)
+    }
+
+    /** Experiment IOB_RELAX: IOB ratio for the peak brake only. Null = no change (the normal ratio is used). */
+    private fun iobRelaxBrakeRatio(ctx: FCLvNextContext): Double? {
+        val w = iobRelaxWeight(ctx)
+        if (w <= 0.0) return null
+        val ratioRel = iobRelaxRatioRel(ctx)
+        if (ratioRel.isNaN()) return null
+        return IobRelax.blendRatio(ctx.iobRatio, ratioRel, w)
+    }
+
+    /**
+     * Experiment "cover decay" (16/11/2026): the step decay brake [original] fades out while the BG still needs insulin
+     * (far above target, still rising, low relative cover). Only weaker, never stronger. Strength 0, no personal
+     * reference, or night gives [original]. Stores the original brake for the CSV. Member function on purpose
+     * (getAdvice is very large, more locals there gave a VerifyError before).
+     */
+    private fun coverStepBrake(ctx: FCLvNextContext, original: Double): Double {
+        stepBrakeOriginalThisCycle = original
+        val strength = ExperimentStrengths.factor(context, ExperimentStrengths.Experiment.COVER_DECAY)
+        if (strength <= 0.0 || original >= 0.999) return original
+        val ref = InsulinBudget.reference(context)
+        if (ref.isNaN() || ref <= 0.0) return original
+        val cover = CoverDecay.iobPerNeed(ctx.input.currentIOB, ctx.deltaToTarget, ctx.slope, ctx.recentSlope) / ref
+        val needs = CoverDecay.needsWeight(
+            ctx.deltaToTarget, ctx.slope, ctx.recentSlope, cover, 1.0 - ctx.input.nightTransitionFraction
+        )
+        return CoverDecay.stepBrakeRelease(original, strength, needs)
+    }
+
+    /**
+     * Experiment "cover decay" (15/11/2026): scale (0 to 1) for the depth of the "turn" (omslag). 1 = no change.
+     * When the BG is far above target, still rises and the IOB cover is low, a rise that only slows down is not
+     * treated as a turn. See [CoverDecay.omslagScale]. Strength 0 (the default) and no personal reference give 1.0.
+     *
+     * This is a member function on purpose: getAdvice is very large, and more local variables there gave a
+     * VerifyError before.
+     */
+    private fun coverOmslagScale(ctx: FCLvNextContext): Double {
+        val strength = ExperimentStrengths.factor(context, ExperimentStrengths.Experiment.COVER_DECAY)
+        if (strength <= 0.0) return 1.0
+        val ref = InsulinBudget.reference(context)
+        if (ref.isNaN() || ref <= 0.0) return 1.0
+        val cover = CoverDecay.iobPerNeed(ctx.input.currentIOB, ctx.deltaToTarget, ctx.slope, ctx.recentSlope) / ref
+        val needs = CoverDecay.needsWeight(
+            ctx.deltaToTarget, ctx.slope, ctx.recentSlope, cover, 1.0 - ctx.input.nightTransitionFraction
+        )
+        coverNeedsWeightThisCycle = needs
+        coverOmslagScaleThisCycle = CoverDecay.omslagScale(strength, needs)
+        return coverOmslagScaleThisCycle
+    }
+
+    /**
      * Stores the event of the experiment "cover decay" at the end of the cycle, with an estimate of the insulin it
      * added or held back. [commandedDose] is the final dose of this cycle. See [CoverDecay.commitDeltaU].
      */
     private fun storeCoverDecayEvent(nowMs: Long, commandedDose: Double) {
-        val result = coverDecayResultThisCycle ?: return
+        val result = coverDecayResultThisCycle
+        if (result == null) {
+            // Only the post-peak cut may have been scaled down in this cycle.
+            CoverDecay.recordOmslag(context, nowMs, coverNeedsWeightThisCycle, coverOmslagScaleThisCycle)
+            return
+        }
         val deltaU = CoverDecay.commitDeltaU(
             coverDecayCommitDoseThisCycle, coverDecayOldMulThisCycle, result.blendedMul, commandedDose
         )
-        CoverDecay.record(context, nowMs, coverDecayOldMulThisCycle, result, deltaU)
+        CoverDecay.record(context, nowMs, coverDecayOldMulThisCycle, result, deltaU, coverOmslagScaleThisCycle)
     }
 
     @SuppressLint("SuspiciousIndentation") fun getAdvice(input: FCLvNextInput): FCLvNextAdvice {
@@ -7278,6 +7437,8 @@ class FCLvNext(
         coverDecayWeightThisCycle = 0.0
         coverDecayOldMulThisCycle = 0.0
         coverDecayResultThisCycle = null
+        coverNeedsWeightThisCycle = 0.0
+        coverOmslagScaleThisCycle = 1.0
         coverDecayCommitDoseThisCycle = 0.0
         doseCutTrace.reset()
         explosiveRiseFracThisCycle = 0.0
@@ -7959,10 +8120,14 @@ class FCLvNext(
         // 17/07/2026: lineair gemengd i.p.v. harde dag/nacht-knip —
         // zie kdoc bij FCLvNextInput.nightTransitionFraction.
         val iobPower = config.iobPowerDay + input.nightTransitionFraction * (config.iobPowerNight - config.iobPowerDay)
-        val iobFactor = iobDampingFactor(
-            iobRatio = boostedIobRatio,
-            config = config,
-            power = iobPower
+        // 15/11/2026, experiment IOB_RELAX: only looser, weight 0 (default) gives the old factor. See IobRelax.
+        val iobFactor = iobRelaxFactor(
+            ctx, peakIobBoost, config, iobPower,
+            iobDampingFactor(
+                iobRatio = boostedIobRatio,
+                config = config,
+                power = iobPower
+            )
         )
 
         val commitIobFactorRaw = iobDampingFactor(
@@ -8009,7 +8174,8 @@ class FCLvNext(
         // v140/v141: rem op de laatste echte 5-minuten-stap t.o.v. de grootste stap in deze stijging.
         // v141: geldt nu ook voor finalDose (basis-energiepad), niet alleen voor de commit-dosis
         // (9/10 19:28: 0,85 U op de top via dit pad).
-        val stepDecelBrake = run {
+        // 16/11/2026, experiment COVER_DECAY: the brake fades out while the BG still needs insulin. See CoverDecay.stepBrakeRelease.
+        val stepDecelBrake = coverStepBrake(ctx, run {
             val pts = ctx.input.bgHistory.sortedBy { it.first.millis }.takeLast(STEP_DECEL_WINDOW_READINGS)
             if (pts.size < 3) return@run 1.0
             val steps = pts.zipWithNext().mapNotNull { (a, b) ->
@@ -8030,13 +8196,19 @@ class FCLvNext(
                 )
             }
             brake
-        }
+        })
 
         doseCutTrace.mark("START", decidedDose)
         var finalDose =
             (decidedDose * iobFactor * config.doseStrengthMul * stepDecelBrake)
                 .coerceAtLeast(0.0)
         doseCutTrace.mark("IOB_STEP_BRAKE", finalDose)
+        // 15/11/2026, log only: what the IOB brake would be with the relative IOB cover (see IobRelativeLog).
+        logIobRelative(
+            context, ctx.iobRatio, ctx.input.currentIOB, ctx.deltaToTarget, ctx.slope, ctx.recentSlope,
+            peakIobBoost, config, iobPower, stepDecelBrake, iobRelaxWeightThisCycle, iobFactorOriginalThisCycle,
+            stepBrakeOriginalThisCycle
+        )
 
         if (mealSignal.state == MealState.NONE && ctx.acceleration > 0.2 && ctx.iobRatio >= 0.75) {
             status.append("RISING IOB CAP → finalDose limited\n")
@@ -8230,6 +8402,10 @@ class FCLvNext(
         if (early.boostActive && (early.targetU < early.uncappedTargetU - 0.005 || early.coverWeight > 0.05)) {
             EarlyBoostCap.addEvent(context, EarlyBoostCap.Event(now.millis, early.uncappedTargetU, early.capU, early.coverWeight))
         }
+        // 15/11/2026, log only: the share of the T1 bonus in the early dose (see EarlyExperimentLog).
+        if (early.t1BonusU > 0.005) {
+            EarlyExperimentLog.addEvent(context, EarlyExperimentLog.Event(now.millis, early.t1BonusU, 0))
+        }
         // Schrijf resterende schuld terug — de functie mag klasselid niet muteren
         episodeHypoDebtU = early.remainingDebtU
         status.append(early.reason + "\n")
@@ -8392,7 +8568,8 @@ class FCLvNext(
             prevRecentSlope  = prevRecentSlopeForBrake,
             prevBrakeActive  = peakBrakeWasActiveLastCycle,
             prevRawDecel     = prevRawDecelForBrake,
-            prevRecentDelta5m = prevRecentDelta5mForBrake
+            prevRecentDelta5m = prevRecentDelta5mForBrake,
+            iobRatioForBrake  = iobRelaxBrakeRatio(ctx)
         )
         status.append(postPeak.reason + "\n")
         // bijwerken voor de volgende cyclus (computePeakBrake deceleratie-signaal +
@@ -10074,7 +10251,8 @@ class FCLvNext(
                 // harde knip. coerceAtLeast(0.10) hierboven is bewust losgelaten
                 // vóór deze stap — de nieuwe, lagere POST_OMSLAG_ABSOLUTE_MIN_FLOOR
                 // geldt hierna in plaats daarvan.
-                val omslagDiepte = when {
+                // 15/11/2026: scaled down while the BG still needs insulin (experiment "cover decay").
+                val omslagDiepte = coverOmslagScale(ctx) * when {
                     // 20/07/2026: herstel wint altijd — zie kdoc bij
                     // CURVE_ACCEL_HERSTEL_MARGIN hierboven. Voorkomt dat een
                     // tijdelijke vertraging binnen een doorlopende stijging als een
@@ -13302,6 +13480,8 @@ class FCLvNext(
         logRow.commandedDose = commandedDose
         storeCoverDecayEvent(now.millis, commandedDose)
         DoseCutLog.record(context, now.millis, doseCutTrace)
+        // 15/11/2026: one short sentence about why the dose is smaller than it could be. Text only.
+        DoseCutExplain.sentence(doseCutTrace.topLayer(), doseCutTrace.topCutU())?.let { status.append("WAAROM MINDER: $it\n") }
         // 12/10/2026 — herstel-buffer (REBOUND_*): onthoud de uiteindelijke dosis van deze cyclus.
         if (commandedDose > 0.0) {
             ctx.input.bgHistory.maxOfOrNull { it.first.millis }?.let { reboundDoseLog.addLast(it to commandedDose) }

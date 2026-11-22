@@ -20,6 +20,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.AggLevels
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.DFLearner
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.DFMapping
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.FrontloadLearner
@@ -50,7 +51,7 @@ fun AdvisorAssenKaarten(
     f: Double,
     nfLevel: Double,
     vExtra: Double,
-    aggressiveness: Int
+    agg: AggLevels
 ) {
     val s = FclStrings.get(LocalContext.current)
 
@@ -58,9 +59,9 @@ fun AdvisorAssenKaarten(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        SterkteKaart(s, d, f, nfLevel, vExtra, aggressiveness)
-        TimingKaart(s, d, f, nfLevel, vExtra, aggressiveness)
-        VasthoudendheidKaart(s, d, f, nfLevel, vExtra, aggressiveness)
+        SterkteKaart(s, d, f, nfLevel, vExtra, agg)
+        TimingKaart(s, d, f, nfLevel, vExtra, agg)
+        VasthoudendheidKaart(s, d, f, nfLevel, vExtra, agg)
         FrontloadTimingKaart(s)
     }
 }
@@ -69,12 +70,12 @@ fun AdvisorAssenKaarten(
 
 @Composable
 private fun SterkteKaart(
-    s: FclStrings, d: Double, f: Double, nfLevel: Double, vExtra: Double, agg: Int
+    s: FclStrings, d: Double, f: Double, nfLevel: Double, vExtra: Double, agg: AggLevels
 ) {
     val context = LocalContext.current
     val history = DFLearner.getHistorySince(context, HISTORY_DAYS)
 
-    val huidig = DFMapping.toStvMap(d, f, nfLevel, vExtra, aggLevel = agg)["sterkte"] ?: 100
+    val huidig = DFMapping.toStvMap(d, f, nfLevel, vExtra, agg = agg)["sterkte"] ?: 100
 
     // Tijdreeks: voor elk historiepunt het sterkte-percentage bij die D/F-waarde,
     // met de huidige nfLevel/vExtra/agg als constante (we tonen het verloop
@@ -82,7 +83,7 @@ private fun SterkteKaart(
     val punten: List<Pair<Instant, Double>> = history.mapNotNull { step ->
         runCatching {
             val ts = Instant.parse(step.tsUtc)
-            val pct = DFMapping.toStvMap(step.newD, step.newF, nfLevel, vExtra, aggLevel = agg)["sterkte"]!!
+            val pct = DFMapping.toStvMap(step.newD, step.newF, nfLevel, vExtra, agg = agg)["sterkte"]!!
             ts to pct.toDouble()
         }.getOrNull()
     } + listOf(Instant.now() to huidig.toDouble())
@@ -107,17 +108,17 @@ private fun SterkteKaart(
 
 @Composable
 private fun TimingKaart(
-    s: FclStrings, d: Double, f: Double, nfLevel: Double, vExtra: Double, agg: Int
+    s: FclStrings, d: Double, f: Double, nfLevel: Double, vExtra: Double, agg: AggLevels
 ) {
     val context = LocalContext.current
     val history = DFLearner.getHistorySince(context, HISTORY_DAYS)
 
-    val huidig = DFMapping.toStvMap(d, f, nfLevel, vExtra, aggLevel = agg)["timing"] ?: 100
+    val huidig = DFMapping.toStvMap(d, f, nfLevel, vExtra, agg = agg)["timing"] ?: 100
 
     val punten: List<Pair<Instant, Double>> = history.mapNotNull { step ->
         runCatching {
             val ts = Instant.parse(step.tsUtc)
-            val pct = DFMapping.toStvMap(step.newD, step.newF, nfLevel, vExtra, aggLevel = agg)["timing"]!!
+            val pct = DFMapping.toStvMap(step.newD, step.newF, nfLevel, vExtra, agg = agg)["timing"]!!
             ts to pct.toDouble()
         }.getOrNull()
     } + listOf(Instant.now() to huidig.toDouble())
@@ -150,7 +151,7 @@ private fun TimingKaart(
 
 @Composable
 private fun VasthoudendheidKaart(
-    s: FclStrings, d: Double, f: Double, nfLevel: Double, vExtra: Double, agg: Int
+    s: FclStrings, d: Double, f: Double, nfLevel: Double, vExtra: Double, agg: AggLevels
 ) {
     val context = LocalContext.current
     val history = VLearner.getHistory(context)
@@ -159,14 +160,14 @@ private fun VasthoudendheidKaart(
         runCatching { Instant.parse(p.tsUtc).isAfter(cutoff) }.getOrDefault(false)
     }
 
-    val huidig = DFMapping.toStvMap(d, f, nfLevel, vExtra, aggLevel = agg)["volhoudendheid"] ?: 100
+    val huidig = DFMapping.toStvMap(d, f, nfLevel, vExtra, agg = agg)["volhoudendheid"] ?: 100
 
     // Voor elk historiepunt: het volhoudendheid-percentage bij die vExtra-waarde,
     // met de huidige D/F/nfLevel/agg als constante.
     val punten: List<Pair<Instant, Double>> = recent.mapNotNull { p ->
         runCatching {
             val ts = Instant.parse(p.tsUtc)
-            val pct = DFMapping.toStvMap(d, f, nfLevel, p.vExtra, aggLevel = agg)["volhoudendheid"]!!
+            val pct = DFMapping.toStvMap(d, f, nfLevel, p.vExtra, agg = agg)["volhoudendheid"]!!
             ts to pct.toDouble()
         }.getOrNull()
     } + listOf(Instant.now() to huidig.toDouble())

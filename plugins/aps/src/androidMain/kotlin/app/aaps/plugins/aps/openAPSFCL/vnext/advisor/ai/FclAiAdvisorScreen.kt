@@ -29,7 +29,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import app.aaps.plugins.aps.R
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.Canvas
@@ -284,8 +286,27 @@ fun FclAiAdvisorScreen(
             )
         }
 
+        // ── Proeven: placeholder. A separate advisor for the experimental sliders will come here.
+        val proevenPage = app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.ui.InfoTabPage(
+            stringResource(R.string.fcl_ai_experiments_tab)
+        ) {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        stringResource(R.string.fcl_ai_experiments_title),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        stringResource(R.string.fcl_ai_experiments_in_development),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            }
+        }
+
         app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.ui.InfoTabPager(
-            pages = listOf(dagPage, nachtPage),
+            pages = listOf(dagPage, nachtPage, proevenPage),
             initialTab = initialTab
         )
 
@@ -308,7 +329,11 @@ private fun AiHistorySection() {
 
     if (!expanded) return
 
-    val approved = remember { FclAiAdvisorHistoryRepository.readApproved() }
+    // Only the settings the advisor advises on now. Old entries of removed internal
+    // parameters stay in the log file as an audit trail, but are not shown.
+    val approved = remember {
+        FclAiAdvisorHistoryRepository.readApproved().filter { it.param in FclAiAdvisorRanges.byKey }
+    }
 
     if (approved.isEmpty()) {
         Text("Nog geen goedgekeurde aanpassingen geregistreerd.",
@@ -342,7 +367,7 @@ private fun AiHistorySection() {
                  fontWeight = FontWeight.Bold,
                  modifier = Modifier.weight(1f))
             Text(
-                "${"%.4f".format(latest.proposedValue)}  $direction",
+                "${formatSettingValue(param, latest.proposedValue)}  $direction",
                 style = MaterialTheme.typography.bodySmall,
                 color = when {
                     direction.startsWith("↑") -> MaterialTheme.colorScheme.primary
@@ -384,7 +409,8 @@ private fun AiHistorySection() {
         }
 
         Text(
-            "${utcToLocal(latest.tsUtc)}  ${"%.4f".format(latest.currentValue)} → ${"%.4f".format(latest.proposedValue)}",
+            "${utcToLocal(latest.tsUtc)}  ${formatSettingValue(param, latest.currentValue)} → " +
+                formatSettingValue(param, latest.proposedValue),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -482,11 +508,14 @@ private fun SettingsSection(context: Context, onSaved: () -> Unit = {}) {
     }
 }
 
-// ── Reset-kaart (voor per ongeluk goedgekeurde waarden) ──────────────────────
+/** Sliders show a whole number, max SMB and max IOB show two decimals. */
+private fun formatSettingValue(param: String, value: Double): String =
+    if (FclAiAdvisorRanges.byKey[param]?.type == FclAiAdvisorRanges.ValueType.INT) value.toInt().toString()
+    else "%.2f".format(value)
 
-@Composable
 // ── Suggestiekaart ────────────────────────────────────────────────────────────
 
+@Composable
 private fun SuggestionCard(suggestion: AiParamSuggestion, context: Context) {
     // Pre-populeer status vanuit history zodat goedkeuring/afwijzing zichtbaar
     // blijft na navigeren — de Composable wordt anders bij terugkeren opnieuw
@@ -511,7 +540,6 @@ private fun SuggestionCard(suggestion: AiParamSuggestion, context: Context) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(label, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            Text(suggestion.param, style = MaterialTheme.typography.labelSmall)
 
             if (spec != null) {
                 Text(
@@ -522,7 +550,8 @@ private fun SuggestionCard(suggestion: AiParamSuggestion, context: Context) {
             }
 
             Text(
-                "Huidig: ${"%.4f".format(suggestion.currentValue)}  →  Voorgesteld: ${"%.4f".format(suggestion.proposedValue)}",
+                "Huidig: ${formatSettingValue(suggestion.param, suggestion.currentValue)}  →  " +
+                    "Voorgesteld: ${formatSettingValue(suggestion.param, suggestion.proposedValue)}",
                 style = MaterialTheme.typography.bodyMedium
             )
             Text("Confidence: ${(suggestion.confidence * 100).toInt()}%",
@@ -552,7 +581,7 @@ private fun SuggestionCard(suggestion: AiParamSuggestion, context: Context) {
                             resultMessage = (r as FclAiAdvisorApplier.ApplyResult.Rejected).reasonNl
                             status = AiSuggestionStatus.REJECTED
                         }
-                    }) { Text("Goedkeuren") }
+                    }) { Text(stringResource(R.string.fcl_ai_apply)) }
 
                     OutlinedButton(onClick = {
                         FclAiAdvisorApplier.reject(suggestion)

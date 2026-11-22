@@ -1,5 +1,6 @@
 package app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.advisor
 
+import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.AggLevels
 import app.aaps.plugins.aps.openAPSFCL.vnext.database.FCLCycleLogEntity
 
 object CurrentAxisStateResolver {
@@ -18,12 +19,15 @@ object CurrentAxisStateResolver {
     // Bereken de effectieve S/T/V zoals ze worden gebruikt na toepassing
     // van de agressiviteitsschuif. Dit is wat de gebruiker ziet en verwacht:
     // consistent met wat StatusFormatter toont na de volgende cyclus.
-    fun withAggLevel(base: StvState, aggLevel: Int): StvState {
-        val scale = (aggLevel - 5) / 4.0
+    // 15/11/2026: each of the three has its own level.
+    fun withAggLevels(base: StvState, agg: AggLevels): StvState {
+        val sScale = (agg.strength - 5) / 4.0
+        val tScale = (agg.timing - 5) / 4.0
+        val vScale = (agg.persistence - 5) / 4.0
         return StvState(
-            sterkte        = (base.sterkte * (1.0 + scale * 0.12)).toInt().coerceIn(75, 130),
-            timing         = (base.timing  * (1.0 + scale * 0.06)).toInt().coerceIn(80, 130),
-            volhoudendheid = (base.volhoudendheid * (1.0 + scale * 0.10)).toInt().coerceIn(70, 130)
+            sterkte        = (base.sterkte * (1.0 + sScale * 0.12)).toInt().coerceIn(75, 130),
+            timing         = (base.timing  * (1.0 + tScale * 0.06)).toInt().coerceIn(80, 130),
+            volhoudendheid = (base.volhoudendheid * (1.0 + vScale * 0.10)).toInt().coerceIn(70, 130)
         )
     }
 

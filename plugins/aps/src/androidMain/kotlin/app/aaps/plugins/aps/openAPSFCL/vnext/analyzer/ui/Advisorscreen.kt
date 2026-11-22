@@ -25,6 +25,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.TextButton
+import app.aaps.plugins.aps.openAPSFCL.vnext.ExperimentStrengths
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.ConfigOverrideWriter
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.DFLearner
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.DFMapping
@@ -66,15 +67,11 @@ fun AdvisorScreen(
     episodeCount: Int = 0,
     episodes: List<Episode> = emptyList(),
     metrics: List<EpisodeMetrics> = emptyList(),
-    activeParams: ConfigOverrideWriter.ActiveParams = ConfigOverrideWriter.ActiveParams(),
     onBack: () -> Unit,
     onApplyToAaps: ((Map<String, Int>) -> Boolean)? = null,
     nightWindows: List<NightWindowEntity> = emptyList(),
-    onApplyNacht: ((Double) -> Boolean)? = null,
     allRows: List<LogRow> = emptyList(),
-    onApplyDFToAaps: ((ConfigOverrideWriter.ParamOverrides, Map<String, Int>) -> Boolean)? = null,
     nfLevel: Double = 5.0,
-    onApplyParams: ((ConfigOverrideWriter.ParamOverrides) -> Boolean)? = null,
     // Klikbare kruisverwijzing (24/07/2026): laat de "Zie ook: AI Advisor
     // → Nacht"-tekst op het Nacht-tabblad hierheen springen met het Nacht-
     // tabblad al open, i.p.v. altijd op Dag te starten.
@@ -103,6 +100,17 @@ fun AdvisorScreen(
 
         Text(s.advisorAnalyse, style = MaterialTheme.typography.headlineMedium)
 
+        // 15/11/2026: everybody sees the same screens and the same buttons. One line when experiments are on.
+        val experimentsContext = androidx.compose.ui.platform.LocalContext.current
+        val experimentsOn = ExperimentStrengths.activeCount(experimentsContext)
+        if (experimentsOn > 0) {
+            Text(
+                s.experimentsOn(experimentsOn),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
 
         // "Automaat leert"-schakelaar verplaatst naar Settings → "🤖 Analyser
         // Automaat" (tussen "Dosering & gedrag" en "Dag / nacht context"),
@@ -112,12 +120,7 @@ fun AdvisorScreen(
         val advisorPages = buildList {
             // ── 1. Automaat: D/F zelflerend systeem (startblad) ──────────
             add(InfoTabPage(s.automaat) {
-                DFControlTab(
-                    episodes    = episodes,
-                    metrics     = metrics,
-                    nfLevel = nfLevel,
-                    onApplyToAaps = onApplyDFToAaps
-                )
+                DFControlTab(nfLevel = nfLevel)
             })
 
             // ── 2. Nacht N: nachtfactor instelling ───────────────────────
@@ -125,7 +128,6 @@ fun AdvisorScreen(
                 NachtControlTab(
                     currentNfLevel = DFLearner.getNfLevel(androidx.compose.ui.platform.LocalContext.current),
                     nightWindows = nightWindows,
-                    onApplyNacht = onApplyNacht,
                     onJumpToAiAdvisorNacht = onJumpToAiAdvisorNacht
                 )
             })
@@ -140,13 +142,7 @@ fun AdvisorScreen(
             // Experimenteel: verhuisd (2/11/2026) naar een eigen buitenste tabblad tussen Statistics en
             // Settings, zie FclExperimentScreen.kt en FCLComposeContent.kt.
 
-            // ── Expert: Parameters, Backup en Analyse tabs ───────────────
-            add(InfoTabPage(s.parameters) {
-                HandmatigParametersTab(
-                    activeParams  = activeParams,
-                    onApplyParams = onApplyParams
-                )
-            })
+            // 15/11/2026: the read-only Fine-tuning tab is gone. The values are in the CSV and the settings export.
             // Backup & herstel van de geleerde staat (26/08/2026) — zie
             // FclLearnerBackup.kt / FclBackupRestoreCard.kt: aanleiding
             // was het verlies van sterkte/timing/volhoudendheid bij de
@@ -156,7 +152,7 @@ fun AdvisorScreen(
                 FclBackupRestoreCard()
             })
             add(InfoTabPage(s.analyse) {
-                AdvisorOverviewCard(recommendation)
+                // 15/11/2026: the overview, selection, signals and pattern scores are gone. Nothing there could be changed.
                 AdvisorSummaryCard(recommendation)
                 Spacer(Modifier.height(4.dp))
                 AdvisorActionCard(
@@ -166,10 +162,6 @@ fun AdvisorScreen(
                     onApplyToAaps = onApplyToAaps
                 )
                 AdvisorCurrentSettingsCard(current)
-                Spacer(Modifier.height(8.dp))
-                AdvisorSelectionCard(recommendation)
-                AdvisorAxisEvidenceCard(recommendation)
-                AdvisorPatternScoresCard(recommendation)
             })
         }
 
@@ -178,235 +170,6 @@ fun AdvisorScreen(
             pages = advisorPages,
             initialTab = initialTab
         )
-    }
-}
-
-@Composable
-private fun AdvisorOverviewCard(recommendation: FclAdvisorRecommendation) {
-    val s = FclStrings.get(androidx.compose.ui.platform.LocalContext.current)
-    val stats = recommendation.stats
-    val selection = recommendation.selectionInfo
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            Text(s.advisorOverzicht, style = MaterialTheme.typography.titleMedium)
-
-            Text(
-                formatPatternLabel(recommendation.dominantPattern),
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold
-            )
-
-            Text(
-                FclAdviceText.explainPattern(recommendation.dominantPattern),
-                style = MaterialTheme.typography.bodyMedium
-            )
-
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                AdvisorMetricBlock(s.confidence, "${(recommendation.confidence * 100).toInt()}%")
-                AdvisorMetricBlock(s.gebruikt, "${selection.usedEpisodeCount}")
-                AdvisorMetricBlock(s.uitgesloten, "${selection.excludedTotal}")
-            }
-
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                AdvisorMetricBlock(s.avgPeak, "%.1f".format(stats.avgPeakBg))
-                AdvisorMetricBlock(s.avgInsuline, "%.2f U".format(stats.avgInsulinDelivered))
-                AdvisorMetricBlock(s.avgDuur, "${stats.avgDurationMinutes} min")
-            }
-
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                AdvisorMetricBlock(s.hyper, "${stats.hyperPercent}%")
-                AdvisorMetricBlock(s.hypo, "${stats.hypoPercent}%")
-                AdvisorMetricBlock("Binnen doel", "${stats.meetsGoalPercent}%")
-            }
-        }
-    }
-}
-
-@Composable
-private fun AdvisorSelectionCard(recommendation: FclAdvisorRecommendation) {
-    val s = FclStrings.get(androidx.compose.ui.platform.LocalContext.current)
-    val selection = recommendation.selectionInfo
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Text("Episode-selectie", style = MaterialTheme.typography.titleMedium)
-
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                AdvisorMetricBlock("Totaal", "${selection.totalEpisodesSeen}")
-                AdvisorMetricBlock(s.gebruikt, "${selection.usedEpisodeCount}")
-                AdvisorMetricBlock(s.uitgesloten, "${selection.excludedTotal}")
-            }
-
-            if (selection.excludedTotal > 0) {
-                if (selection.excludedOtherSettings > 0)
-                    Text("Andere instellingen: ${selection.excludedOtherSettings}")
-                if (selection.excludedLowInsulin > 0)
-                    Text("Te weinig insuline: ${selection.excludedLowInsulin}")
-                if (selection.excludedConsumed > 0)
-                    Text("Verbruikt na profielwijziging: ${selection.excludedConsumed}")
-                if (selection.excludedIncomplete > 0)
-                    Text("Nog live / incompleet: ${selection.excludedIncomplete}")
-            } else {
-                Text(
-                    "Alle zichtbare episodes zijn meegenomen in de analyse.",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun AdvisorPatternScoresCard(recommendation: FclAdvisorRecommendation) {
-    if (recommendation.patternScores.isEmpty()) return
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Text("Patroonscores", style = MaterialTheme.typography.titleMedium)
-
-            recommendation.patternScores.forEach { score ->
-                val isDominant = score.pattern == recommendation.dominantPattern
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = formatPatternLabel(score.pattern),
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = if (isDominant) FontWeight.Bold else FontWeight.Normal
-                        )
-                        Text(
-                            text = "${(score.score * 100).roundToInt()}%",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = if (isDominant) FontWeight.Bold else FontWeight.Normal,
-                            color = if (isDominant) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(6.dp)
-                            .clip(RoundedCornerShape(3.dp))
-                            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth(score.score.toFloat().coerceIn(0f, 1f))
-                                .height(6.dp)
-                                .clip(RoundedCornerShape(3.dp))
-                                .background(
-                                    if (isDominant) MaterialTheme.colorScheme.primary
-                                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f)
-                                )
-                        )
-                    }
-
-                    Text(
-                        text = score.reason,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-                    )
-                }
-
-                if (score != recommendation.patternScores.last()) {
-                    Divider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun AdvisorAxisEvidenceCard(recommendation: FclAdvisorRecommendation) {
-    if (recommendation.axisEvidence.isEmpty()) return
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Text("As-signalen", style = MaterialTheme.typography.titleMedium)
-
-            recommendation.axisEvidence.forEach { evidence ->
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = formatAxisLabel(evidence.axis),
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            text = formatAxisEvidenceStatus(evidence),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = evidenceStatusColor(evidence)
-                        )
-                    }
-
-                    if (evidence.strength >= 0.18) {
-                        val barColor = when {
-                            evidence.direction > 0 -> MaterialTheme.colorScheme.primary
-                            evidence.direction < 0 -> MaterialTheme.colorScheme.error
-                            else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f)
-                        }
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(6.dp)
-                                .clip(RoundedCornerShape(3.dp))
-                                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth(evidence.strength.toFloat().coerceIn(0f, 1f))
-                                    .height(6.dp)
-                                    .clip(RoundedCornerShape(3.dp))
-                                    .background(barColor)
-                            )
-                        }
-                    }
-
-                    Text(
-                        text = evidence.reason,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-                    )
-                }
-
-                if (evidence != recommendation.axisEvidence.last()) {
-                    Divider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
-                }
-            }
-        }
     }
 }
 
@@ -635,15 +398,6 @@ private fun AdvisorSummaryCard(recommendation: FclAdvisorRecommendation) {
 
 @Composable
 private fun AdvisorCurrentSettingsCard(current: StvState) {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val aggLevel = app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.DFLearner.getAggressiveness(context)
-    val aggLabel = when {
-        aggLevel <= 2 -> "Zeer voorzichtig"
-        aggLevel <= 4 -> "Voorzichtig"
-        aggLevel == 5 -> "Standaard"
-        aggLevel <= 7 -> "Agressief"
-        else          -> "Maximaal agressief"
-    }
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -652,57 +406,12 @@ private fun AdvisorCurrentSettingsCard(current: StvState) {
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Huidige instellingen", style = MaterialTheme.typography.titleMedium)
-                Text("Agressiviteit $aggLevel — $aggLabel",
-                     style = MaterialTheme.typography.labelSmall,
-                     color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+            Text("Huidige instellingen", style = MaterialTheme.typography.titleMedium)
             Text("💪 Sterkte (S): ${current.sterkte}%")
             Text("⏱️ Timing (T): ${current.timing}%")
-            Text("🔁 Volhoudendheid (V): ${current.volhoudendheid}%")
-            if (aggLevel != 5) {
-                Text(
-                    "Agressiviteitsschuif staat op $aggLevel — waarden zijn al gecorrigeerd.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
         }
     }
 }
-
-@Composable
-private fun AdvisorMetricBlock(label: String, value: String) {
-    Column {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-        )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold
-        )
-    }
-}
-
-private fun formatPatternLabel(pattern: FclPattern): String =
-    when (pattern) {
-        FclPattern.FLAT_GOOD -> "Stabiel patroon"
-        FclPattern.EARLY_SPIKE -> "Vroege piek"
-        FclPattern.LATE_PEAK -> "Late piek"
-        FclPattern.EARLY_HYPO -> "Vroege hypo"
-        FclPattern.LATE_HYPO -> "Late hypo"
-        FclPattern.LONG_HIGH_TAIL -> "Lang hoge staart"
-        FclPattern.OSCILLATING_RESPONSE -> "Oscillerende respons"
-        FclPattern.MIXED_UNCLEAR -> "Gemengd / onduidelijk"
-    }
 
 private fun formatAxisLabel(axis: StvAxis): String =
     when (axis) {
@@ -721,23 +430,6 @@ private fun formatAxisLabelFromName(axisName: String): String =
         else             -> axisName
     }
 
-private fun formatAxisEvidenceStatus(evidence: FclAxisEvidence): String =
-    when {
-        evidence.direction == 0 || evidence.strength < 0.18 -> "Geen sterk signaal"
-        evidence.strength < 0.45 && evidence.direction > 0 -> "Lichte aanwijzing omhoog ↑"
-        evidence.strength < 0.45 && evidence.direction < 0 -> "Lichte aanwijzing omlaag ↓"
-        evidence.direction > 0 -> "Duidelijk omhoog ↑"
-        else -> "Duidelijk omlaag ↓"
-    }
-
-@Composable
-private fun evidenceStatusColor(evidence: FclAxisEvidence) = when {
-    evidence.direction == 0 || evidence.strength < 0.18 ->
-        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-    evidence.direction > 0 -> MaterialTheme.colorScheme.primary
-    else -> MaterialTheme.colorScheme.error
-}
-
 // ════════════════════════════════════════════════════════════════════════════
 // ════════════════════════════════════════════════════════════════════════════
 // NachtControlTab — structureel identiek aan DFControlTab (dag-aggressiviteit)
@@ -749,147 +441,20 @@ private fun evidenceStatusColor(evidence: FclAxisEvidence) = when {
 fun NachtControlTab(
     currentNfLevel: Double,
     nightWindows: List<NightWindowEntity>,
-    onApplyNacht: ((Double) -> Boolean)?,
     onJumpToAiAdvisorNacht: (() -> Unit)? = null
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
 
-    // Geleerde NF (door NachtLearner bijgesteld) en de losse handmatige
-    // Nacht-Agressiviteit-stap (door de gebruiker, NOOIT door de learner
-    // aangeraakt) — zelfde opzet als Dag: D/F worden geleerd, de
-    // Agressiviteit-schuif stapelt daar onafhankelijk bovenop. Hier:
-    // currentNfLevel = geleerde NF, nachtAgg = handmatige stap.
-    var nachtAgg by remember { mutableStateOf(DFLearner.getNachtAggressiviteit(context)) }
-    var lastAppliedAgg by remember { mutableStateOf(DFLearner.getLastAppliedNachtAggressiviteit(context)) }
-    var lastAppliedNfLevel by remember { mutableStateOf(DFLearner.getLastAppliedNfLevel(context)) }
-    var applyResult by remember { mutableStateOf<String?>(null) }
-    var applyTs by remember { mutableStateOf(0L) }
-
-    val effectieveNf = (currentNfLevel + (nachtAgg - DFLearner.NACHT_AGGRESSIVITEIT_DEFAULT))
-        .coerceIn(1.0, 9.0)
-    val labelVoorEffectief: String = DFMapping.nfLabel(effectieveNf)
-    val gainPct = DFMapping.nfGainPct(effectieveNf)
-
-    val accentKleur = when {
-        effectieveNf <= 2 -> androidx.compose.ui.graphics.Color(0xFF4FC3F7)
-        effectieveNf <= 4 -> androidx.compose.ui.graphics.Color(0xFF81C784)
-        effectieveNf in 4.1..6.0 -> MaterialTheme.colorScheme.primary
-        effectieveNf <= 7 -> androidx.compose.ui.graphics.Color(0xFFFFB74D)
-        else -> androidx.compose.ui.graphics.Color(0xFFE57373)
-    }
-
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
 
-        // ── Nacht Agressiviteit (handmatige laag, los van geleerde NF) ───
-        // Analoog aan AggressiviteitsKaart bij Dag: deze schuif staat los
-        // van wat de NachtLearner leert. Niveau 5 = geen extra effect; de
-        // schuif telt als hele stappen op/af bij de geleerde NF.
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(
-                containerColor = accentKleur.copy(alpha = 0.10f)
-            )
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        "🌙 Nacht Agressiviteit",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        "$nachtAgg  —  ${DFMapping.nfLabel(nachtAgg.toDouble())}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = accentKleur
-                    )
-                }
-                Text(
-                    "Eigen stap bovenop de geleerde NF (${currentNfLevel.toInt()}) — " +
-                        "5 = geen effect. Effectief: NF ${effectieveNf.toInt()} " +
-                        "(~$gainPct% gain, $labelVoorEffectief)",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                androidx.compose.material3.Slider(
-                    value = nachtAgg.toFloat(),
-                    onValueChange = {
-                        nachtAgg = it.toInt().coerceIn(
-                            DFLearner.NACHT_AGGRESSIVITEIT_MIN, DFLearner.NACHT_AGGRESSIVITEIT_MAX
-                        )
-                        DFLearner.setNachtAggressiviteit(context, nachtAgg)
-                    },
-                    valueRange = 1f..9f,
-                    steps = 7,
-                    colors = androidx.compose.material3.SliderDefaults.colors(
-                        thumbColor = accentKleur,
-                        activeTrackColor = accentKleur
-                    )
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("Voorzichtiger",
-                         style = MaterialTheme.typography.labelSmall,
-                         color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("Proactiever",
-                         style = MaterialTheme.typography.labelSmall,
-                         color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-
-                // Toon ook de knop als de geleerde NF zelf is veranderd maar
-                // (nog) niet is toegepast — bv. omdat "Automaat leert" uit
-                // staat, of de NachtLearner net heeft bijgesteld voordat de
-                // gebruiker hier kijkt.
-                val nfNogNietToegepast = kotlin.math.abs(currentNfLevel - lastAppliedNfLevel) > 0.01
-                if (onApplyNacht != null && (nachtAgg != lastAppliedAgg || nfNogNietToegepast)) {
-                    Button(
-                        onClick = {
-                            val ok = onApplyNacht(effectieveNf)
-                            applyResult = if (ok) "✓ NF verzonden naar AAPS" else "✗ Verzenden mislukt"
-                            applyTs = System.currentTimeMillis()
-                            if (ok) {
-                                DFLearner.setLastAppliedNachtAggressiviteit(context, nachtAgg)
-                                DFLearner.setLastAppliedNfLevel(context, currentNfLevel)
-                                lastAppliedAgg = nachtAgg
-                                lastAppliedNfLevel = currentNfLevel
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = accentKleur)
-                    ) { Text("Toepassen in AAPS") }
-
-                    applyResult?.let { msg ->
-                        if (System.currentTimeMillis() - applyTs < 20_000L) {
-                            Text(
-                                msg,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (msg.startsWith("✓")) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.error
-                            )
-                        }
-                    }
-                }
-            }
-        }
+        // 15/11/2026: the night slider is in Settings, on the card "Dosis & gedrag".
 
         // Statusregel (19/08/2026) — stond voorheen (samen met de Dag-
         // variant) op het Dag-tabblad; hoort hier thuis, bij de rest van de
         // Nacht-instellingen.
         app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.ui.FclModeStatusLine(DFLearner.getMode(context, isNight = true), label = "Nacht")
 
-        // ── NF-kaart: GELEERDE NF (door NachtLearner) — hoofdwaarde +
-        // 14-dagen verloop + laatste aanpassing. Onaangeraakt door de
-        // handmatige Nacht-Agressiviteit hierboven, zodat dit zuiver toont
-        // hoe de automaat zelf leert (net als de Sterkte/Timing-kaarten bij
-        // Dag, die ook de geleerde D/F tonen, niet de Agressiviteit-schuif).
+        // NF card: what the night learner learned (value, 14 day history, last change).
         NfKaart(s = FclStrings.get(context), currentNf = currentNfLevel)
 
         // ── Learner — Nacht: openstaand MANUAL-voorstel (26/07/2026) ──
@@ -1589,186 +1154,3 @@ private fun BasalProfileChart(
 private val FCL_CHART_HUIDIG_COLOR = Color(0xFFFFA000)
 
 // (Basaal-adviseur-kaart hier verwijderd, zie NachtControlTab hierboven.)
-
-// ── HandmatigParametersTab ────────────────────────────────────────────────
-// Toont de actuele FCLvNext-parameters als leesweergave.
-// Parameters worden beheerd via DFMapping (Automaat-tab, Kalibratie-sectie).
-
-@Composable
-private fun HandmatigParametersTab(
-    activeParams: ConfigOverrideWriter.ActiveParams,
-    onApplyParams: ((ConfigOverrideWriter.ParamOverrides) -> Boolean)?
-) {
-    val s = FclStrings.get(androidx.compose.ui.platform.LocalContext.current)
-    val D = ConfigOverrideWriter.Defaults
-    val mgdl = app.aaps.plugins.aps.openAPSFCL.vnext.BgUnits.isMgdl(androidx.compose.ui.platform.LocalContext.current)
-
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Text(
-            s.actuelParams,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold
-        )
-        Text(
-            "Deze waarden worden automatisch berekend door het systeem op basis van " +
-                "S/T/V en de Kalibratie-instellingen in de Automaat-tab. " +
-                "Aanpassen kan via die knoppen.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
-        ParameterLeesCategorie("⏱ Commit & timing") {
-            ParameterLeesRij("Stijgingsdrempel frontload",  app.aaps.plugins.aps.openAPSFCL.vnext.BgUnits.formatDelta(activeParams.watchingMinDeltaToTarget, mgdl), D.WATCHING_MIN_DELTA_TARGET)
-            ParameterLeesRij("Frontload grootte",           "%.0f%%".format(activeParams.watchingFrontloadFrac * 100),  D.WATCHING_FRONTLOAD_FRAC * 100)
-            ParameterLeesRij("Commit pauze",                "${activeParams.commitCooldownMinutes} min",                D.COMMIT_COOLDOWN_MINUTES.toDouble(), activeParams.commitCooldownMinutes.toDouble())
-        }
-
-        ParameterLeesCategorie("📈 Piekdrempels") {
-            ParameterLeesRij("Piekdrempel",        app.aaps.plugins.aps.openAPSFCL.vnext.BgUnits.formatBg(activeParams.peakPredictionThreshold, mgdl),       D.PEAK_PREDICTION_THRESHOLD)
-            ParameterLeesRij("Piekhorizon",         "%.1f uur".format(activeParams.peakPredictionHorizonH),        D.PEAK_PREDICTION_HORIZON_H)
-            ParameterLeesRij("IOB startfractie",    "%.2f".format(activeParams.iobStart),                          D.IOB_START)
-            ParameterLeesRij("IOB-remdrempel piek", "%.2f".format(activeParams.peakIobBrakeSuppressThreshold),     D.PEAK_IOB_BRAKE_SUPPRESS)
-        }
-
-        val ctx3 = androidx.compose.ui.platform.LocalContext.current
-        val ebBoost   = app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.DFLearner.getEarlyBoostFactor(ctx3)
-        val ebWatch   = app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.DFLearner.getWatchingFrac(ctx3)
-        val ebStep    = app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.DFLearner.getEbStepSize(ctx3)
-        val ebLastSig3 = app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.DFLearner.getEbLastSignal(ctx3)
-        val ebLastTs3  = app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.DFLearner.getEbLastSignalTs(ctx3)
-        val ebDefault = 1.69
-        val ebGeleerd = kotlin.math.abs(ebBoost - ebDefault) > 0.005
-
-        // Leesbare richting gebaseerd op afwijking t.o.v. standaard
-        val ebRichting = when {
-            !ebGeleerd                -> "Standaard — nog geen aanpassing"
-            ebBoost > ebDefault + 0.10 -> "Sterk naar voren verschoven"
-            ebBoost > ebDefault + 0.03 -> "Licht naar voren verschoven"
-            ebBoost < ebDefault - 0.10 -> "Sterk naar achteren bijgesteld"
-            ebBoost < ebDefault - 0.03 -> "Licht naar achteren bijgesteld"
-            else                      -> "Dicht bij standaard"
-        }
-        // Zoekstap: hoe fijn zoekt het systeem momenteel?
-        val ebStapUitleg = when {
-            ebStep >= 0.10 -> "Grofzoeken (%.2fU stap)".format(ebStep)
-            ebStep >= 0.04 -> "Normaal zoeken (%.2fU stap)".format(ebStep)
-            else           -> "Fijnzoeken — nabij optimum (%.2fU stap)".format(ebStep)
-        }
-        val ebTsFormatted3 = if (ebLastTs3 > 0L) {
-            try {
-                java.time.format.DateTimeFormatter.ofPattern("dd/MM HH:mm")
-                    .withZone(java.time.ZoneId.systemDefault())
-                    .format(java.time.Instant.ofEpochMilli(ebLastTs3))
-            } catch (_: Exception) { "" }
-        } else ""
-        val ebSigEmoji3 = when (ebLastSig3) {
-            "FORWARD" -> "➡"
-            "BACK"    -> "⬅"
-            else      -> "⏸"
-        }
-
-        ParameterLeesCategorie("🚀 Early Boost") {
-            ParameterLeesRij("Boostfactor",          "%.2f ×".format(activeParams.earlyBoostFactor),            D.EARLY_BOOST_FACTOR)
-            ParameterLeesRij("Min. betrouwbaarheid", "%.2f".format(activeParams.earlyBoostMinConfidence),       D.EARLY_BOOST_MIN_CONFIDENCE)
-            ParameterLeesRij("Max. boost-commits",   "${activeParams.earlyBoostMaxCommits}",                    D.EARLY_BOOST_MAX_COMMITS.toDouble(), activeParams.earlyBoostMaxCommits.toDouble())
-            if (ebGeleerd || true) {
-                Spacer(Modifier.height(4.dp))
-                // Geleerde timing stand
-                Row(modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Geleerde timingverschuiving",
-                             style = MaterialTheme.typography.bodySmall,
-                             color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(ebRichting,
-                             style = MaterialTheme.typography.bodySmall,
-                             fontWeight = FontWeight.Medium,
-                             color = when {
-                                 ebBoost > ebDefault + 0.03 -> MaterialTheme.colorScheme.primary
-                                 ebBoost < ebDefault - 0.03 -> MaterialTheme.colorScheme.error
-                                 else -> MaterialTheme.colorScheme.onSurface
-                             })
-                        Text(ebStapUitleg,
-                             style = MaterialTheme.typography.labelSmall,
-                             color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        // Laatste evaluatie + signaal
-                        if (ebTsFormatted3.isNotEmpty()) {
-                            Spacer(Modifier.height(2.dp))
-                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                verticalAlignment = Alignment.CenterVertically) {
-                                Text("$ebSigEmoji3 Laatste evaluatie: $ebLastSig3",
-                                     style = MaterialTheme.typography.labelSmall,
-                                     color = when (ebLastSig3) {
-                                         "FORWARD" -> MaterialTheme.colorScheme.primary
-                                         "BACK"    -> MaterialTheme.colorScheme.error
-                                         else      -> MaterialTheme.colorScheme.onSurfaceVariant
-                                     })
-                                Text("·  $ebTsFormatted3",
-                                     style = MaterialTheme.typography.labelSmall,
-                                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
-                            }
-                        }
-                    }
-                    Text("boost %.3f\nwatch %.3f".format(ebBoost, ebWatch),
-                         style = MaterialTheme.typography.labelSmall,
-                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                         textAlign = androidx.compose.ui.text.style.TextAlign.End)
-                }
-            }
-        }
-
-        ParameterLeesCategorie("🔀 Frontload-shift") {
-            ParameterLeesRij("Late decay factor",  "%.2f".format(activeParams.lateCommitDecayFactor),    D.LATE_COMMIT_DECAY_FACTOR)
-            ParameterLeesRij("Decay drempel",      "%.2f".format(activeParams.lateCommitDecayThreshold), D.LATE_COMMIT_DECAY_THRESHOLD)
-            ParameterLeesRij("Vroege piek-bias",   app.aaps.plugins.aps.openAPSFCL.vnext.BgUnits.formatDelta(activeParams.earlyPeakBiasMmol, mgdl), D.EARLY_PEAK_BIAS_MMOL)
-        }
-    }
-}
-
-@Composable
-private fun ParameterLeesCategorie(
-    titel: String,
-    content: @Composable () -> Unit
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-    ) {
-        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(titel, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-            Divider()
-            content()
-        }
-    }
-}
-
-@Composable
-private fun ParameterLeesRij(
-    naam: String,
-    waarde: String,
-    defaultVal: Double,
-    huidigeDouble: Double? = null
-) {
-    // Vergelijk huidige waarde met default voor kleurcodering
-    val huidig = huidigeDouble ?: waarde.filter { it.isDigit() || it == '.' || it == ',' }
-        .replace(',', '.').toDoubleOrNull()
-    val kleur = when {
-        huidig == null                       -> MaterialTheme.colorScheme.onSurface
-        huidig > defaultVal + 0.001          -> MaterialTheme.colorScheme.primary
-        huidig < defaultVal - 0.001          -> MaterialTheme.colorScheme.tertiary
-        else                                 -> MaterialTheme.colorScheme.onSurface
-    }
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Text(naam, style = MaterialTheme.typography.bodySmall,
-             color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(waarde, style = MaterialTheme.typography.bodySmall,
-             fontWeight = FontWeight.Medium, color = kleur)
-    }
-}

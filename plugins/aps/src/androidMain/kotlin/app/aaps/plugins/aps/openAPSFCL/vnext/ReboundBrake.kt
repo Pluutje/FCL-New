@@ -54,6 +54,18 @@ object ReboundBrake {
     /** At this BG (mmol/L) and higher the brake is gone. */
     const val BG_FADE_TO = 12.0
 
+    /** Rebound gate: lowest BG (mmol/L) from which the gate starts. */
+    const val GATE_LOW_FROM = 4.5
+
+    /** Rebound gate: lowest BG (mmol/L) at which the gate is full. */
+    const val GATE_LOW_TO = 3.8
+
+    /** Rebound gate: rise since the meal start (mmol/L) up to which the gate is full. */
+    const val GATE_RISE_FULL = 2.0
+
+    /** Rebound gate: rise since the meal start (mmol/L) at which the gate is gone. */
+    const val GATE_RISE_ZERO = 4.0
+
     /** The strength (as a factor) at which the maximum cut is [MAX_CUT_AT_REFERENCE]. */
     const val REFERENCE_STRENGTH = 0.75
 
@@ -108,11 +120,25 @@ object ReboundBrake {
         lowestBg: Double,
         minutesSinceLowest: Double,
         bg: Double,
-        alreadyCutFraction: Double
+        alreadyCutFraction: Double,
+        riseSinceMealStart: Double? = null
     ): Double {
-        val cut = maxCut(strength) * lowSeverity(lowestBg, minutesSinceLowest) * bgFade(bg) *
-            (1.0 - alreadyCutFraction.coerceIn(0.0, 1.0))
-        return 1.0 - cut
+        val notCut = 1.0 - alreadyCutFraction.coerceIn(0.0, 1.0)
+        val brakeCut = maxCut(strength) * lowSeverity(lowestBg, minutesSinceLowest) * bgFade(bg) * notCut
+        val gate = gateCut(strength, lowestBg, riseSinceMealStart) * notCut
+        return 1.0 - maxOf(brakeCut, gate)
+    }
+
+    /**
+     * Rebound gate: a meal start right after a low BG doses weaker, until the rise has proven that it is a real meal.
+     * 0 to [MAX_CUT]. Without a meal episode ([riseSinceMealStart] null) it is 0.
+     * It is full while the rise is [GATE_RISE_FULL] mmol/L or less, and fades smoothly to 0 at [GATE_RISE_ZERO].
+     */
+    fun gateCut(strength: Double, lowestBg: Double, riseSinceMealStart: Double?): Double {
+        val rise = riseSinceMealStart ?: return 0.0
+        val depth = smooth01((GATE_LOW_FROM - lowestBg) / (GATE_LOW_FROM - GATE_LOW_TO))
+        val unproven = 1.0 - smooth01((rise - GATE_RISE_FULL) / (GATE_RISE_ZERO - GATE_RISE_FULL))
+        return maxCut(strength) * depth * unproven
     }
 
     /**

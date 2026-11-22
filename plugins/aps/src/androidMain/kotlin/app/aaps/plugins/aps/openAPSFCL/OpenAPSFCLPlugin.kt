@@ -201,6 +201,8 @@ open class OpenAPSFCLPlugin @Inject constructor(
         // NotificationManager beschikbaar voor FclAiNotificationHelper
         // (dat zelf geen constructor-injectie heeft, zie FclNotificationManagerBridge.kt).
         app.aaps.plugins.aps.openAPSFCL.vnext.FclNotificationManagerBridge.set(notificationManager)
+        // The AI advisor screen reads and writes max SMB / max IOB through this store.
+        app.aaps.plugins.aps.openAPSFCL.vnext.FclSettingsStoreBridge.set(sp)
 
         // 08/07/2026 — waarborgt dat Documents/AAPS/ANALYSE bestaat, vóórdat
         // welke van de acht onafhankelijke schrijvers/lezers dan ook (FCLCycleLogRepository,
@@ -623,20 +625,8 @@ open class OpenAPSFCLPlugin @Inject constructor(
     override fun getPreferenceScreenContent() = PreferenceSubScreenDef(
         key = "fcl_vnext_settings",
         titleResId = R.string.openaps_fcl,
-        items = listOf(
-            PreferenceSubScreenDef(
-                key = "fcl_vnext_general",
-                titleResId = R.string.fcl_vnext_general_title,
-                items = listOf(
-                    DoubleKey.fcl_aaps_mulitplier_day,
-                    DoubleKey.fcl_aaps_mulitplier_night,
-                    /*   DoubleKey.max_bolus_night,
-                       DoubleKey.fcl_vnext_MaxIOB,
-                       StringKey.fcl_vnext_dose_distribution_style,
-                       // StringKey.fcl_vnext_night_response_style verwijderd (18/06/2026)
-                       // DoubleKey.fcl_vnext_nf_level   */
-                )
-            ),
+        // 15/11/2026: the AAPS multiplier settings are gone (fixed in DetermineBasalFCL), so this screen has no items.
+        items = emptyList<PreferenceSubScreenDef>(
             /*   PreferenceSubScreenDef(
                    key = "fcl_vnext_context",
                    titleResId = R.string.fcl_vnext_context_title,

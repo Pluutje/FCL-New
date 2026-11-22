@@ -49,8 +49,14 @@ object FclLearnerPendingProposal {
         // de nieuwe absolute getallen.
         val diagnose: String = "",
         val oldD: Double = d,
-        val oldF: Double = f
-    )
+        val oldF: Double = f,
+        // 15/11/2026: [agg] is the strength level. Timing and persistence have their own level. An old proposal
+        // has only [agg], so both fall back on it.
+        val aggTiming: Int = agg,
+        val aggPersistence: Int = agg
+    ) {
+        fun levels() = AggLevels(agg, aggTiming, aggPersistence)
+    }
 
     private fun toJson(p: Proposal): String = JSONObject()
         .put("ts", p.tsMs)
@@ -68,6 +74,8 @@ object FclLearnerPendingProposal {
         .put("diagnose", p.diagnose)
         .put("oldD", p.oldD)
         .put("oldF", p.oldF)
+        .put("aggTiming", p.aggTiming)
+        .put("aggPersistence", p.aggPersistence)
         .toString()
 
     private fun fromJson(raw: String): Proposal? = try {
@@ -87,7 +95,9 @@ object FclLearnerPendingProposal {
             reason = o.optString("reason", ""),
             diagnose = o.optString("diagnose", ""),
             oldD = o.optDouble("oldD", o.getDouble("d")),
-            oldF = o.optDouble("oldF", o.getDouble("f"))
+            oldF = o.optDouble("oldF", o.getDouble("f")),
+            aggTiming = o.optInt("aggTiming", o.getInt("agg")),
+            aggPersistence = o.optInt("aggPersistence", o.getInt("agg"))
         )
     } catch (e: Exception) {
         null

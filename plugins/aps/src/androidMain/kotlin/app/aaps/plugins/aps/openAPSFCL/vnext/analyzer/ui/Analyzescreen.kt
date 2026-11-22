@@ -59,11 +59,13 @@ fun AnalyzeScreen(
     currentAxisState: FclAxisState,
     episodeEntities: List<EpisodeEntity> = emptyList(),
     onRescueUserConfirmed: (startTs: String, confirmed: String) -> Unit = { _, _ -> },
+    startIndex: Int? = null,
     onBack: () -> Unit
 ) {
     val s = FclStrings.get(androidx.compose.ui.platform.LocalContext.current)
+    val firstPage = (startIndex ?: episodes.lastIndex).coerceIn(0, episodes.lastIndex.coerceAtLeast(0))
     var currentPage by remember(episodes.size) {
-        mutableStateOf(episodes.lastIndex.coerceAtLeast(0))
+        mutableStateOf(firstPage)
     }
 
     val episode = episodes.getOrNull(currentPage)
@@ -103,7 +105,8 @@ fun AnalyzeScreen(
             episodes = episodes,
             episodeEntities = episodeEntities,
             onPageChanged = { page -> currentPage = page },
-            onRescueUserConfirmed = onRescueUserConfirmed
+            onRescueUserConfirmed = onRescueUserConfirmed,
+            initialPage = firstPage
         )
 
         if (episode != null && metrics != null && classification != null && autonomy != null) {

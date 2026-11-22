@@ -88,8 +88,15 @@ object FclSettingsExport {
                 current["strength_${experiment.key}_percent"] = ExperimentStrengths.percent(context, experiment).toString()
             }
             // 14/11/2026: the aggressiveness sliders (day and night) were not in the change log.
-            current["aggressiveness_day"] = DFLearner.getAggressiveness(context).toString()
+            // 15/11/2026: the day level is now three levels. The old fields stay (the old single level and the
+            // night level), and the four levels get clear names.
+            val levels = DFLearner.getAggLevels(context)
+            current["aggressiveness_day"] = DFLearner.getLegacyAggressiveness(context).toString()
             current["aggressiveness_night"] = DFLearner.getNachtAggressiviteit(context).toString()
+            current["level_strength"] = levels.strength.toString()
+            current["level_timing"] = levels.timing.toString()
+            current["level_persistence"] = levels.persistence.toString()
+            current["level_night"] = DFLearner.getNachtAggressiviteit(context).toString()
             val prefs = context.getSharedPreferences(LOG_PREFS, Context.MODE_PRIVATE)
             val last = (prefs.getString(KEY_LAST, "") ?: "").split("\n").filter { it.contains("=") }
                 .associate { it.substringBefore("=") to it.substringAfter("=") }
@@ -166,8 +173,6 @@ object FclSettingsExport {
         sections += "tuning" to runCatching {
             val t = JSONObject()
             t.put("safety_max_bolus", preferences.get(DoubleKey.SafetyMaxBolus))
-            t.put("aaps_multiplier_day", preferences.get(DoubleKey.fcl_aaps_mulitplier_day))
-            t.put("aaps_multiplier_night", preferences.get(DoubleKey.fcl_aaps_mulitplier_night))
             t.put("commit_cooldown_minutes", preferences.get(IntKey.fcl_vnext_commit_cooldown_minutes))
             t.put("early_boost_max_commits", preferences.get(IntKey.fcl_vnext_early_boost_max_commits))
             t.put("sustained_rise_min_target", preferences.get(IntKey.fcl_vnext_sustained_rise_min_target))

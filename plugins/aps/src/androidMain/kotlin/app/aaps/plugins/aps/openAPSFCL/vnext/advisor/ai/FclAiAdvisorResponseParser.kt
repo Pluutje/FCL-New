@@ -54,10 +54,11 @@ object FclAiAdvisorResponseParser {
             results += validateOne(obj, payload)
         }
 
-        // 21/07/2026 — zie kdoc bij AiAdvisorRunResult.advisoryNoteNl:
-        // puur informatief, geen voorstel, dus geen validatie tegen
-        // FclAiAdvisorRanges nodig — alleen leeg/blank normaliseren naar null.
-        val advisoryNote = json.optString("advisoryNoteNl", "").trim().ifBlank { null }
+        // Information only, not a suggestion, so no validation against the ranges. A JSON null
+        // (optString would give the text "null") and a blank text both become null.
+        val advisoryNote = if (json.isNull("advisoryNoteNl")) null
+        else json.optString("advisoryNoteNl", "").trim()
+            .takeUnless { it.isBlank() || it.equals("null", ignoreCase = true) }
 
         return AiAdvisorRunResult(
             generatedAtUtc = payload.dateUtc,
@@ -77,8 +78,8 @@ object FclAiAdvisorResponseParser {
             (0 until arr.length()).map { arr.optString(it, "") }.filter { it.isNotBlank() }
         } ?: emptyList()
 
-        val currentValueFromPayload = payload.activeParams[param]?.active
-        val currentValue = currentValueFromPayload ?: obj.optDouble("currentValue", Double.NaN)
+        // The current value always comes from our own data, never from the model.
+        val currentValue = payload.activeParams[param]?.active ?: obj.optDouble("currentValue", Double.NaN)
 
         val spec = FclAiAdvisorRanges.byKey[param]
 
@@ -88,12 +89,9 @@ object FclAiAdvisorResponseParser {
             rejected = true, rejectionReasonNl = reasonNl
         )
 
-        if (spec == null) return rejected("Onbekende parameter '$param' — niet in toegestane lijst")
+        if (spec == null) return rejected("Onbekende instelling '$param' — niet in toegestane lijst")
         if (proposedValue.isNaN()) return rejected("Ontbrekende of ongeldige proposedValue")
-        // Confidence-vloer (18/07/2026): voorstellen onder deze drempel worden
-        // nooit als actionable kaart getoond, ongeacht hoe goed de rest van de
-        // validatie eruitziet — een correct-onderbouwd voorstel met lage confidence
-        // is nog steeds een voorstel waar het model zelf niet zeker van is.
+        // Confidence floor: below this a suggestion is never shown as a card.
         if (confidence < FclAiAdvisorRanges.MIN_SUGGESTION_CONFIDENCE)
             return rejected(
                 "Confidence (${(confidence * 100).toInt()}%) onder de drempel van " +
@@ -103,45 +101,34 @@ object FclAiAdvisorResponseParser {
             return rejected("Waarde $proposedValue buiten absoluut bereik [${spec.min}–${spec.max}]")
         if (currentValue.isNaN())
             return rejected("Geen bekende huidige waarde om tegen te valideren")
-
-        // Ceiling-bust check: is de AI voorbij de softMax/softMin gegaan?
-        // Dat mag alleen bij hoge confidence én de learner al op de soft-grens.
-        if (!FclAiAdvisorRanges.isCeilingBustAllowed(spec, currentValue, proposedValue, confidence)) {
-            val softNote = if (proposedValue > spec.softMax)
-                "softMax=${spec.softMax} — learner nog niet op ceiling (huidig: ${"%.4f".format(currentValue)})"
-            else
-                "softMin=${spec.softMin} — learner nog niet op floor (huidig: ${"%.4f".format(currentValue)})"
-            return rejected("Ceiling-bust niet toegestaan: $softNote of confidence (${(confidence * 100).toInt()}%) < ${(FclAiAdvisorRanges.CEILING_BUST_CONFIDENCE * 100).toInt()}%")
-        }
-        // Stap te groot: inkorten tot max toegestane stap in de juiste richting
-        // (niet afwijzen — als de richting juist is, is de max-toegestane stap beter dan niets).
-        if (!FclAiAdvisorRanges.withinMaxStep(spec, currentValue, proposedValue)) {
-            val maxStep = spec.maxRelativeStep * kotlin.math.abs(currentValue)
-            val direction = if (proposedValue > currentValue) 1.0 else -1.0
-            val clamped = (currentValue + direction * maxStep).coerceIn(spec.min, spec.max)
-            val clampNote = " [Stap ingekort van ${"%.4f".format(proposedValue)} naar ${"%.4f".format(clamped)} (max ${(spec.maxRelativeStep * 100).toInt()}% per voorstel)]"
-            return AiParamSuggestion(
-                param = param,
-                currentValue = currentValue,
-                proposedValue = clamped,
-                confidence = confidence,
-                reasonNl = reason + clampNote,
-                evidenceFields = evidence,
-                rejected = false,
-                rejectionReasonNl = null
-            )
-        }
         if (reason.isBlank())
             return rejected("Geen onderbouwing opgegeven")
         if (evidence.isEmpty())
             return rejected("Geen evidenceFields opgegeven — onderbouwing niet te verifiëren")
 
+        // Hard rule in code (the prompt says the same): with hypos in the period, nothing that
+        // gives more insulin. Timing does not add insulin in total, so it is not on this list.
+        val givesMoreInsulin = param != FclAiAdvisorRanges.KEY_TIMING && proposedValue > currentValue
+        if (givesMoreInsulin && payload.hypoCount > 0)
+            return rejected("Er waren ${payload.hypoCount} hypo's in de periode — geen voorstel dat meer insuline geeft")
+
+        // Step too big: cut it to the largest allowed step in the same direction.
+        val limited = FclAiAdvisorRanges.limitStep(spec, currentValue, proposedValue)
+        if (kotlin.math.abs(limited - currentValue) < 1e-9)
+            return rejected("Voorgestelde stap is te klein of niet toegestaan")
+        val note = if (kotlin.math.abs(limited - proposedValue) > 1e-9)
+            " [Stap ingekort van ${formatValue(spec, proposedValue)} naar ${formatValue(spec, limited)}]"
+        else ""
+
         return AiParamSuggestion(
-            param = param, currentValue = currentValue, proposedValue = proposedValue,
-            confidence = confidence, reasonNl = reason, evidenceFields = evidence,
+            param = param, currentValue = currentValue, proposedValue = limited,
+            confidence = confidence, reasonNl = reason + note, evidenceFields = evidence,
             rejected = false, rejectionReasonNl = null
         )
     }
+
+    private fun formatValue(spec: FclAiAdvisorRanges.ParamSpec, value: Double): String =
+        if (spec.type == FclAiAdvisorRanges.ValueType.INT) value.toInt().toString() else "%.2f".format(value)
 
     private fun stripMarkdownFences(s: String): String {
         var t = s.trim()

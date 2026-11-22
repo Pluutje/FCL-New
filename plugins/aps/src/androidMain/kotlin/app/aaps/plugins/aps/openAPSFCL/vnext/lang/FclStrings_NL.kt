@@ -161,6 +161,8 @@ object FclStrings_NL : FclStrings {
     override val parameters         = "Fijnafstelling"
     override val nachtNLabel        = "Nacht"
     override val tddLabel           = "TDD"
+    override fun experimentsOn(count: Int) =
+        if (count == 1) "Er staat 1 experiment aan." else "Er staan $count experimenten aan."
     override val analyse            = "Patroonanalyse"
     override val confidence         = "Confidence"
     override val gebruikt           = "Gebruikt"
@@ -188,7 +190,6 @@ object FclStrings_NL : FclStrings {
     override val normaal                = "Normaal"
     override val laat                   = "Laat"
     override val zeerlaat               = "Zeer laat"
-    override val aggressiviteitsKaart   = "Aggressiviteit"
     override val aggressiviteitsUitleg  = "Verschuift de geleerde S/T/V en frontload-timing \u2014 niveau 5 = geen effect"
 
     // ── MaxSMB tab ────────────────────────────────────────────────────────
@@ -198,6 +199,18 @@ object FclStrings_NL : FclStrings {
 
     // ── Instellingen ──────────────────────────────────────────────────────
     override val settingsDosisBehavior          = "\uD83D\uDC89 Dosering & gedrag"
+    override val settingsAggStrengthTitle = "Sterkte"
+    override val settingsAggStrengthHelp = "Hoeveel insuline de automaat geeft. 5 = geen verschuiving. Hoger = meer insuline, lager = minder."
+    override val settingsAggTimingTitle = "Timing"
+    override val settingsAggTimingHelp = "Hoe vroeg de insuline komt. 5 = geen verschuiving. Hoger = vroeger, lager = later."
+    override val settingsAggPersistTitle = "Volhoudendheid"
+    override val settingsAggPersistHelp = "Hoeveel er na de stijging bijkomt als de daling uitblijft. 5 = geen verschuiving. Let op: een hoge waarde maakt de hypo-bescherming losser (bij 130% zakt de hypo-drempel van 4,7 naar 4,4 mmol/L)."
+    override val settingsAggNightTitle = "Nacht"
+    override val settingsAggNightHelp = "Zet de nachtfactor hoger of lager dan wat de automaat geleerd heeft. 5 = geen verschuiving. Hoger = proactiever, lager = voorzichtiger."
+    override fun settingsAggLevel(level: Int) = "Niveau $level"
+    override fun settingsAggActive(percent: Int) = "Nu actief: $percent%"
+    override fun settingsAggLimit(percent: Int) = "Grens bereikt: de automaat gebruikt $percent%."
+    override fun settingsAggNightActive(nf: String) = "Nu actief: NF $nf (geleerd + jouw schuif)"
     override val settingsTtDoseTitle            = "Temp target past dosis aan"
     override val settingsTtDoseSummary          = "Hoog temp target = kleinere dosis, laag temp target = grotere dosis."
     override val settingsTtDoseInfo             =

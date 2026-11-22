@@ -6,6 +6,31 @@ import org.junit.jupiter.api.Test
 class ReboundBrakeTest {
 
     @Test
+    fun gateIsOffWithoutMealEpisodeOrWithoutLow() {
+        assertThat(ReboundBrake.gateCut(0.75, 3.5, null)).isEqualTo(0.0)
+        assertThat(ReboundBrake.gateCut(0.75, 4.6, 0.5)).isEqualTo(0.0)
+        assertThat(ReboundBrake.gateCut(0.0, 3.5, 0.5)).isEqualTo(0.0)
+    }
+
+    @Test
+    fun gateIsFullForSmallRiseAndFadesSmoothly() {
+        assertThat(ReboundBrake.gateCut(0.75, 3.8, 1.0)).isWithin(1e-9).of(0.5)
+        assertThat(ReboundBrake.gateCut(0.75, 3.8, 2.0)).isWithin(1e-9).of(0.5)
+        val mid = ReboundBrake.gateCut(0.75, 3.8, 3.0)
+        assertThat(mid).isGreaterThan(0.0)
+        assertThat(mid).isLessThan(0.5)
+        assertThat(ReboundBrake.gateCut(0.75, 3.8, 4.0)).isWithin(1e-9).of(0.0)
+    }
+
+    @Test
+    fun gateHoldsBackMoreThanBrakeWhenLowIsOldAndRiseSmall() {
+        val noGate = ReboundBrake.factor(0.75, 4.2, 80.0, 6.7, 0.0, null)
+        val withGate = ReboundBrake.factor(0.75, 4.2, 80.0, 6.7, 0.0, 1.6)
+        assertThat(withGate).isLessThan(noGate)
+        assertThat(withGate).isAtLeast(0.2)
+    }
+
+    @Test
     fun `max cut is zero at strength zero and 50 percent at 75 percent`() {
         assertThat(ReboundBrake.maxCut(0.0)).isEqualTo(0.0)
         assertThat(ReboundBrake.maxCut(0.75)).isWithin(1e-9).of(0.5)

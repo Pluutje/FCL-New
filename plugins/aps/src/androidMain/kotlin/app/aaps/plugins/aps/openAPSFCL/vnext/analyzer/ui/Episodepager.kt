@@ -22,12 +22,13 @@ fun EpisodePager(
     episodes: List<Episode>,
     episodeEntities: List<EpisodeEntity>,
     onPageChanged: (Int) -> Unit,
-    onRescueUserConfirmed: (startTs: String, confirmed: String) -> Unit
+    onRescueUserConfirmed: (startTs: String, confirmed: String) -> Unit,
+    initialPage: Int = episodes.size - 1
 ) {
     val s = FclStrings.get(androidx.compose.ui.platform.LocalContext.current)
 
     val pagerState = rememberPagerState(
-        initialPage = episodes.size - 1,
+        initialPage = initialPage.coerceIn(0, (episodes.size - 1).coerceAtLeast(0)),
         pageCount = { episodes.size }
     )
 

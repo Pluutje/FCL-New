@@ -164,10 +164,19 @@ object FclAiAdvisorScheduler {
                     if (FclAiAdvisorSettingsStore.getMode(context) ==
                         app.aaps.plugins.aps.openAPSFCL.vnext.FclSystemMode.AUTO
                     ) {
-                        result.suggestions.filter { !it.rejected }.forEach { suggestion ->
-                            app.aaps.plugins.aps.openAPSFCL.vnext.advisor.ai.FclAiAdvisorApplier
-                                .approve(suggestion, context)
+                        // Safety limits (max SMB, max IOB) are never applied without a tap,
+                        // also not in automatic mode. They stay as a card to approve.
+                        result.suggestions
+                            .filter { !it.rejected && FclAiAdvisorRanges.byKey[it.param]?.needsManualApproval == false }
+                            .forEach { suggestion ->
+                                app.aaps.plugins.aps.openAPSFCL.vnext.advisor.ai.FclAiAdvisorApplier
+                                    .approve(suggestion, context)
+                            }
+                        val pendingLimits = result.suggestions.count {
+                            !it.rejected && FclAiAdvisorRanges.byKey[it.param]?.needsManualApproval == true &&
+                                app.aaps.plugins.aps.openAPSFCL.vnext.advisor.ai.FclAiAdvisorHistoryRepository.isStillPending(it)
                         }
+                        FclAiNotificationHelper.showPendingAdvice(context, pendingLimits)
                     } else {
                         // MANUAL-modus (bestaand gedrag): sticky check bovenaan
                         // runIfDue() herbevestigt de melding daarna elke volgende

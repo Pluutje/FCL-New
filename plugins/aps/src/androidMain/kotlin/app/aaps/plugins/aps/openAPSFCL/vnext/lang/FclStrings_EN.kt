@@ -161,6 +161,8 @@ object FclStrings_EN : FclStrings {
     override val parameters         = "Fine-tuning"
     override val nachtNLabel        = "Night"
     override val tddLabel           = "TDD"
+    override fun experimentsOn(count: Int) =
+        if (count == 1) "1 experiment is on." else "$count experiments are on."
     override val analyse            = "Pattern analysis"
     override val confidence         = "Confidence"
     override val gebruikt           = "Used"
@@ -188,7 +190,6 @@ object FclStrings_EN : FclStrings {
     override val normaal                = "Normal"
     override val laat                   = "Late"
     override val zeerlaat               = "Very late"
-    override val aggressiviteitsKaart   = "Aggressiveness"
     override val aggressiviteitsUitleg  = "Shifts learned S/T/V and frontload timing \u2014 level 5 = no effect"
 
     // ── MaxSMB tab ────────────────────────────────────────────────────────
@@ -198,6 +199,18 @@ object FclStrings_EN : FclStrings {
 
     // ── Settings ──────────────────────────────────────────────────────────
     override val settingsDosisBehavior          = "\uD83D\uDC89 Dosing & behaviour"
+    override val settingsAggStrengthTitle = "Strength"
+    override val settingsAggStrengthHelp = "How much insulin the automaat gives. 5 = no shift. Higher = more insulin, lower = less."
+    override val settingsAggTimingTitle = "Timing"
+    override val settingsAggTimingHelp = "How early the insulin comes. 5 = no shift. Higher = earlier, lower = later."
+    override val settingsAggPersistTitle = "Persistence"
+    override val settingsAggPersistHelp = "How much is added after the rise when the fall stays away. 5 = no shift. Note: a high value loosens the hypo protection (at 130% the hypo threshold drops from 4.7 to 4.4 mmol/L)."
+    override val settingsAggNightTitle = "Night"
+    override val settingsAggNightHelp = "Sets the night factor above or below what the automaat has learned. 5 = no shift. Higher = more proactive, lower = more careful."
+    override fun settingsAggLevel(level: Int) = "Level $level"
+    override fun settingsAggActive(percent: Int) = "Active now: $percent%"
+    override fun settingsAggLimit(percent: Int) = "Limit reached: the automaat uses $percent%."
+    override fun settingsAggNightActive(nf: String) = "Active now: NF $nf (learned + your slider)"
     override val settingsTtDoseTitle            = "Temp target adjusts dose"
     override val settingsTtDoseSummary          = "High temp target = smaller dose, low temp target = bigger dose."
     override val settingsTtDoseInfo             =

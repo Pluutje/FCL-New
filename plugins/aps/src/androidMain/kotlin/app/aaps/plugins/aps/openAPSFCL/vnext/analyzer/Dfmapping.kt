@@ -19,6 +19,24 @@ import kotlin.math.roundToInt
  * Garantie: alle parameters bewegen coherent. Het is structureel onmogelijk
  * om earlyBoost te verhogen zonder dat lateDecay en kortere cooldown meegaan.
  */
+/**
+ * Three levels (1 to 9, 5 = no effect) that move the learned values (15/11/2026). Before this there was one
+ * aggressiveness level that moved strength, timing and persistence together in a fixed ratio.
+ * - [strength]: how much insulin (scale on D and the strength percentage).
+ * - [timing]: how early the insulin comes (scale on F, the frontload threshold and the timing percentage).
+ * - [persistence]: how much is added after the rise when the fall stays away (the persistence percentage).
+ */
+data class AggLevels(val strength: Int = 5, val timing: Int = 5, val persistence: Int = 5) {
+    companion object {
+        const val MIN = 1
+        const val MAX = 9
+        const val NEUTRAL = 5
+
+        /** The same level for all three. This is what the old single aggressiveness did. */
+        fun all(level: Int) = AggLevels(level, level, level)
+    }
+}
+
 object DFMapping {
 
     // ── Grenzen ───────────────────────────────────────────────────────────
@@ -102,17 +120,21 @@ object DFMapping {
         refPeakBias: Double = REF_PEAK_BIAS_DEFAULT,
         refLcd: Double = REF_LCD_DEFAULT,
         vExtra: Double = 0.0,
-        aggLevel: Int = 5
+        aggLevel: Int = 5,
+        agg: AggLevels? = null
     ): ConfigOverrideWriter.ParamOverrides {
         val dC    = d.coerceIn(D_MIN, D_MAX)
         val fC    = f.coerceIn(F_MIN, F_MAX)
         val vC    = vExtra.coerceIn(-0.5, 0.5)
         // Agressiviteitsmultiplier: verschuift D/F effectief zonder ze op te slaan.
         // aggLevel 5 = geen effect. Niveau 9: dC +12%, fC +6%, refWmd -0.25.
-        val scale = aggScaleFromLevel(aggLevel)
+        // 15/11/2026: strength moves D, timing moves F and the frontload threshold. Persistence has no part here.
+        val levels = agg ?: AggLevels.all(aggLevel)
+        val scale = aggScaleFromLevel(levels.strength)
+        val timingScale = aggScaleFromLevel(levels.timing)
         val dEff  = (dC * (1.0 + scale * 0.12)).coerceIn(D_MIN * 0.85, D_MAX * 1.15)
-        val fEff  = (fC + scale * (F_MAX - 0.5) * 0.06).coerceIn(F_MIN * 0.90, F_MAX * 1.05)
-        val wmdEff = (refWmd - scale * 0.25).coerceIn(0.70, 1.60)
+        val fEff  = (fC + timingScale * (F_MAX - 0.5) * 0.06).coerceIn(F_MIN * 0.90, F_MAX * 1.05)
+        val wmdEff = (refWmd - timingScale * 0.25).coerceIn(0.70, 1.60)
 
         return ConfigOverrideWriter.ParamOverrides(
             // ── D-afhankelijk ───────────────────────────────────────────
@@ -254,18 +276,37 @@ object DFMapping {
     // De geleerde D/F/vExtra blijven ongewijzigd in SharedPreferences.
     // Niveau 5 = geen effect (mul=1.0). Niveau 9 = +12% S, +6% T, +10% V.
     fun toStvMap(d: Double, f: Double, nfLevel: Double = 5.0, vExtra: Double = 0.0,
-                 aggLevel: Int = 5): Map<String, Int> {
+                 aggLevel: Int = 5, agg: AggLevels? = null): Map<String, Int> {
+        val raw = toStvRaw(d, f, vExtra, aggLevel, agg)
+        return mapOf(
+            "sterkte"        to raw.first.coerceIn(S_MIN, S_MAX),
+            "timing"         to raw.second.coerceIn(T_MIN, T_MAX),
+            "volhoudendheid" to raw.third.coerceIn(V_MIN, V_MAX),
+        )
+    }
+
+    // Limits of the three percentages.
+    const val S_MIN = 75;  const val S_MAX = 130
+    const val T_MIN = 80;  const val T_MAX = 130
+    const val V_MIN = 70;  const val V_MAX = 130
+
+    /**
+     * Strength, timing and persistence percentages before they are limited to their range.
+     * Used to show when a slider has reached a limit.
+     */
+    fun toStvRaw(d: Double, f: Double, vExtra: Double = 0.0, aggLevel: Int = 5,
+                 agg: AggLevels? = null): Triple<Int, Int, Int> {
         val dC    = d.coerceIn(D_MIN, D_MAX)
         val fC    = f.coerceIn(F_MIN, F_MAX)
         val vC    = vExtra.coerceIn(-0.5, 0.5)
-        val scale = aggScaleFromLevel(aggLevel)
-        val sMul  = 1.0 + scale * 0.12
-        val tMul  = 1.0 + scale * 0.06
-        val vMul  = 1.0 + scale * 0.10
-        return mapOf(
-            "sterkte"        to ((REF_S * dC) * sMul).roundToInt().coerceIn(75, 130),
-            "timing"         to ((REF_T + (fC - 0.5) * 40) * tMul).roundToInt().coerceIn(80, 130),
-            "volhoudendheid" to ((REF_V + (dC - 1.0) * 50 + vC * 30) * vMul).roundToInt().coerceIn(70, 130),
+        val levels = agg ?: AggLevels.all(aggLevel)
+        val sMul  = 1.0 + aggScaleFromLevel(levels.strength) * 0.12
+        val tMul  = 1.0 + aggScaleFromLevel(levels.timing) * 0.06
+        val vMul  = 1.0 + aggScaleFromLevel(levels.persistence) * 0.10
+        return Triple(
+            ((REF_S * dC) * sMul).roundToInt(),
+            ((REF_T + (fC - 0.5) * 40) * tMul).roundToInt(),
+            ((REF_V + (dC - 1.0) * 50 + vC * 30) * vMul).roundToInt()
         )
     }  // nf_level apart bewaard via DFLearner, niet in de Int-map
 

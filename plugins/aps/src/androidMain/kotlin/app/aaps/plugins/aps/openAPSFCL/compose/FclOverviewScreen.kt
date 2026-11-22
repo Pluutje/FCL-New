@@ -85,6 +85,7 @@ import app.aaps.core.interfaces.profile.ProfileFunction
 import app.aaps.core.interfaces.profile.ProfileUtil
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.ui.CoreUiStrings
+import app.aaps.core.ui.compose.LocalClientRole
 import app.aaps.core.ui.compose.NumberInputRow
 import app.aaps.core.ui.compose.icons.IcTbrHigh
 import app.aaps.core.ui.compose.icons.IcTbrLow
@@ -107,6 +108,7 @@ import app.aaps.ui.compose.overview.graphs.OverrideBandSpec
 import app.aaps.ui.compose.overview.graphs.SecondaryGraphCompose
 import app.aaps.ui.compose.overview.graphs.graphInspectTouch
 import app.aaps.ui.compose.overview.graphs.timestampToX
+import app.aaps.ui.compose.overview.chips.RunningModeChip
 import com.patrykandpatrick.vico.compose.cartesian.Scroll
 import com.patrykandpatrick.vico.compose.cartesian.VicoScrollState
 import com.patrykandpatrick.vico.compose.cartesian.VicoZoomState
@@ -128,6 +130,9 @@ const val PREFS_NAME = "fcl_overview_screen_settings"
  * (2/11/2026). Only `OpenAPSFCLPlugin` still reads it, once, to move the value to the new key.
  */
 const val PREF_OVERVIEW_SCREEN_ENABLED = "overview_screen_enabled"
+/** A loop mode with a duration of 30 days or more counts as permanent (same limit as the standard screen). */
+private const val RM_MAX_FINITE_MS = 30L * 86_400_000L
+
 private const val PREF_BG_HEIGHT = "bg_graph_height_dp"
 private const val PREF_IOB_HEIGHT = "iob_graph_height_dp"
 private const val DEFAULT_BG_HEIGHT_DP = 200
@@ -267,6 +272,7 @@ fun FclOverviewScreen(
 
     val bgInfo by overviewDataCache.bgInfoFlow.collectAsState()
     val profile by overviewDataCache.profileFlow.collectAsState()
+    val runningMode by overviewDataCache.runningModeFlow.collectAsState()
     val targetLine by overviewDataCache.targetLineFlow.collectAsState()
     val deviceState by deviceViewModel.deviceState.collectAsState()
     val doseHistory by deviceViewModel.doseHistory.collectAsState()
@@ -398,6 +404,16 @@ fun FclOverviewScreen(
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
 
+        // ── Loop-icoon (17/11/2026, de gebruiker) — hetzelfde chip als op het standaard hoofdscherm
+        // (RunningModeChip uit de ui-module), met dezelfde klik: opent het scherm voor de loop-stand
+        // (loop uit, pauzeren, pomp loskoppelen, enz.). Gegevens uit dezelfde bron als het standaard
+        // scherm (overviewDataCache.runningModeFlow), voortgang en resterende tijd zoals daar.
+        // Plaats: in de hoofdkaart, tussen de BG-cirkel en de IOB/Basaal-pillen (geen extra ruimte).
+        val rmData = runningMode
+        val rmFinite = rmData != null && rmData.duration > 0 && rmData.duration < RM_MAX_FINITE_MS
+        val rmExpired = rmData != null && rmFinite && now >= rmData.timestamp + rmData.duration
+        LaunchedEffect(rmExpired) { if (rmExpired) overviewDataCache.refreshRunningMode() }
+
         // ── Hoofdkaart: klein en simpel — dezelfde BG-cirkel met trend-boog als het standaard
         // hoofdscherm (BgInfoSection, hergebruikt uit de ui-module i.p.v. zelf nagebouwd), met
         // alleen IOB en basaal ernaast (die horen qua actuele status bij de Bg). Sensor/pomp/
@@ -416,13 +432,29 @@ fun FclOverviewScreen(
                     // scherm past de tekst anders net niet mooi binnen de cirkel.
                     timeAgoStyle = MaterialTheme.typography.labelSmall
                 )
-                // IOB/Basaal rechts uitgelijnd tegen de kaartrand (buitenste Column vult de
-                // resterende rij-breedte, End-uitgelijnd), en onderling even breed (binnenste
+                // 17/11/2026 — loop-icoon in de ruimte tussen de BG-cirkel en de pillen (zie boven).
+                Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                    if (rmData != null) {
+                        val rmTemporary = rmData.mode.mustBeTemporary() && rmFinite && !rmExpired
+                        val rmProgress = if (rmFinite && !rmExpired) {
+                            ((now - rmData.timestamp).toFloat() / rmData.duration.toFloat()).coerceIn(0f, 1f)
+                        } else 0f
+                        val rmRemaining = if (rmTemporary) formatRemaining(rmData.timestamp + rmData.duration - now) else ""
+                        RunningModeChip(
+                            mode = rmData.mode,
+                            text = rmData.mode.name,
+                            progress = rmProgress,
+                            remaining = rmRemaining,
+                            enabled = LocalClientRole.current.allows(ElementType.RUNNING_MODE.role),
+                            onClick = { navigationRequest(NavigationRequest.Element(ElementType.RUNNING_MODE)) }
+                        )
+                    }
+                }
+                // IOB/Basaal rechts uitgelijnd tegen de kaartrand, en onderling even breed (binnenste
                 // Column krijgt de breedte van zijn breedste kind via IntrinsicSize.Max, beide
                 // pillen vullen die breedte i.p.v. allebei hun eigen, mogelijk verschillende,
                 // natuurlijke breedte te houden).
                 Column(
-                    modifier = Modifier.weight(1f),
                     horizontalAlignment = Alignment.End
                 ) {
                     Column(
@@ -1145,6 +1177,14 @@ private fun timeAgoText(timestamp: Long?, dateUtil: DateUtil): String {
     if (timestamp == null) return "-"
     val minutes = ((dateUtil.now() - timestamp) / 60000L).toInt().coerceAtLeast(0)
     return if (minutes < 1) "nu" else "$minutes min geleden"
+}
+
+/** Short remaining time on the loop icon, like the standard screen: "30'" or "1u30'". Never below 1 minute. */
+private fun formatRemaining(remainingMs: Long): String {
+    val totalMin = ceil(remainingMs.coerceAtLeast(0L) / 60_000.0).toInt().coerceAtLeast(1)
+    val hours = totalMin / 60
+    val minutes = totalMin % 60
+    return if (hours > 0) "${hours}u${minutes}'" else "${minutes}'"
 }
 
 private fun formatAge(minutes: Int?): String {

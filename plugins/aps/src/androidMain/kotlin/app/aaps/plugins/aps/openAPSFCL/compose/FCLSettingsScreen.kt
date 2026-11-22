@@ -232,6 +232,11 @@ fun FCLSettingsScreen(
             expanded = expandedDosering,
             onToggle = { expandedDosering = !expandedDosering }
         ) {
+            // 15/11/2026: strength, timing, persistence and night level (moved from the Analyser screen).
+            FclAggLevelsSettings(context = ctx, preferences = preferences)
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
             FCLDoubleRow(
                 label = s.settingsMaxBolusDay,
                 summary = "Referentiewaarde voor de Analyzer (actieve maxSMB = 50–125% van deze waarde).",

@@ -31,7 +31,10 @@ object ExperimentStrengths {
         COVER_DECAY("cover_decay"),
 
         /** A part of the dose is held back in the first hour after a low BG, while the BG rises again. See [ReboundBrake]. */
-        REBOUND_BRAKE("rebound_brake")
+        REBOUND_BRAKE("rebound_brake"),
+
+        /** The IOB brakes may be looser when the relative IOB cover is low. See [IobRelax]. */
+        IOB_RELAX("iob_relax")
     }
 
     /** Old settings from before 8/11/2026. They are read once, until the user saves a new strength. */
@@ -77,6 +80,9 @@ object ExperimentStrengths {
 
     /** Strength as a factor: 0.0 (off) to 1.5. 1.0 is the normal strength. */
     fun factor(context: Context, experiment: Experiment): Double = percent(context, experiment) / 100.0
+
+    /** How many experiments have a strength above 0. */
+    fun activeCount(context: Context): Int = Experiment.entries.count { percent(context, it) > 0 }
 
     fun setPercent(context: Context, experiment: Experiment, percent: Int) {
         prefs(context).edit().putInt(experiment.key, percent.coerceIn(0, MAX_PERCENT)).apply()

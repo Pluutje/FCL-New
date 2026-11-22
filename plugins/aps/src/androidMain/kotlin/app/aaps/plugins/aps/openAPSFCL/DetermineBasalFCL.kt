@@ -39,6 +39,7 @@ import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.plugins.aps.openAPSFCL.vnext.FCLvNextDayNightHelper
 import app.aaps.plugins.aps.openAPSFCL.vnext.FclNachtOvergangSettings
 import app.aaps.plugins.aps.openAPSFCL.vnext.FclTempOverrideSettings
+import app.aaps.plugins.aps.openAPSFCL.vnext.OverrideIobScale
 import app.aaps.plugins.aps.openAPSFCL.vnext.FclWakeDetector
 import app.aaps.plugins.aps.openAPSFCL.vnext.FCLvNext
 import app.aaps.plugins.aps.openAPSFCL.vnext.FCLvNextInput
@@ -68,6 +69,13 @@ import app.aaps.plugins.aps.openAPSFCL.vnext.lastCycleFclDelivered
 
 import app.aaps.plugins.aps.openAPSFCL.vnext.logging.FclBasalProfileNightLogger
 import app.aaps.plugins.aps.openAPSFCL.vnext.FclRealDoseTracker
+
+/**
+ * Fixed AAPS SMB multiplier (15/11/2026). It scales only the AAPS own corrections, not FCLvNext. It was a setting
+ * (day and night) before. All users had 1.6 by day and 1.3 to 1.4 at night, so it is fixed now.
+ */
+private const val AAPS_MULTIPLIER_DAY = 1.6
+private const val AAPS_MULTIPLIER_NIGHT = 1.4
 
 @SingleIn(AppScope::class)
 class DetermineBasalFCL @Inject constructor(
@@ -561,10 +569,8 @@ class DetermineBasalFCL @Inject constructor(
         // Nacht: lager = voorzichtigere AAPS correcties (default 0.9 = 10% minder).
         // Range 0.9-1.5. Heeft geen effect op FCLvNext zelf.
         // 17/07/2026: lineair gemengd i.p.v. harde dag/nacht-knip.
-        val aaps_multiplier_day = preferences.get(DoubleKey.fcl_aaps_mulitplier_day)
-        val aaps_multiplier_night = preferences.get(DoubleKey.fcl_aaps_mulitplier_night)
         val aaps_multiplier =
-            aaps_multiplier_day + nightTransitionFraction * (aaps_multiplier_night - aaps_multiplier_day)
+            AAPS_MULTIPLIER_DAY + nightTransitionFraction * (AAPS_MULTIPLIER_NIGHT - AAPS_MULTIPLIER_DAY)
 
         // Sla unit-keuze op zodat composables (BgUnits) geen profileFunction nodig hebben
         app.aaps.plugins.aps.openAPSFCL.vnext.BgUnits.setIsMgdl(
@@ -699,7 +705,9 @@ class DetermineBasalFCL @Inject constructor(
                 bgNow = bgNowMmol,
                 bgHistory = bgHistoryMmol,
                 currentIOB = currentIOB,
-                maxIOB = profile.max_iob,
+                // 17/11/2026: during a positive override the max IOB goes up by half of the override percentage above
+                // 100 (see OverrideIobScale). Without an override this is exactly profile.max_iob.
+                maxIOB = profile.max_iob * OverrideIobScale.scale(FclTempOverrideSettings.status(context, currentTime).effectiveMul),
                 effectiveISF = sensMgdl / 18.0,
                 targetBG = targetMgdl / 18.0,
                 externalBolusU = externalBolusDetected,

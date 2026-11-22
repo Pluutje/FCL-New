@@ -181,9 +181,9 @@ object ConfigOverrideWriter {
     ): Boolean {
         val clamped = newNfLevel.coerceIn(1.0, 9.0)
         val stv = mapOf(
-            "sterkte"        to currentState.sterkte.coerceIn(80, 125),
-            "timing"         to currentState.timing.coerceIn(80, 120),
-            "volhoudendheid" to currentState.volhoudendheid.coerceIn(70, 130)
+            "sterkte"        to currentState.sterkte.coerceIn(DFMapping.S_MIN, DFMapping.S_MAX),
+            "timing"         to currentState.timing.coerceIn(DFMapping.T_MIN, DFMapping.T_MAX),
+            "volhoudendheid" to currentState.volhoudendheid.coerceIn(DFMapping.V_MIN, DFMapping.V_MAX)
         )
         // BUGFIX 19/06/2026: nfLevel moet daadwerkelijk in de Override mee,
         // anders leest loadFCLvNextConfig() 'm nooit (override?.nfLevel was

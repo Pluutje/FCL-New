@@ -222,6 +222,14 @@ object FclLearnerBackup {
                     if (ok) { wroteAny = true; keysRestored++ }
                 }
 
+                // 15/11/2026: an old backup has one aggressiveness level and not the three new ones. Clear the
+                // three new levels, so the old level is used for all three (the same as before the split).
+                if (prefsName == "df_learner_prefs" && storeJson.has(DFLearner.LEGACY_AGGRESSIVENESS_KEY) &&
+                    DFLearner.AGG_LEVEL_KEYS.none { storeJson.has(it) }
+                ) {
+                    DFLearner.AGG_LEVEL_KEYS.forEach { editor.remove(it) }
+                }
+
                 if (wroteAny) {
                     editor.apply()
                     storesRestored++

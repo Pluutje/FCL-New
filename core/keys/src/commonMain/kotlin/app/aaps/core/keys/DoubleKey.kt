@@ -378,9 +378,6 @@ enum class DoubleKey(
     fcl_vnext_sustained_rise_slope_min(key = "fcl_vnext_sustained_rise_slope_min", defaultValue = 0.40, min = 0.15, max = 0.80, title = KeysStrings.fcl_vnext_internal),
     fcl_vnext_early_peak_bias_mmol(key = "fcl_vnext_early_peak_bias_mmol", defaultValue = 0.0, min = 0.0, max = 1.5, title = KeysStrings.fcl_vnext_internal),
 
-    fcl_aaps_mulitplier_day(key = "fcl_aaps_mulitplier_day", defaultValue = 1.0, min = 0.8, max = 2.0, title = KeysStrings.fcl_aaps_mulitplier_day_title, unitType = UnitType.DOUBLE),
-    fcl_aaps_mulitplier_night(key = "fcl_aaps_mulitplier_night", defaultValue = 1.0, min = 0.8, max = 2.0, title = KeysStrings.fcl_aaps_mulitplier_night_title, unitType = UnitType.DOUBLE),
-
     fcl_vnext_nf_level(key = "fcl_vnext_nf_level", defaultValue = 5.0, min = 1.0, max = 9.0, title = KeysStrings.fcl_vnext_internal),
     ;
 

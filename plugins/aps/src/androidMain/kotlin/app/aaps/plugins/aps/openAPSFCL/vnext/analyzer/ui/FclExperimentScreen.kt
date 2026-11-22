@@ -26,12 +26,9 @@ fun FclExperimentScreen() {
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        MaaltijdExperimentenKaart(context)
-        T1VersterkingKaart(context)
-        VroegeSignaleringKaart(context)
-        DaalDoorlaatKaart(context)
-        DekkingsAfbouwKaart(context)
-        HerstelRemKaart(context)
+        GroepMaaltijdStartKaart(context)
+        GroepRemmenLosserKaart(context)
+        GroepVoorzichtigKaart(context)
         InsulinTimingKaart(context)
     }
 }

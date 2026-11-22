@@ -7,6 +7,8 @@ import app.aaps.plugins.aps.openAPSFCL.vnext.DoseCutLog
 import app.aaps.plugins.aps.openAPSFCL.vnext.InsulinBudget
 import app.aaps.plugins.aps.openAPSFCL.vnext.FclActiveConfigBridge
 import app.aaps.plugins.aps.openAPSFCL.vnext.EarlyBoostCap
+import app.aaps.plugins.aps.openAPSFCL.vnext.EarlyExperimentLog
+import app.aaps.plugins.aps.openAPSFCL.vnext.IobRelativeLog
 import app.aaps.plugins.aps.openAPSFCL.vnext.FastMealCap
 import app.aaps.plugins.aps.openAPSFCL.vnext.FlatHighCorrection
 import app.aaps.plugins.aps.openAPSFCL.vnext.OverrideBrakeScale
@@ -384,7 +386,7 @@ class FCLCycleLogRepository @Inject constructor(
             val refEb  = DFLearner.getRefEb(context)
             val refPeakBias = DFLearner.getRefPeakBias(context)
             val refLcd = DFLearner.getRefLcd(context)
-            val agg    = DFLearner.getAggressiveness(context)
+            val agg    = DFLearner.getAggLevels(context)
             val reason = "D=${"%.3f".format(d)} " +
                 "F=${"%.3f".format(f)} " +
                 "wmd=${"%.2f".format(refWmd)} " +
@@ -394,15 +396,26 @@ class FCLCycleLogRepository @Inject constructor(
                 "lcd=${"%.2f".format(refLcd)}"
 
             if (learnerMode == app.aaps.plugins.aps.openAPSFCL.vnext.FclSystemMode.AUTO) {
+                // 15/11/2026: a small learner step is held back (dead zone, gradual). The percentages and all
+                // parameters are worked out from the same held-back D, F and vExtra, so they stay in line.
+                val lastApplied = app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.FclLearnerPendingProposal
+                    .loadLastApplied(context)
+                val eff = app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.DfDeadZone.effective(
+                    last = lastApplied?.let {
+                        app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.DfDeadZone.Df(it.d, it.f, it.vExtra)
+                    },
+                    new = app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.DfDeadZone.Df(d, f, vExtra),
+                    agg = agg
+                )
                 val po = app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.DFMapping
                     .toParamOverrides(
-                        d = d, f = f,
+                        d = eff.d, f = eff.f,
                         refWmd = refWmd, refWff = refWff, refEb = refEb,
                         refPeakBias = refPeakBias, refLcd = refLcd,
-                        vExtra = vExtra, aggLevel = agg
+                        vExtra = eff.vExtra, agg = agg
                     )
                 val stvMap = app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.DFMapping
-                    .toStvMap(d, f, 85.0, vExtra, aggLevel = agg)
+                    .toStvMap(eff.d, eff.f, 85.0, eff.vExtra, agg = agg)
 
                 app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.ConfigOverrideWriter
                     .writeWithStvAndParams(
@@ -424,10 +437,11 @@ class FCLCycleLogRepository @Inject constructor(
                     context,
                     app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.FclLearnerPendingProposal.Proposal(
                         tsMs = System.currentTimeMillis(),
-                        d = d, f = f, vExtra = vExtra,
+                        d = eff.d, f = eff.f, vExtra = eff.vExtra,
                         refWmd = refWmd, refWff = refWff, refEb = refEb,
                         refPeakBias = refPeakBias, refLcd = refLcd,
-                        agg = agg, episodeCount = episodeMetrics.size, reason = reason
+                        agg = agg.strength, aggTiming = agg.timing, aggPersistence = agg.persistence,
+                        episodeCount = episodeMetrics.size, reason = reason
                     )
                 )
 
@@ -475,7 +489,8 @@ class FCLCycleLogRepository @Inject constructor(
                             d = d, f = f, vExtra = vExtra,
                             refWmd = refWmd, refWff = refWff, refEb = refEb,
                             refPeakBias = refPeakBias, refLcd = refLcd,
-                            agg = agg, episodeCount = episodeMetrics.size,
+                            agg = agg.strength, aggTiming = agg.timing, aggPersistence = agg.persistence,
+                            episodeCount = episodeMetrics.size,
                             reason = reason,
                             // 10/07/2026 — voor de leesbare uitleg in de kaart
                             // (FclLearnerUitleg). learningStep is null als evaluate()
@@ -795,6 +810,8 @@ class FCLCycleLogRepository @Inject constructor(
         val fastCapEvents = try { FastMealCap.loadEvents(context) } catch (_: Exception) { emptyList() }
         val coverDecayEvents = try { CoverDecay.loadEvents(context) } catch (_: Exception) { emptyList() }
         val doseCutEvents = try { DoseCutLog.loadEvents(context) } catch (_: Exception) { emptyList() }
+        val earlyExperimentEvents = try { EarlyExperimentLog.loadEvents(context) } catch (_: Exception) { emptyList() }
+        val iobRelativeEvents = try { IobRelativeLog.loadEvents(context) } catch (_: Exception) { emptyList() }
         // The personal reference as it is now (it changes slowly), for the relative cover column.
         val coverReference = try { InsulinBudget.reference(context) } catch (_: Exception) { Double.NaN }
 
@@ -826,7 +843,7 @@ class FCLCycleLogRepository @Inject constructor(
                         persist?.persistentCounter ?: 0, persist?.doseU ?: 0.0,
                         persist?.escalationFactor ?: 1.0, persist?.reason ?: "",
                         capEvents, flatEvents, ovrBrakeEvents,
-                        slowRiseEvents, fastCapEvents, coverDecayEvents, doseCutEvents, coverReference
+                        slowRiseEvents, fastCapEvents, coverDecayEvents, doseCutEvents, coverReference, earlyExperimentEvents, iobRelativeEvents
                     )
                 )
                 writer.newLine()
@@ -945,7 +962,21 @@ private fun csvHeader(sep: String): String = listOf(
     "cover_decay_delta_u",
     // ── DOSE CUT TRACE (11/11/2026) — see DoseCutTrace. Log only. Empty / 0,00 when no layer cut the dose by 0,02 U or more.
     // rel_cover is worked out for every cycle: iob_per_need / the personal reference (as it is at export). 0,00 without a reference.
-    "top_cut_layer", "top_cut_u", "total_cut_u", "rel_cover"
+    "top_cut_layer", "top_cut_u", "total_cut_u", "rel_cover",
+    // ── EARLY EXPERIMENTS (15/11/2026) — see EarlyExperimentLog. Log only. 0 when the experiment did nothing in this cycle.
+    "exp_t1_bonus_u", "exp_early_alert_hit",
+    // ── IOB RELATIVE (15/11/2026) — see IobRelativeLog. Log only. 0,00 when there is no personal reference or almost no IOB.
+    "iob_ratio_rel", "iob_factor_rel", "step_decel_brake",
+    // ── COVER DECAY, still needs insulin (15/11/2026) — see CoverDecay.needsWeight. 0,00 / 0,00 / 1,00 when the experiment
+    // did not use it in this cycle. cover_floor_mul = floor under the late-commit decay, cover_omslag_scale < 1 = the
+    // post-peak cut was scaled down.
+    "cover_needs_weight", "cover_floor_mul", "cover_omslag_scale",
+    // ── IOB RELAX experiment (15/11/2026) — see IobRelax. iob_relax_weight = weight of the relative cover in this cycle
+    // (0,00 = off), iob_factor_original = the IOB factor before the experiment (the iob_factor column is the factor used).
+    "iob_relax_weight", "iob_factor_original",
+    // step_decel_brake_original = the step brake before the cover decay experiment let it fade (16/11/2026). The
+    // step_decel_brake column is the value used. 0,00 when unknown.
+    "step_decel_brake_original"
 ).joinToString(sep)
 
 // ── CSV regel — delta_target afgeleid als bg - target ────────────────────
@@ -987,8 +1018,12 @@ private fun FCLCycleLogEntity.toCsvLine(
     fastCapEvents: List<FastMealCap.Event>,
     coverDecayEvents: List<CoverDecay.Event>,
     doseCutEvents: List<DoseCutLog.Event>,
-    coverReference: Double
+    coverReference: Double,
+    earlyExperimentEvents: List<EarlyExperimentLog.Event> = emptyList(),
+    iobRelativeEvents: List<IobRelativeLog.Event> = emptyList()
 ): String {
+    val iobRelativeEvent = IobRelativeLog.nearest(iobRelativeEvents, timestampMs, IobRelativeLog.CSV_TOLERANCE_MS)
+    val earlyExperimentEvent = EarlyExperimentLog.nearest(earlyExperimentEvents, timestampMs, EarlyExperimentLog.CSV_TOLERANCE_MS)
     val doseCutEvent = DoseCutLog.nearest(doseCutEvents, timestampMs, DoseCutLog.CSV_TOLERANCE_MS)
     val coverDecayEvent = CoverDecay.nearest(coverDecayEvents, timestampMs, CoverDecay.CSV_TOLERANCE_MS)
     val slowRiseEvent = SlowRiseSupport.nearest(slowRiseEvents, timestampMs, SlowRiseSupport.CSV_TOLERANCE_MS)
@@ -1123,6 +1158,15 @@ private fun FCLCycleLogEntity.toCsvLine(
         d3(
             if (coverReference.isNaN() || coverReference <= 0.0) 0.0
             else CoverDecay.iobPerNeed(glucoseIob.iob, glucoseIob.bg - glucoseIob.target, trends.slope, trends.recentSlope) / coverReference
-        )
+        ),
+        // ── EARLY EXPERIMENTS (15/11/2026) ── see EarlyExperimentLog.
+        d3(earlyExperimentEvent?.t1BonusU ?: 0.0), (earlyExperimentEvent?.alertHit ?: 0).toString(),
+        // ── IOB RELATIVE (15/11/2026) ── see IobRelativeLog.
+        d3(iobRelativeEvent?.ratioRel ?: 0.0), d3(iobRelativeEvent?.factorRel ?: 0.0), d3(iobRelativeEvent?.stepBrake ?: 0.0),
+        // ── COVER DECAY, still needs insulin (15/11/2026) ── see CoverDecay.
+        d3(coverDecayEvent?.needsWeight ?: 0.0), d3(coverDecayEvent?.floorMul ?: 0.0), d3(coverDecayEvent?.omslagScale ?: 1.0),
+        // ── IOB RELAX experiment (15/11/2026) ── see IobRelax.
+        d3(iobRelativeEvent?.relaxWeight ?: 0.0), d3(iobRelativeEvent?.factorOriginal?.takeUnless { it.isNaN() } ?: 0.0),
+        d3(iobRelativeEvent?.stepBrakeOriginal?.takeUnless { it.isNaN() } ?: 0.0)
     ).joinToString(sep)
 }

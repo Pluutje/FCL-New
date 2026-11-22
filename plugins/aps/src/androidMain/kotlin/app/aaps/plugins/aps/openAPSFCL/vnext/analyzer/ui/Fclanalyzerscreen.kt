@@ -12,7 +12,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import app.aaps.plugins.aps.R
 import app.aaps.plugins.aps.openAPSFCL.vnext.FclActiveConfigBridge
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.*
 import app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.advisor.*
@@ -28,7 +30,7 @@ import kotlinx.coroutines.withContext
 import java.time.Instant
 import app.aaps.plugins.aps.openAPSFCL.vnext.lang.FclStrings
 
-private enum class Screen { DASHBOARD, ANALYZE, ADVISOR, AI_ADVISOR, RESET, SAFETY }
+private enum class Screen { DASHBOARD, ANALYZE, MEALS, ADVISOR, AI_ADVISOR, RESET }
 
 /**
  * Entrypoint van de geïntegreerde FCL Analyzer.
@@ -105,12 +107,16 @@ fun FclAnalyzerScreen(
     var jumpToAiAdvisorNacht by remember { mutableStateOf(false) }
     var jumpToAdvisorNacht by remember { mutableStateOf(false) }
 
+    // Set when the episode screen is opened from the meal list. Null = opened
+    // from the Episodes button (start on the last episode, back goes to the menu).
+    var mealStartIndex by remember { mutableStateOf<Int?>(null) }
+
     fun loadFromDatabase(entities: List<FCLCycleLogEntity>) {
         val latest = entities.maxByOrNull { it.timestampMs }
-        val aggLevel = app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.DFLearner.getAggressiveness(context)
+        val aggLevels = app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.DFLearner.getAggLevels(context)
         currentAxisState = latest?.let {
             val base = CurrentAxisStateResolver.fromLogRow(it)
-            CurrentAxisStateResolver.withAggLevel(base, aggLevel)
+            CurrentAxisStateResolver.withAggLevels(base, aggLevels)
         }
         allRows = entities.map { it.toLogRow() }
     }
@@ -407,9 +413,18 @@ fun FclAnalyzerScreen(
                 onBack = onDismiss,
                 onRefreshData = { refreshData() },
                 onOpenEpisodes = {
+                    mealStartIndex = null
                     refreshData {
                         if (allRows != null && episodes != null && episodeMetrics != null && classifications != null) {
                             currentScreen = Screen.ANALYZE
+                        }
+                    }
+                },
+                mealCount = mealIndexesLastDays(episodes).size,
+                onOpenMeals = {
+                    refreshData {
+                        if (episodes != null && episodeMetrics != null) {
+                            currentScreen = Screen.MEALS
                         }
                     }
                 },
@@ -435,16 +450,10 @@ fun FclAnalyzerScreen(
                     }
                 },
                 onOpenReset = { currentScreen = Screen.RESET },
-                onOpenAiAdvisor = { currentScreen = Screen.AI_ADVISOR },
-                onOpenSafetyCheck = { currentScreen = Screen.SAFETY }
+                onOpenAiAdvisor = { currentScreen = Screen.AI_ADVISOR }
             )
 
             Screen.RESET -> FclResetScreen(onBack = { currentScreen = Screen.DASHBOARD })
-
-            Screen.SAFETY -> FclSafetyCheckScreen(
-                episodes = episodes ?: emptyList(),
-                onBack = { currentScreen = Screen.DASHBOARD }
-            )
 
             Screen.AI_ADVISOR -> FclAiAdvisorScreen(
                 runResult = aiAdvisorResult,
@@ -489,6 +498,16 @@ fun FclAnalyzerScreen(
                 }
             )
 
+            Screen.MEALS -> MealListScreen(
+                episodes = episodes ?: emptyList(),
+                metrics = episodeMetrics ?: emptyList(),
+                onOpenMeal = { index ->
+                    mealStartIndex = index
+                    currentScreen = Screen.ANALYZE
+                },
+                onBack = { currentScreen = Screen.DASHBOARD }
+            )
+
             Screen.ANALYZE -> AnalyzeScreen(
                 allRows = allRows!!,
                 episodes = episodes!!,
@@ -496,6 +515,7 @@ fun FclAnalyzerScreen(
                 classifications = classifications!!,
                 currentAxisState = currentAxisState ?: StvState(100, 100, 100),
                 episodeEntities = episodeEntities,
+                startIndex = mealStartIndex,
                 onRescueUserConfirmed = { startTs, confirmed ->
                     scope.launch {
                         withContext(Dispatchers.IO) {
@@ -510,7 +530,9 @@ fun FclAnalyzerScreen(
                         }
                     }
                 },
-                onBack = { currentScreen = Screen.DASHBOARD }
+                onBack = {
+                    currentScreen = if (mealStartIndex != null) Screen.MEALS else Screen.DASHBOARD
+                }
             )
 
             Screen.ADVISOR -> {
@@ -525,9 +547,9 @@ fun FclAnalyzerScreen(
                             val f = DFLearner.getF(context)
                             ConfigOverrideWriter.writeWithStvAndParams(
                                 stvMap       = DFMapping.toStvMap(d, f, DFLearner.getNfLevel(context),
-                                                                  aggLevel = DFLearner.getAggressiveness(context)),
+                                                                  agg = DFLearner.getAggLevels(context)),
                                 paramOverrides = DFMapping.toParamOverrides(d, f,
-                                                                            aggLevel = DFLearner.getAggressiveness(context)),
+                                                                            agg = DFLearner.getAggLevels(context)),
                                 reason       = "Initiële param-sync: earlyBoost nog op default",
                                 context      = context,
                                 episodeCount = episodes?.size ?: 0
@@ -541,7 +563,6 @@ fun FclAnalyzerScreen(
                         episodeCount = episodes?.size ?: 0,
                         episodes = episodes ?: emptyList(),
                         metrics = episodeMetrics ?: emptyList(),
-                        activeParams = activeParams,
                         nightWindows = nightWindows ?: emptyList(),
                         onBack = { currentScreen = Screen.DASHBOARD },
                         onApplyToAaps = { stvMap ->
@@ -559,32 +580,14 @@ fun FclAnalyzerScreen(
                                                                             refEb = DFLearner.getRefEb(context),
                                                                             refPeakBias = DFLearner.getRefPeakBias(context),
                                                                             refLcd = DFLearner.getRefLcd(context),
-                                                                            aggLevel = DFLearner.getAggressiveness(context)),
+                                                                            agg = DFLearner.getAggLevels(context)),
                                 reason = result.summary,
                                 context      = context,
                                 episodeCount = episodes?.size ?: 0
                             )
                         },
-                        onApplyNacht = { newNfLevel ->
-                            ConfigOverrideWriter.writeWithNfLevel(
-                                currentState = currentAxisState ?: StvState(100, 100, 100),
-                                newNfLevel = newNfLevel,
-                                reason = "Nacht NF aanpassing via Advisor",
-                                episodeCount = episodes?.size ?: 0
-                            )
-                        },
                         allRows = allRows ?: emptyList(),
                         nfLevel = DFLearner.getNfLevel(context),
-                        onApplyDFToAaps = { params, stvMap ->
-                            ConfigOverrideWriter.writeWithStvAndParams(
-                                stvMap = stvMap,
-                                paramOverrides = params,
-                                reason = "D/F leer-systeem via analyzer",
-                                context      = context,
-                                episodeCount = episodes?.size ?: 0
-                            )
-                        },
-                        onApplyParams = null,
                         startOnNacht = jumpToAdvisorNacht,
                         // Klikbare kruisverwijzing (24/07/2026): AI_ADVISOR is,
                         // anders dan ADVISOR, een simpele directe toestandswissel — geen
@@ -616,10 +619,11 @@ private fun DashboardScreen(
     onBack: () -> Unit,
     onRefreshData: () -> Unit,
     onOpenEpisodes: () -> Unit,
+    mealCount: Int,
+    onOpenMeals: () -> Unit,
     onOpenAdvisor: () -> Unit,
     onOpenAiAdvisor: () -> Unit,
-    onOpenReset: () -> Unit,
-    onOpenSafetyCheck: () -> Unit = {}
+    onOpenReset: () -> Unit
 ) {
     val s = FclStrings.get(androidx.compose.ui.platform.LocalContext.current)
     val metricCount = metrics?.size ?: 0
@@ -678,6 +682,15 @@ private fun DashboardScreen(
                 onClick = onOpenAdvisor
             )
             NavActieKaart(
+                emoji   = "🍽️",
+                label   = stringResource(R.string.fcl_meals_button),
+                badge   = if (mealCount > 0) "$mealCount" else null,
+                enabled = hasData2,
+                toelichting = stringResource(R.string.fcl_meals_intro),
+                knoopTekst = stringResource(R.string.fcl_meals_title),
+                onClick = onOpenMeals
+            )
+            NavActieKaart(
                 emoji   = "📊",
                 label   = s.episodes,
                 badge   = if (episodeCount > 0) "$episodeCount" else null,
@@ -705,31 +718,6 @@ private fun DashboardScreen(
                         "goedkeuring per parameter.",
                 knoopTekst = if (pendingAiCount > 0) "Bekijk voorstellen →" else "AI Advisor",
                 onClick = onOpenAiAdvisor
-            )
-
-            // ✅ Veiligheidscontrole: aantal episodes met een late, te grote
-            // commit vlak op de piek (SafetyInvariantChecker, 12/07/2026, de gebruiker —
-            // zie kdoc daar voor de exacte regel). Puur informatief, geen
-            // effect op het doseeralgoritme zelf.
-            val safetyViolationCount = remember(episodes) {
-                episodes?.let { app.aaps.plugins.aps.openAPSFCL.vnext.analyzer.SafetyInvariantChecker.checkAll(it) }
-                    ?.count { r -> r.hasViolation } ?: 0
-            }
-            NavActieKaart(
-                emoji   = if (safetyViolationCount > 0) "⚠️" else "🛡️",
-                label   = "Veiligheidscontrole",
-                badge   = if (safetyViolationCount > 0) "$safetyViolationCount" else null,
-                enabled = hasData2,
-                toelichting = if (safetyViolationCount > 0)
-                    "$safetyViolationCount episode(s) met een commit die vlak op de BG-piek " +
-                        "groter was dan verwacht op basis van de afbouw die episode. Bekijk welke " +
-                        "rem (indien enige) op dat moment actief was."
-                else
-                    "Controleert elke episode automatisch op het \"late, te grote commit\"-patroon " +
-                        "(zie overdrachtsdocument §3) — zodat je dit niet handmatig in de CSV hoeft " +
-                        "op te sporen.",
-                knoopTekst = "Check",
-                onClick = onOpenSafetyCheck
             )
 
             // Ruimte gereserveerd voor eventuele vierde inhoudelijke knop
@@ -1051,7 +1039,7 @@ private suspend fun runAdvisorFlow(
                 val nfLevel = DFLearner.getNfLevel(context)
                 ConfigOverrideWriter.writeWithStvAndParams(
                     stvMap         = DFMapping.toStvMap(newD, newF, nfLevel,
-                                                        aggLevel = DFLearner.getAggressiveness(context)),
+                                                        agg = DFLearner.getAggLevels(context)),
                     paramOverrides = DFMapping.toParamOverrides(
                         d = newD, f = newF,
                         refWmd = DFLearner.getRefWmd(context),
@@ -1059,7 +1047,7 @@ private suspend fun runAdvisorFlow(
                         refEb = DFLearner.getRefEb(context),
                         refPeakBias = DFLearner.getRefPeakBias(context),
                         refLcd = DFLearner.getRefLcd(context),
-                        aggLevel = DFLearner.getAggressiveness(context)
+                        agg = DFLearner.getAggLevels(context)
                     ),
                     reason         = "D/F: ${step!!.reason}",
                     context        = context,

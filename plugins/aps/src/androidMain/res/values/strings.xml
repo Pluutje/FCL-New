@@ -118,7 +118,6 @@
     <string name="description_fcl">FCL vNext closed loop algorithm</string>
 
     <!-- FCL vNext — scherm- en veldtitels -->
-    <string name="fcl_vnext_general_title">⚡ AAPs standaard Gedrag</string>
     <string name="fcl_vnext_context_title">🌙 🛡️ 🚶 Context</string>
     <string name="max_bolus_day_title">Max bolus dag</string>
     <string name="max_bolus_day_summary">Referentiewaarde voor de Analyzer. De Analyzer stuurt de actieve maxSMB bij tussen 50% en 125% van deze waarde.</string>
@@ -254,9 +253,27 @@
     <string name="fcl_downpass_results" comment="%1$d=number of days, %2$d=number of times, %3$.1f=total insulin in U. Example: 7, 12, 1.4">In de laatste %1$d dagen is %2$d keer gecorrigeerd, samen %3$.1f E.</string>
     <string name="fcl_coverdecay_title">Vervolgdoses groter bij weinig actieve insuline</string>
     <string name="fcl_coverdecay_intro">Met deze schuif blijven de doses na de eerste dosis van een maaltijd groter, zolang de BG nog stijgt en er weinig insuline actief is. Is er al genoeg insuline actief, dan worden ze klein. Zonder deze schuif worden ze na twee of drie doses altijd klein, ook als de BG nog hard stijgt.</string>
-    <string name="fcl_coverdecay_note">Hoe hoger de schuif, hoe groter het effect. Bij 100% wordt een vervolgdosis bij weinig actieve insuline ongeveer anderhalf keer zo groot. De doses worden alleen groter zolang de BG stijgt. Werkt alleen overdag en pas na genoeg herkende maaltijden.</string>
+    <string name="fcl_coverdecay_note">Hoe hoger de schuif, hoe groter het effect. Staat de BG ver boven target (meer dan 2 mmol/L), stijgt hij nog en is er weinig insuline actief, dan zakken de vervolgdoses niet door naar bijna nul. Een stijging die alleen langzamer wordt, telt dan ook minder als omslag, en de rem op de stapgrootte laat los. Een deel van die rem blijft altijd staan. Het effect loopt geleidelijk op en uit. De doses worden alleen groter zolang de BG stijgt. Werkt alleen overdag en pas na genoeg herkende maaltijden.</string>
     <string name="fcl_coverdecay_no_reference">Er zijn nog te weinig maaltijden herkend. De proef doet nu niets.</string>
     <string name="fcl_coverdecay_results" comment="%1$d=number of days, %2$d=number of doses made bigger, %3$.1f=extra insulin in U, %4$d=number of doses made smaller, %5$.1f=insulin held back in U. Example: 7, 15, 2.5, 1, 0.2">In de laatste %1$d dagen is %2$d keer een vervolgdosis groter gemaakt, samen ongeveer %3$.1f E extra, en %4$d keer kleiner, samen ongeveer %5$.1f E minder.</string>
+    <string name="fcl_ai_apply">Pas toe</string>
+    <string name="fcl_ai_experiments_tab">Proeven</string>
+    <string name="fcl_ai_experiments_title">AI-adviseur voor de proeven</string>
+    <string name="fcl_ai_experiments_in_development">In ontwikkeling. Hier komt een aparte adviseur voor de experimentele schuiven. Hij beoordeelt na een tijd of een proef iets doet, en kan voorstellen om hem aan te laten, bij te stellen of uit te zetten.</string>
+    <string name="fcl_meals_button">Herkende maaltijden (7 dagen)</string>
+    <string name="fcl_meals_intro">Lijst met de herkende maaltijden van de laatste 7 dagen, per datum. Tik op een tijd om de grafiek van die maaltijd te zien.</string>
+    <string name="fcl_meals_title">Herkende maaltijden</string>
+    <string name="fcl_meals_back">← Terug</string>
+    <string name="fcl_meals_empty">Geen herkende maaltijden in de laatste 7 dagen.</string>
+    <string name="fcl_meals_total" comment="%1$d=number of meals. Example: 12 maaltijden in de laatste 7 dagen">%1$d maaltijden in de laatste 7 dagen</string>
+    <string name="fcl_meals_day_header" comment="%1$s=full date, %2$d=number of meals that day. Example: maandag 16 november 2026 · 3">%1$s · %2$d</string>
+    <string name="fcl_meals_row" comment="%1$s=time, %2$s=details. Example: 12:30 · piek 9.4 · 3.2 E">%1$s  %2$s</string>
+    <string name="fcl_meals_detail" comment="%1$.1f=peak BG, %2$.1f=insulin units. Example: piek 9.4 · 3.2 E">piek %1$.1f · %2$.1f E</string>
+    <string name="fcl_iobrelax_title">IOB-rem volgt de relatieve dekking</string>
+    <string name="fcl_iobrelax_intro">De IOB-rem kijkt nu naar je actieve insuline gedeeld door je maximale IOB. Heb je een lage maximale IOB, dan remt hij vroeg, ook als er voor je BG nog weinig insuline actief is. Met deze schuif mag de rem losser worden als de relatieve dekking laag is. Dat betekent dat er dan eerder meer insuline wordt gegeven.</string>
+    <string name="fcl_iobrelax_note">0% is het oude gedrag. De rem wordt alleen losser, nooit strenger. Dit geldt voor de IOB-rem op de dosis en voor de piekrem. Je maximale IOB blijft een harde grens. De proef start langzaam na 15 herkende maaltijden en werkt volledig na ongeveer 30. Werkt alleen overdag. Verhoog in kleine stappen.</string>
+    <string name="fcl_iobrelax_no_reference">Er zijn nog te weinig maaltijden herkend. De proef doet nu niets.</string>
+    <string name="fcl_iobrelax_results" comment="%1$d=number of days, %2$d=number of cycles with a looser brake. Example: 7, 24">In de laatste %1$d dagen was de rem in %2$d cycli losser.</string>
     <string name="fcl_rebound_title">Rem op insuline na een lage BG</string>
     <string name="fcl_rebound_intro">Na een lage BG stijgt de BG vaak snel, omdat je iets eet of drinkt tegen de lage waarde. Het algoritme ziet dat als een maaltijd en geeft veel insuline, en daarna kan de BG weer te laag worden. Met deze schuif wordt een deel van de insuline tegengehouden in het uur na een lage BG, terwijl de BG weer stijgt.</string>
     <string name="fcl_rebound_note">0% is het oude gedrag. Hoe lager de laagste BG en hoe korter geleden, hoe sterker de rem. Bij een BG boven 9 neemt de rem geleidelijk af en boven 12 doet hij niets meer. Hij maakt een dosis alleen kleiner. Met een positieve override (je eet) doet hij bijna niets, behalve vlak na een diepe lage BG die nog niet is hersteld. Verhoog in kleine stappen.</string>
@@ -268,9 +285,16 @@
     <string name="fcl_peakstart_effect" comment="%1$.1f=predicted peak in mmol/L needed to watch a meal early. Example: 8.0">Alert vanaf een voorspelde piek van %1$.1f mmol/L</string>
 
     <!-- Experimenten met een sterkte-schuif (standaard 0% = uit) -->
-    <string name="fcl_meals_title">Experimenten trage en snelle maaltijden</string>
-    <string name="fcl_meals_state" comment="%1$d=strength slow rise, %2$d=strength fast rise, both in percent. Example: 50, 0">Sterkte: trage stijging %1$d%%, snelle stijging %2$d%%</string>
-    <string name="fcl_meals_intro">Twee proeven met elk een eigen schuif. Zet ze één voor één aan en kijk een paar dagen wat er gebeurt.</string>
+    <string name="fcl_group_state" comment="%1$d=number of sliders above 0 percent in this group, %2$d=number of sliders in this group. Example: 1, 3">Actief: %1$d van %2$d schuiven</string>
+    <string name="fcl_group_start_title">1. Begin van de maaltijd</string>
+    <string name="fcl_group_start_intro">Meer of eerder insuline in de eerste 30 minuten van een maaltijd. Deze schuiven werken alleen aan het begin van een stijging.</string>
+    <string name="fcl_group_start_hint">Verander per keer één schuif en kijk een paar maaltijden wat er gebeurt.</string>
+    <string name="fcl_group_loosen_title">2. Tijdens de stijging: remmen losser</string>
+    <string name="fcl_group_loosen_intro">Houdt de remmen minder streng zolang de BG nog stijgt of hoog blijft en er weinig insuline actief is. Dit werkt na de eerste doses, niet aan het begin en niet op de piek.</string>
+    <string name="fcl_group_loosen_hint">Deze drie schuiven maken deels dezelfde remmen losser. Gebruik er één tegelijk en begin laag.</string>
+    <string name="fcl_group_careful_title">3. Extra voorzichtig</string>
+    <string name="fcl_group_careful_intro">Houdt insuline juist tegen: na een lage BG en bij een zeer snelle stijging. Deze schuiven maken doses alleen kleiner.</string>
+    <string name="fcl_group_careful_hint">Verander per keer één schuif en kijk een paar maaltijden wat er gebeurt.</string>
     <string name="fcl_strength_choose" comment="%1$d=strength in percent. Example: 50">Kies de sterkte: %1$d%%</string>
     <string name="fcl_strength_scale">0% = uit. Hoe hoger, hoe sterker het ingrijpt. Begin met 50%.</string>
     <string name="fcl_strength_results_title" comment="%1$d=number of days. Example: 7">Laatste %1$d dagen</string>

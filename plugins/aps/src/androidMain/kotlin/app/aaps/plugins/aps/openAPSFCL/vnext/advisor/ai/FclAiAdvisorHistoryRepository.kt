@@ -26,6 +26,7 @@ object FclAiAdvisorHistoryRepository {
     private const val RELATIVE_PATH = "Documents/AAPS/ANALYSE"
     private const val FILE_NAME = "FCLvNext_AiAdvisorHistory.jsonl"
     private const val COOLDOWN_DAYS = 2
+    private const val SETTLE_DAYS = 3L
 
     private fun file(): File {
         val dir = File(Environment.getExternalStorageDirectory(), RELATIVE_PATH)
@@ -177,7 +178,21 @@ object FclAiAdvisorHistoryRepository {
      * suggesties altijd doorgelaten (status != REJECTED), waardoor elke
      * dag opnieuw hetzelfde voorstel verscheen.
      */
-    fun filterCooldown(suggestions: List<AiParamSuggestion>): List<AiParamSuggestion> =
+    fun filterCooldown(suggestions: List<AiParamSuggestion>): List<AiParamSuggestion> {
+        // One change at a time: a setting needs days to show its effect. While the last approved
+        // change is younger than SETTLE_DAYS, no new suggestion is shown.
+        if (hasRecentApproval()) return emptyList()
+        return filterSameValue(suggestions)
+    }
+
+    /** Was a setting of the day advisor approved in the last [SETTLE_DAYS] days? */
+    private fun hasRecentApproval(): Boolean = readApproved().any { e ->
+        e.param in FclAiAdvisorRanges.byKey &&
+            runCatching { java.time.Duration.between(Instant.parse(e.tsUtc), Instant.now()).toDays() < SETTLE_DAYS }
+                .getOrDefault(false)
+    }
+
+    private fun filterSameValue(suggestions: List<AiParamSuggestion>): List<AiParamSuggestion> =
         suggestions.filter { s ->
             val last = lastEntryFor(s.param) ?: return@filter true
 
